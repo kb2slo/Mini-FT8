@@ -451,6 +451,7 @@ static int normalize_gps_baud_value(int value);
 static gps_pins_t gps_pins_for_current_source();
 static const char* gps_source_name();
 static void apply_debug_uart_pin_policy();
+static void restore_debug_uart_pins_after_sd();
 static bool rtc_set_from_strings_source(RtcTimeSource source);
 static esp_err_t rtc_write_external_from_soft(const char* reason);
 static const char* rtc_time_source_suffix();
@@ -935,7 +936,10 @@ static CopyLogsResult copy_logs_to_sd_overwrite() {
     return copy_logs_busy_result();
   }
 
-  return storage_copy_all_to_sd(qso_name, rt_name);
+  const CopyLogsResult result = storage_copy_all_to_sd(qso_name, rt_name);
+  // SD access temporarily claims GPIO5 (LoRa-1262 CS); restore prior pin policy.
+  restore_debug_uart_pins_after_sd();
+  return result;
 }
 
 static void qso_load_file_list() {
@@ -1338,6 +1342,12 @@ static void apply_debug_uart_pin_policy() {
     g_debug_uart_pins_enabled = false;
     if (changed) ESP_LOGI(TAG, "G4/G5 debug UART disabled for GNSS LoRa");
   }
+}
+
+static void restore_debug_uart_pins_after_sd() {
+  // Force re-apply: SD mount briefly drives GPIO5 HIGH as LoRa-1262 CS.
+  g_debug_uart_pins_enabled = false;
+  apply_debug_uart_pin_policy();
 }
 
 struct WAVHeader {
