@@ -35,6 +35,8 @@ constexpr gpio_num_t kSdMiso = GPIO_NUM_39;
 constexpr gpio_num_t kSdMosi = GPIO_NUM_14;
 constexpr gpio_num_t kSdClock = GPIO_NUM_40;
 constexpr gpio_num_t kSdChipSelect = GPIO_NUM_12;
+// LoRa-1262 module CS shares GPIO5 with the Cardputer debug UART RX path.
+constexpr gpio_num_t kLora1262ChipSelect = GPIO_NUM_5;
 
 const char* TAG = "storage_service";
 const char* COPY_TAG = "STORAGE_COPY";
@@ -49,6 +51,7 @@ size_t s_open_streams;
 bool s_station_sync_attempted;
 sdmmc_card_t* s_sd_card;
 bool s_sd_mounted;
+bool s_lora_cs_held_for_sd;
 
 enum class MountTransitionResult : uint8_t {
     NONE,
@@ -254,10 +257,38 @@ bool list_files_locked(std::vector<std::string>& files) {
     return true;
 }
 
+void hold_lora1262_cs_deselected() {
+    // Explicitly deselect the LoRa-1262 cap's CS pin to prevent SPI bus
+    // collisions with the SD card while the shared bus is active.
+    gpio_reset_pin(kLora1262ChipSelect);
+    gpio_set_direction(kLora1262ChipSelect, GPIO_MODE_OUTPUT);
+    gpio_set_level(kLora1262ChipSelect, 1);
+    s_lora_cs_held_for_sd = true;
+    ESP_LOGI(COPY_TAG, "LoRa-1262 CS (GPIO%d) held HIGH for SD access",
+             static_cast<int>(kLora1262ChipSelect));
+}
+
+void release_lora1262_cs_hold() {
+    if (!s_lora_cs_held_for_sd) {
+        return;
+    }
+    // Leave the pin as a floating input. Callers that need UART RX on G5
+    // (GNSS_LoRa:OFF) must re-apply their pin policy after SD access ends.
+    gpio_reset_pin(kLora1262ChipSelect);
+    gpio_set_direction(kLora1262ChipSelect, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(kLora1262ChipSelect, GPIO_FLOATING);
+    gpio_intr_disable(kLora1262ChipSelect);
+    s_lora_cs_held_for_sd = false;
+    ESP_LOGI(COPY_TAG, "LoRa-1262 CS (GPIO%d) released after SD access",
+             static_cast<int>(kLora1262ChipSelect));
+}
+
 esp_err_t mount_sd_locked() {
     if (s_sd_mounted && s_sd_card) {
         return ESP_OK;
     }
+
+    hold_lora1262_cs_deselected();
 
     spi_bus_config_t bus_config = {};
     bus_config.mosi_io_num = kSdMosi;
@@ -269,6 +300,7 @@ esp_err_t mount_sd_locked() {
 
     esp_err_t err = spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_CH_AUTO);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        release_lora1262_cs_hold();
         return err;
     }
 
@@ -288,6 +320,7 @@ esp_err_t mount_sd_locked() {
         s_sd_card = nullptr;
         s_sd_mounted = false;
         spi_bus_free(SPI2_HOST);
+        release_lora1262_cs_hold();
         return err;
     }
 
@@ -302,6 +335,7 @@ void unmount_sd_locked() {
         s_sd_mounted = false;
     }
     spi_bus_free(SPI2_HOST);
+    release_lora1262_cs_hold();
 }
 
 struct CopyFileStatus {
