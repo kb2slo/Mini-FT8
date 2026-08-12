@@ -25,7 +25,7 @@ constexpr uint32_t kProbeWindowMs = 2500;
 const char* kTag = "GPS";
 
 gps_state_t s_state = {};
-gps_pins_t s_pins = {kGpsUartNum, kGpsRxPin, kGpsTxPin, kGpsBaudFast, true};
+gps_pins_t s_pins = {kGpsUartNum, kGpsRxPin, kGpsTxPin, kGpsBaudFast, true, false};
 std::string s_line_buffer;
 uint32_t s_probe_start_ms = 0;
 uint32_t s_probe_rx_bytes = 0;
@@ -148,6 +148,40 @@ bool ensure_uart_driver() {
   return err == ESP_OK;
 }
 
+void release_uart_pins_from_gpio() {
+  // Clear any prior OUTPUT drive (e.g. Launcher 2.8 parks G13/G15 HIGH) before
+  // attaching the UART matrix. Safe across a warm start into Mini-FT8.
+  if (s_pins.tx != GPIO_NUM_NC) gpio_reset_pin(s_pins.tx);
+  if (s_pins.rx != GPIO_NUM_NC) gpio_reset_pin(s_pins.rx);
+}
+
+void uart_write_cstr(const char* s) {
+  if (!s) return;
+  const size_t n = strlen(s);
+  if (n == 0) return;
+  uart_write_bytes(s_pins.uart, s, n);
+}
+
+// CASIC PCAS01,5 = 115200; PCAS00 = save. Sent at both probe bauds so a module
+// left at 9600 by UART line abuse still hears the restore command.
+void casic_force_baud_115200() {
+  static const int kProbeBauds[] = {kGpsBaudFast, kGpsBaudSlow};
+  static const char kSet115200[] = "$PCAS01,5*19\r\n";
+  static const char kSave[] = "$PCAS00*01\r\n";
+
+  ESP_LOGI(kTag, "GPS CASIC baud recover -> 115200");
+  for (int baud : kProbeBauds) {
+    if (!configure_uart(baud)) continue;
+    uart_write_cstr(kSet115200);
+    vTaskDelay(pdMS_TO_TICKS(80));
+  }
+  if (configure_uart(kGpsBaudFast)) {
+    uart_write_cstr(kSave);
+    vTaskDelay(pdMS_TO_TICKS(80));
+    uart_flush_input(s_pins.uart);
+  }
+}
+
 void switch_baud_internal(int baud) {
   baud = normalize_baud(baud);
   if (uart_set_baudrate(s_pins.uart, baud) != ESP_OK) return;
@@ -233,6 +267,7 @@ void gps_start(int preload_baud) {
   pins.tx = kGpsTxPin;
   pins.default_baud = preload_baud;
   pins.auto_baud = true;
+  pins.casic_baud_recover = false;
   gps_start(pins);
 }
 
@@ -242,10 +277,18 @@ void gps_start(const gps_pins_t& pins) {
   s_pins = pins;
   int preload_baud = normalize_baud(s_pins.default_baud);
 
+  release_uart_pins_from_gpio();
+
   if (!ensure_uart_driver()) {
     ESP_LOGW(kTag, "GPS UART driver install failed");
     return;
   }
+
+  if (s_pins.casic_baud_recover) {
+    casic_force_baud_115200();
+    preload_baud = kGpsBaudFast;
+  }
+
   if (!configure_uart(preload_baud)) {
     ESP_LOGW(kTag, "GPS UART config failed");
     uart_driver_delete(s_pins.uart);
@@ -260,9 +303,9 @@ void gps_start(const gps_pins_t& pins) {
   s_pending_baud_update = false;
   s_pending_baud_value = 0;
   rearm_probe_window();
-  ESP_LOGI(kTag, "GPS started on UART%d TX=G%d RX=G%d preload=%d auto=%d",
+  ESP_LOGI(kTag, "GPS started on UART%d TX=G%d RX=G%d preload=%d auto=%d casic=%d",
            (int)s_pins.uart, (int)s_pins.tx, (int)s_pins.rx, preload_baud,
-           s_pins.auto_baud ? 1 : 0);
+           s_pins.auto_baud ? 1 : 0, s_pins.casic_baud_recover ? 1 : 0);
 }
 
 void gps_stop() {

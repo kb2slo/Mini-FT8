@@ -2047,14 +2047,19 @@ static gps_pins_t gps_pins_for_current_source() {
     pins.uart = UART_NUM_2;
     pins.rx = GPIO_NUM_15;
     pins.tx = GPIO_NUM_13;
-    pins.default_baud = 115200;
-    pins.auto_baud = false;
+    // Cap GNSS defaults to 115200. Some hosts (Launcher 2.8) drive G13/G15 as
+    // GPIO outputs and can leave the ATGM336H at 9600 or wedged; recover baud
+    // via CASIC and probe both rates like PORTA.
+    pins.default_baud = normalize_gps_baud_value(g_gps_baud);
+    pins.auto_baud = true;
+    pins.casic_baud_recover = true;
   } else {
     pins.uart = UART_NUM_1;
     pins.rx = GPIO_NUM_1;
     pins.tx = GPIO_NUM_2;
     pins.default_baud = normalize_gps_baud_value(g_gps_baud);
     pins.auto_baud = true;
+    pins.casic_baud_recover = false;
   }
   return pins;
 }

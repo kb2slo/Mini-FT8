@@ -26,6 +26,9 @@ struct gps_pins_t {
     gpio_num_t tx;
     int default_baud;
     bool auto_baud;
+    // Cap LoRa-1262 ATGM336H/AT6668: recover UART baud after hosts (e.g. some
+    // M5Launcher builds) drive G13/G15 as GPIO outputs and corrupt the module.
+    bool casic_baud_recover;
 };
 
 // Start GPS parser on UART1 PortA pins with preload baud (9600 or 115200).
