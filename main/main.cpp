@@ -1149,8 +1149,61 @@ static void qso_draw_page() {
   }
 }
 
+static constexpr int64_t kAdifDedupeWindowMs = 10 * 60 * 1000LL;
+static constexpr size_t kAdifDedupeMaxEntries = 32;
+
+struct AdifDedupeEntry {
+  std::string call;
+  int64_t logged_ms = 0;
+};
+
+static std::vector<AdifDedupeEntry> s_adif_recent_logs;
+
+static void adif_dedupe_prune(int64_t now_ms) {
+  s_adif_recent_logs.erase(
+      std::remove_if(s_adif_recent_logs.begin(), s_adif_recent_logs.end(),
+                     [&](const AdifDedupeEntry& e) {
+                       return (now_ms - e.logged_ms) > kAdifDedupeWindowMs;
+                     }),
+      s_adif_recent_logs.end());
+  if (s_adif_recent_logs.size() > kAdifDedupeMaxEntries) {
+    s_adif_recent_logs.erase(
+        s_adif_recent_logs.begin(),
+        s_adif_recent_logs.begin() +
+            static_cast<std::ptrdiff_t>(s_adif_recent_logs.size() - kAdifDedupeMaxEntries));
+  }
+}
+
+static bool adif_dedupe_is_duplicate(const std::string& call_norm, int64_t now_ms) {
+  if (call_norm.empty()) return false;
+  adif_dedupe_prune(now_ms);
+  for (const auto& e : s_adif_recent_logs) {
+    if (e.call == call_norm) return true;
+  }
+  return false;
+}
+
+static void adif_dedupe_remember(const std::string& call_norm, int64_t now_ms) {
+  if (call_norm.empty()) return;
+  adif_dedupe_prune(now_ms);
+  for (auto& e : s_adif_recent_logs) {
+    if (e.call == call_norm) {
+      e.logged_ms = now_ms;
+      return;
+    }
+  }
+  s_adif_recent_logs.push_back(AdifDedupeEntry{call_norm, now_ms});
+}
+
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd) {
-  time_t now = (time_t)(rtc_now_ms() / 1000);
+  const int64_t now_ms = rtc_now_ms();
+  const std::string call_norm = normalize_call_token(dxcall);
+  if (adif_dedupe_is_duplicate(call_norm, now_ms)) {
+    ESP_LOGI(TAG, "ADIF dedupe skip %s (within 10 min)", call_norm.c_str());
+    return true;  // treat as success so autoseq does not retry-write
+  }
+
+  time_t now = (time_t)(now_ms / 1000);
   struct tm t;
   localtime_r(&now, &t);
   char date[16];
@@ -1198,8 +1251,12 @@ static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid,
            rst_sent_buf, rst_rcvd_buf,
            comment_expanded.size(), comment_expanded.c_str());
   bool ok = storage_append_text_locked_path(path, line, "ADIF EXPORT\n<eoh>\n", true);
-  if (!ok) ESP_LOGW(TAG, "ADIF write failed: %s", path);
-  return ok;
+  if (!ok) {
+    ESP_LOGW(TAG, "ADIF write failed: %s", path);
+    return false;
+  }
+  adif_dedupe_remember(call_norm, now_ms);
+  return true;
 }
 
 
