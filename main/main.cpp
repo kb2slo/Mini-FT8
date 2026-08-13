@@ -98,7 +98,7 @@ static std::string today_qso_file_name() {
   struct tm t;
   localtime_r(&now, &t);
   char name[20];
-  snprintf(name, sizeof(name), "%04d%02d%02d.txt",
+  snprintf(name, sizeof(name), "%04d%02d%02d.adi",
            (t.tm_year + 1900) % 10000, (t.tm_mon + 1) % 100, t.tm_mday % 100);
   return name;
 }
@@ -852,16 +852,19 @@ static bool log_gps_grid_line(const std::string& grid8) {
   return ok;
 }
 
-static bool is_daily_qso_txt_file(const char* name) {
+static bool is_daily_qso_log_file(const char* name) {
   if (!name) return false;
-  if (strlen(name) != 12) return false;  // YYYYMMDD.txt
+  if (strlen(name) != 12) return false;  // YYYYMMDD.adi (or legacy .txt)
   for (int i = 0; i < 8; ++i) {
     if (!std::isdigit(static_cast<unsigned char>(name[i]))) return false;
   }
-  return name[8] == '.' &&
-         std::tolower(static_cast<unsigned char>(name[9])) == 't' &&
-         std::tolower(static_cast<unsigned char>(name[10])) == 'x' &&
-         std::tolower(static_cast<unsigned char>(name[11])) == 't';
+  if (name[8] != '.') return false;
+  const char a = static_cast<char>(std::tolower(static_cast<unsigned char>(name[9])));
+  const char b = static_cast<char>(std::tolower(static_cast<unsigned char>(name[10])));
+  const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(name[11])));
+  // Prefer .adi; keep recognizing legacy YYYYMMDD.txt QSO logs.
+  return (a == 'a' && b == 'd' && c == 'i') ||
+         (a == 't' && b == 'x' && c == 't');
 }
 
 static const char* storage_owner_label(StorageOwner owner) {
@@ -957,7 +960,7 @@ static void qso_load_file_list() {
     return;
   }
   for (const auto& name : files) {
-    if (is_daily_qso_txt_file(name.c_str())) {
+    if (is_daily_qso_log_file(name.c_str())) {
       g_q_files.push_back(name);
     }
   }
@@ -968,7 +971,7 @@ static void qso_load_file_list() {
            static_cast<unsigned>(files.size()),
            static_cast<unsigned>(g_q_files.size()));
   if (g_q_files.empty()) {
-    g_q_lines.push_back("No YYYYMMDD.txt");
+    g_q_lines.push_back("No YYYYMMDD.adi");
     return;
   }
   for (size_t i = 0; i < g_q_files.size(); ++i) {
@@ -1156,7 +1159,7 @@ static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid,
   int day = t.tm_mday;
   snprintf(date, sizeof(date), "%04d%02d%02d", year % 10000, month % 100, day % 100);
   char path[64];
-  snprintf(path, sizeof(path), "%s.txt", date);
+  snprintf(path, sizeof(path), "%s.adi", date);
 
   char time_on[16];
   int hour = t.tm_hour;
@@ -2047,14 +2050,19 @@ static gps_pins_t gps_pins_for_current_source() {
     pins.uart = UART_NUM_2;
     pins.rx = GPIO_NUM_15;
     pins.tx = GPIO_NUM_13;
-    pins.default_baud = 115200;
-    pins.auto_baud = false;
+    // Cap GNSS defaults to 115200. Some hosts (Launcher 2.8) drive G13/G15 as
+    // GPIO outputs and can leave the ATGM336H at 9600 or wedged; recover baud
+    // via CASIC and probe both rates like PORTA.
+    pins.default_baud = normalize_gps_baud_value(g_gps_baud);
+    pins.auto_baud = true;
+    pins.casic_baud_recover = true;
   } else {
     pins.uart = UART_NUM_1;
     pins.rx = GPIO_NUM_1;
     pins.tx = GPIO_NUM_2;
     pins.default_baud = normalize_gps_baud_value(g_gps_baud);
     pins.auto_baud = true;
+    pins.casic_baud_recover = false;
   }
   return pins;
 }
