@@ -382,7 +382,7 @@ volatile bool g_config_save_pending = false;
 // Non-static so core_api.cpp can arm it from any UI consumer.
 volatile bool g_qso_xmit = false;        // TX is pending
 volatile int g_target_slot_parity = 0;   // 0=even, 1=odd - parity of slot to TX on
-static volatile bool g_was_txing = false;       // We were transmitting (for tick timing)
+volatile bool g_was_txing = false;              // We were transmitting (for tick timing)
 volatile bool g_decode_in_progress = false; // Block TX trigger while decoding
 static int g_last_slot_parity = -1;             // For slot boundary detection (just parity, like reference)
 
@@ -611,7 +611,7 @@ static std::string normalize_grid_maidenhead(const std::string& src);
 std::string grid_ft8_4(const std::string& grid);
 // Single-threaded TX state machine (replaces separate tx_send_task)
 // TX runs in main loop via tx_tick(), one tone at a time
-static bool g_tx_active = false;           // TX state machine is running
+volatile bool g_tx_active = false;         // TX state machine is running
 static int g_tx_tone_idx = 0;              // Current tone index (0..total_symbols-1)
 static int64_t g_tx_next_tone_time = 0;    // When to send next tone (ms)
 static int64_t g_tx_slot_start_ms = 0;     // Slot boundary time for tone alignment
@@ -3065,10 +3065,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   int num_decoded = 0;
 
   if (num_candidates <= 0) {
-    ESP_LOGW(TAG, "No candidates found");
-    ui_set_rx_list_static(nullptr, 0);
-    if (update_ui) { ui_draw_rx(); }
-    else core_fire_rx_changed();
+    ESP_LOGW(TAG, "No candidates found; keeping RX list");
     // No candidates means we processed the slot's audio but found nothing —
     // still counts as "applied" for the TX-trigger guard.
     if (g_decode_slot_idx > g_decode_applied_slot_idx) {
@@ -3262,15 +3259,18 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   }
 
   // ---- Zero-heap handoff: static s_dec[] → ui.cpp's static rx_lines[] ----
-  ui_set_rx_list_static(s_dec, s_dec_count);
-
-  if (update_ui) {
-    ui_draw_rx();
-    char buf[64];
-    snprintf(buf, sizeof(buf), "Heap %u", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-    debug_log_line(buf);
+  if (s_dec_count > 0) {
+    ui_set_rx_list_static(s_dec, s_dec_count);
+    if (update_ui) {
+      ui_draw_rx();
+      char buf[64];
+      snprintf(buf, sizeof(buf), "Heap %u", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+      debug_log_line(buf);
+    } else {
+      core_fire_rx_changed();
+    }
   } else {
-    core_fire_rx_changed();
+    ESP_LOGI(TAG, "No messages decoded; keeping RX list");
   }
 
   // ---- heap instrumentation (exit) ----
