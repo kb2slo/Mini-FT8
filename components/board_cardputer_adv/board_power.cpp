@@ -21,6 +21,17 @@ static adc_oneshot_unit_handle_t g_adc = nullptr;
 static adc_cali_handle_t g_cali = nullptr;
 static bool g_initialized = false;
 static bool g_cali_ok = false;
+static bool g_halted = false;
+static int g_ema_mv = -1;
+
+// Halt near ~10% on the display curve; resume only after a clear recovery
+// (~20%) so load-induced dips do not chatter the policy.
+static constexpr int kHaltEnterMv = 3520;
+static constexpr int kHaltExitMv = 3680;
+static constexpr int kWarnMv = 3600;
+static constexpr int kAdcAvgSamples = 8;
+static constexpr int kEmaNum = 3;
+static constexpr int kEmaDen = 4;
 
 static int voltage_to_percent(int mv)
 {
@@ -107,15 +118,19 @@ esp_err_t board_power_read(board_power_status_t* out_status)
 
     ESP_RETURN_ON_ERROR(board_power_init(), TAG, "board_power_init failed");
 
-    int raw = 0;
-    ESP_RETURN_ON_ERROR(
-        adc_oneshot_read(g_adc, kBatAdcChannel, &raw),
-        TAG,
-        "adc_oneshot_read failed"
-    );
+    int raw_sum = 0;
+    for (int i = 0; i < kAdcAvgSamples; ++i) {
+        int raw = 0;
+        ESP_RETURN_ON_ERROR(
+            adc_oneshot_read(g_adc, kBatAdcChannel, &raw),
+            TAG,
+            "adc_oneshot_read failed"
+        );
+        raw_sum += raw;
+    }
+    int raw = raw_sum / kAdcAvgSamples;
 
     int adc_mv = raw;
-
     if (g_cali_ok && g_cali) {
         ESP_RETURN_ON_ERROR(
             adc_cali_raw_to_voltage(g_cali, raw, &adc_mv),
@@ -125,10 +140,28 @@ esp_err_t board_power_read(board_power_status_t* out_status)
     }
 
     int bat_mv = (int)(adc_mv * kAdcRatio + 0.5f);
+    if (g_ema_mv < 0) {
+        g_ema_mv = bat_mv;
+    } else {
+        g_ema_mv = (g_ema_mv * kEmaNum + bat_mv) / kEmaDen;
+    }
+
+    if (g_ema_mv <= kHaltEnterMv) {
+        g_halted = true;
+    } else if (g_ema_mv >= kHaltExitMv) {
+        g_halted = false;
+    }
 
     out_status->valid = true;
-    out_status->voltage_mv = bat_mv;
-    out_status->percent = voltage_to_percent(bat_mv);
+    out_status->voltage_mv = g_ema_mv;
+    out_status->percent = voltage_to_percent(g_ema_mv);
+    out_status->halted = g_halted;
+    out_status->warn = g_halted || g_ema_mv <= kWarnMv;
 
     return ESP_OK;
+}
+
+bool board_power_halted(void)
+{
+    return g_halted;
 }

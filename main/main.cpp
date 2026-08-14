@@ -681,6 +681,7 @@ static void qso_draw_page();
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter = -1);
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd);
+static bool storage_writes_blocked();
 static bool storage_append_text_locked_path(const std::string& path,
                                             const std::string& line,
                                             const std::string& header_if_new,
@@ -738,6 +739,7 @@ static std::string fd_get_section_from_exchange(const std::string& ex) {
 // and use FreeText as our FD exchange (e.g. "1B SCV").
 static bool log_cabrillo_fd_entry(const std::string& dxcall, const std::string& their_fd_exchange) {
   if (g_cq_type != CqType::CQFD) return true;
+  if (storage_writes_blocked()) return false;
 
   const std::string my_fd = fd_strip_R(g_free_text);
   const std::string their_fd = fd_strip_R(their_fd_exchange);
@@ -784,6 +786,7 @@ static bool storage_append_text_locked_path(const std::string& path,
                                              const std::string& line,
                                              const std::string& header_if_new,
                                              bool sync_to_flash) {
+  if (storage_writes_blocked()) return false;
   return storage_file_append(path, line, header_if_new, sync_to_flash);
 }
 
@@ -802,6 +805,7 @@ static bool storage_write_cabrillo_fd_entry(const std::string& mycall,
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter) {
   if (!g_rxtx_log) return;
+  if (storage_writes_blocked()) return;
 
   time_t now = (time_t)(rtc_now_ms() / 1000);
   struct tm t;
@@ -829,6 +833,7 @@ static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& t
 
 static bool log_gps_grid_line(const std::string& grid8) {
   if (!g_rxtx_log) return false;
+  if (storage_writes_blocked()) return false;
   if (grid8.size() != 8) return false;
 
   // GPS grid breadcrumbs use RT files but not log_rxtx_line(), which appends
@@ -900,6 +905,10 @@ static CopyLogsResult copy_logs_busy_result() {
 }
 
 static CopyLogsResult copy_logs_to_sd_overwrite() {
+  if (storage_writes_blocked()) {
+    ESP_LOGW(STORAGE_COPY_TAG, "copy skipped: low battery halt");
+    return copy_logs_busy_result();
+  }
   const std::string qso_name = today_qso_file_name();
   const std::string rt_name = today_rt_file_name();
   const StorageOwner owner = storage_service_owner();
@@ -1196,6 +1205,10 @@ static void adif_dedupe_remember(const std::string& call_norm, int64_t now_ms) {
 }
 
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd) {
+  if (storage_writes_blocked()) {
+    ESP_LOGW(TAG, "ADIF write skipped: low battery halt");
+    return false;
+  }
   const int64_t now_ms = rtc_now_ms();
   const std::string call_norm = normalize_call_token(dxcall);
   if (adif_dedupe_is_duplicate(call_norm, now_ms)) {
@@ -2207,12 +2220,54 @@ static std::string menu_sleep_batt_line() {
   char buf[48];
 
   if (board_power_read(&ps) == ESP_OK && ps.valid) {
-    snprintf(buf, sizeof(buf), "Sleep/Batt %d%%", ps.percent);
+    if (ps.halted) {
+      snprintf(buf, sizeof(buf), "LOW BATT HALT");
+    } else if (ps.warn) {
+      snprintf(buf, sizeof(buf), "Batt %d%% LOW", ps.percent);
+    } else {
+      snprintf(buf, sizeof(buf), "Sleep/Batt %d%%", ps.percent);
+    }
   } else {
     snprintf(buf, sizeof(buf), "Sleep/Batt --");
   }
 
   return std::string(buf);
+}
+
+static bool storage_writes_blocked() {
+  return board_power_halted();
+}
+
+static void low_batt_apply_halt() {
+  ESP_LOGW(TAG, "Low battery halt: blocking TX arming and flash writes");
+  debug_log_line("LOW BATT HALT");
+  g_beacon = BeaconMode::OFF;
+  g_status_beacon_temp = BeaconMode::OFF;
+  g_qso_xmit = false;
+  g_pending_tx_valid = false;
+  g_config_save_pending = false;
+  if (storage_service_firmware_available()) {
+    (void)storage_service_flush_all();
+  }
+  if (ui_mode == UIMode::MENU) draw_menu_view();
+}
+
+static void low_batt_apply_resume() {
+  ESP_LOGI(TAG, "Low battery halt cleared");
+  debug_log_line("BATT OK");
+  if (ui_mode == UIMode::MENU) draw_menu_view();
+}
+
+static void low_batt_policy_tick() {
+  static bool s_halted = false;
+  board_power_status_t ps = {};
+  if (board_power_read(&ps) != ESP_OK || !ps.valid) return;
+  if (ps.halted && !s_halted) {
+    low_batt_apply_halt();
+  } else if (!ps.halted && s_halted) {
+    low_batt_apply_resume();
+  }
+  s_halted = ps.halted;
 }
 
 static std::string elide_right(const std::string& s, size_t max_len = 22) {
@@ -2599,6 +2654,10 @@ static int resolve_tx_offset(const AutoseqTxEntry& e) {
 // block that used to be repeated at every scheduling site (autoseq tick,
 // beacon-on, free-text queue, and RX selection).
 void arm_pending_tx(const AutoseqTxEntry& pending) {
+  if (board_power_halted()) {
+    ESP_LOGW(TAG, "TX arm skipped: low battery halt");
+    return;
+  }
   g_qso_xmit           = true;
   g_target_slot_parity = pending.slot_id & 1;
   g_pending_tx         = pending;
@@ -2638,6 +2697,7 @@ static void check_slot_boundary() {
   // TX based on a prior cycle's state. See AUTOSEQ_INACTIVE_QUEUE.md.
   // Window = 4/15 of slot_time_ms (~26.7%): FT8=4000ms, FT4=2000ms.
   if (g_qso_xmit &&
+      !board_power_halted() &&
       g_target_slot_parity == slot_parity &&
       slot_ms < (g_protocol->slot_time_ms * 4 / 15) &&
       !g_tx_active &&
@@ -3152,7 +3212,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   qsort(s_dec, s_dec_count, sizeof(DecodeMsg), dec_sort_cmp);
 
   // ---- Autoseq: build small to_me vector at boundary (only to_me entries) ----
-  if (!g_was_txing) {
+  if (!g_was_txing && !board_power_halted()) {
     std::vector<UiRxLine> to_me_auto;
     for (int i = 0; i < s_dec_count; ++i) {
       if (!s_dec[i].is_to_me) break;  // sorted, so once we pass to_me we're done
@@ -4422,6 +4482,10 @@ static void load_station_data() {
 }
 
 void save_station_data() {
+  if (storage_writes_blocked()) {
+    ESP_LOGW(TAG, "Station save skipped: low battery halt");
+    return;
+  }
   if (!storage_service_firmware_available()) {
     static bool warned_once = false;
     if (!warned_once) {
@@ -4486,6 +4550,9 @@ void save_station_data() {
 static void enter_mode(UIMode new_mode) {
   // No special handling needed when leaving TX mode - autoseq manages queue internally
   if (ui_mode == UIMode::STATUS && new_mode != UIMode::STATUS) {
+    if (board_power_halted()) {
+      g_status_beacon_temp = BeaconMode::OFF;
+    }
     if (g_beacon != g_status_beacon_temp) {
       bool was_off = (g_beacon == BeaconMode::OFF);
       g_beacon = g_status_beacon_temp;
@@ -4569,6 +4636,11 @@ static void enter_mode(UIMode new_mode) {
 
 
 static void enter_msc_mode(const char* reason) {
+  if (board_power_halted()) {
+    ESP_LOGW(TAG, "USB Drive blocked: low battery halt");
+    debug_log_line("USB Drive blocked");
+    return;
+  }
   ESP_LOGI(TAG, "Entering MSC mode: %s", reason);
   debug_log_line("Entering MSC mode");
 
@@ -4722,6 +4794,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     debug_log_line(buf);
   }
   log_heap("BOOT");
+  low_batt_policy_tick();
 
   g_app_core0_stack_last_sample_tick = xTaskGetTickCount();
   {
@@ -4817,6 +4890,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       if (ui_mode == UIMode::PERF) {
         draw_perf_view(false);
       }
+      low_batt_policy_tick();
     }
     // Startup splash: show briefly, then remain in RX. Radio connection is
     // explicit through STATUS -> 2; direct-mode keys still work immediately.
@@ -4874,7 +4948,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     tx_tick();              // Process TX state machine (single-threaded, non-blocking)
 
     // Drain deferred config saves requested by core commands.
-    if (g_config_save_pending && storage_service_firmware_available()) {
+    if (g_config_save_pending && storage_service_firmware_available() &&
+        !storage_writes_blocked()) {
       g_config_save_pending = false;
       save_station_data();
     }
