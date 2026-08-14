@@ -64,18 +64,12 @@ static bool hold_hysteresis(bool current, int ema, int enter_mv, int exit_mv, in
 
 static int voltage_to_percent(int mv)
 {
-    // Simple Li-ion approximation.
-    // Good enough for display. Not a fuel gauge.
-    if (mv >= 4200) return 100;
-    if (mv >= 4100) return 90;
-    if (mv >= 4000) return 80;
-    if (mv >= 3900) return 65;
-    if (mv >= 3800) return 50;
-    if (mv >= 3700) return 35;
-    if (mv >= 3600) return 20;
-    if (mv >= 3500) return 10;
-    if (mv >= 3400) return 5;
-    return 0;
+    // Same linear map as M5Unified / M5Launcher Cardputer (GPIO10 ×2):
+    //   percent = (mv - 3300) * 100 / (4150 - 3350), clamped 0..100
+    int level = (mv - 3300) * 100 / (4150 - 3350);
+    if (level < 0) return 0;
+    if (level >= 100) return 100;
+    return level;
 }
 
 esp_err_t board_power_init(void)
