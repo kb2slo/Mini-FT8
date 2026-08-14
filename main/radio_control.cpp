@@ -108,7 +108,7 @@ void radio_control_poll_tx_meters(void) {
     }
     // Only QMX documents PC; (forward watts) and SW; (SWR). QDX PC; is a
     // Kenwood power *setting*, not a wattmeter — never send it. KH1 has no
-    // equivalent. Untested on hardware; older QMX firmware may lack PC/SW.
+    // equivalent. QMX PC/SW HUD path has been tested; QDX/KH1 have not.
     if (s_backend != RADIO_CONTROL_QMX) {
         s_meter_poll_disabled = true;
         return;
