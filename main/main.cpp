@@ -1621,25 +1621,44 @@ static void draw_tx_hud(bool force) {
 
   static int64_t s_last_ms = 0;
   static int s_last_mv = -99999;
+  static int s_last_pc = -99999;
+  static int s_last_sw = -99999;
   const int64_t now_ms = rtc_now_ms();
   if (!force && (now_ms - s_last_ms) < 500) return;
 
   board_power_status_t ps = {};
   (void)board_power_read(&ps);
   const int mv = ps.valid ? ps.voltage_mv : -1;
-  if (!force && mv == s_last_mv && (now_ms - s_last_ms) < 1000) return;
+
+  radio_control_poll_tx_meters();
+  float power_w = -1.f;
+  float swr = -1.f;
+  (void)radio_control_get_tx_meters(&power_w, &swr);
+  const int pc_key = (int)(power_w * 10.f + 0.5f);
+  const int sw_key = (int)(swr * 100.f + 0.5f);
+
+  if (!force && mv == s_last_mv && pc_key == s_last_pc && sw_key == s_last_sw &&
+      (now_ms - s_last_ms) < 1000) {
+    return;
+  }
   if (!force && s_last_mv >= 0) {
     int d = mv - s_last_mv;
     if (d < 0) d = -d;
-    if (d < 8 && (now_ms - s_last_ms) < 1500) return;
+    if (d < 8 && pc_key == s_last_pc && sw_key == s_last_sw &&
+        (now_ms - s_last_ms) < 1500) {
+      return;
+    }
   }
   s_last_ms = now_ms;
   s_last_mv = mv;
+  s_last_pc = pc_key;
+  s_last_sw = sw_key;
 
   const char* tx_text = (g_pending_tx_valid && !g_pending_tx.text.empty())
                             ? g_pending_tx.text.c_str()
                             : "";
-  ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked, force);
+  ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked,
+                 power_w, swr, force);
 }
 
 static void restore_rx_after_tx() {
