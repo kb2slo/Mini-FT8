@@ -42,6 +42,7 @@ static esp_err_t qmx_sync_frequency_mode(int freq_hz) {
 static esp_err_t qmx_begin_tx(int freq_hz, int tx_base_hz) {
     (void)freq_hz;
     (void)tx_base_hz;
+    cat_cdc_reset_parsed_meters();
 
     const char* md = "MD6;";
     esp_err_t err = qmx_send_cmd(md, 200);
@@ -81,6 +82,7 @@ static esp_err_t qmx_set_tone_hz(float tone_hz) {
 }
 
 static esp_err_t qmx_end_tx(void) {
+    cat_cdc_reset_parsed_meters();
     const char* rx = "RX;";
     esp_err_t err = qmx_send_cmd(rx, 200);
     if (err == ESP_OK) {

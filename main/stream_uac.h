@@ -49,6 +49,8 @@ bool uac_get_latest_waterfall_row(uint8_t* out_row, int out_len);
 
 bool cat_cdc_ready(void);
 esp_err_t cat_cdc_send(const uint8_t* data, size_t len, uint32_t timeout_ms);
+void cat_cdc_reset_parsed_meters(void);
+bool cat_cdc_get_parsed_meters(int* pc_tenths, int* sw_hundredths);
 
 bool uac_tx_begin_cpfsk(float base_hz,
                         const uint8_t* symbols,

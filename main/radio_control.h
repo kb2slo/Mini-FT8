@@ -28,6 +28,10 @@ esp_err_t radio_control_end_tx(void);
 esp_err_t radio_control_set_tune(bool enable, int freq_hz, int tone_hz);
 esp_err_t radio_control_set_time(int hour, int minute, int second);
 
+void radio_control_reset_tx_meters(void);
+void radio_control_poll_tx_meters(void);
+bool radio_control_get_tx_meters(float* power_w, float* swr);
+
 #ifdef __cplusplus
 }
 #endif

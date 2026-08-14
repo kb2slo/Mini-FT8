@@ -132,7 +132,8 @@ static void fill_text_row(int row, uint16_t bg) {
 }
 
 void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
-                    bool warn, bool writes_blocked, bool full_clear) {
+                    bool warn, bool writes_blocked, float power_w, float swr,
+                    bool full_clear) {
     const int line_h = 19;
     const int start_y = UI_START_Y;
     const int max_chars = SCREEN_W / 12;  // text size 2, 6px glyph
@@ -149,20 +150,31 @@ void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
         }
     }
 
-    char mv_line[20];
-    if (voltage_mv >= 0) {
-        snprintf(mv_line, sizeof(mv_line), "%d mV", voltage_mv);
+    char batt_line[32];
+    if (writes_blocked) {
+        if (voltage_mv >= 0) {
+            snprintf(batt_line, sizeof(batt_line), "%d mV  WR BLOCK", voltage_mv);
+        } else {
+            snprintf(batt_line, sizeof(batt_line), "WR BLOCK");
+        }
+    } else if (voltage_mv >= 0 && percent >= 0) {
+        snprintf(batt_line, sizeof(batt_line), "%d mV  %d%%", voltage_mv, percent);
+    } else if (voltage_mv >= 0) {
+        snprintf(batt_line, sizeof(batt_line), "%d mV  --", voltage_mv);
+    } else if (percent >= 0) {
+        snprintf(batt_line, sizeof(batt_line), "-- mV  %d%%", percent);
     } else {
-        snprintf(mv_line, sizeof(mv_line), "-- mV");
+        snprintf(batt_line, sizeof(batt_line), "-- mV  --");
     }
 
-    char pct_line[20];
-    if (writes_blocked) {
-        snprintf(pct_line, sizeof(pct_line), "WR BLOCK");
-    } else if (percent >= 0) {
-        snprintf(pct_line, sizeof(pct_line), "%d%%", percent);
-    } else {
-        snprintf(pct_line, sizeof(pct_line), "--");
+    char rf_line[24] = {0};
+    const bool show_rf = (power_w >= 0.f) || (swr >= 0.f);
+    if (power_w >= 0.f && swr >= 0.f) {
+        snprintf(rf_line, sizeof(rf_line), "%.1fW  SWR %.2f", (double)power_w, (double)swr);
+    } else if (power_w >= 0.f) {
+        snprintf(rf_line, sizeof(rf_line), "%.1fW", (double)power_w);
+    } else if (swr >= 0.f) {
+        snprintf(rf_line, sizeof(rf_line), "SWR %.2f", (double)swr);
     }
 
     uint16_t batt_fg = TFT_WHITE;
@@ -172,17 +184,27 @@ void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
         batt_fg = TFT_YELLOW;
     }
 
+    uint16_t swr_fg = TFT_WHITE;
+    if (swr >= 3.f) {
+        swr_fg = TFT_RED;
+    } else if (swr >= 2.f) {
+        swr_fg = TFT_YELLOW;
+    }
+
     static char s_line0[24];
     static char s_line1[24];
-    static char s_mv[20];
-    static char s_pct[20];
+    static char s_batt[32];
+    static char s_rf[24];
     static uint16_t s_batt_fg = 0;
+    static uint16_t s_swr_fg = 0;
+    static bool s_rf_shown = false;
     static bool s_valid = false;
 
     const bool msg_changed = !s_valid || strcmp(s_line0, line0) != 0 || strcmp(s_line1, line1) != 0;
-    const bool batt_changed = !s_valid || strcmp(s_mv, mv_line) != 0 ||
-                              strcmp(s_pct, pct_line) != 0 || s_batt_fg != batt_fg;
-    if (!full_clear && !msg_changed && !batt_changed) {
+    const bool batt_changed = !s_valid || strcmp(s_batt, batt_line) != 0 || s_batt_fg != batt_fg;
+    const bool rf_changed = !s_valid || strcmp(s_rf, rf_line) != 0 || s_swr_fg != swr_fg ||
+                            s_rf_shown != show_rf;
+    if (!full_clear && !msg_changed && !batt_changed && !rf_changed) {
         return;
     }
 
@@ -192,8 +214,10 @@ void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
         M5.Display.fillRect(0, start_y, SCREEN_W, SCREEN_H - UI_START_Y, TFT_BLACK);
         draw_centered_text(start_y, 2, TFT_RED, line0);
         draw_centered_text(start_y + line_h, 2, TFT_RED, line1);
-        draw_centered_text(start_y + 3 * line_h, 2, batt_fg, mv_line);
-        draw_centered_text(start_y + 4 * line_h, 2, batt_fg, pct_line);
+        draw_centered_text(start_y + 3 * line_h, 2, batt_fg, batt_line);
+        if (show_rf) {
+            draw_centered_text(start_y + 4 * line_h, 2, swr_fg, rf_line);
+        }
     } else {
         if (msg_changed) {
             fill_text_row(0, TFT_BLACK);
@@ -203,18 +227,24 @@ void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
         }
         if (batt_changed) {
             fill_text_row(3, TFT_BLACK);
+            draw_centered_text(start_y + 3 * line_h, 2, batt_fg, batt_line);
+        }
+        if (rf_changed) {
             fill_text_row(4, TFT_BLACK);
-            draw_centered_text(start_y + 3 * line_h, 2, batt_fg, mv_line);
-            draw_centered_text(start_y + 4 * line_h, 2, batt_fg, pct_line);
+            if (show_rf) {
+                draw_centered_text(start_y + 4 * line_h, 2, swr_fg, rf_line);
+            }
         }
     }
     M5.Display.endWrite();
 
     snprintf(s_line0, sizeof(s_line0), "%s", line0);
     snprintf(s_line1, sizeof(s_line1), "%s", line1);
-    snprintf(s_mv, sizeof(s_mv), "%s", mv_line);
-    snprintf(s_pct, sizeof(s_pct), "%s", pct_line);
+    snprintf(s_batt, sizeof(s_batt), "%s", batt_line);
+    snprintf(s_rf, sizeof(s_rf), "%s", rf_line);
     s_batt_fg = batt_fg;
+    s_swr_fg = swr_fg;
+    s_rf_shown = show_rf;
     s_valid = true;
 
     for (int i = 0; i < RX_LINES; ++i) {
@@ -222,8 +252,10 @@ void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
     }
     g_visible_rows[0] = line0;
     g_visible_rows[1] = line1;
-    g_visible_rows[3] = mv_line;
-    g_visible_rows[4] = pct_line;
+    g_visible_rows[3] = batt_line;
+    if (show_rf) {
+        g_visible_rows[4] = rf_line;
+    }
 }
 
 void ui_init(bool display_only) {
