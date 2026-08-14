@@ -4,6 +4,7 @@
 
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_timer.h"
 
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
@@ -21,17 +22,45 @@ static adc_oneshot_unit_handle_t g_adc = nullptr;
 static adc_cali_handle_t g_cali = nullptr;
 static bool g_initialized = false;
 static bool g_cali_ok = false;
-static bool g_halted = false;
+static bool g_tx_halted = false;
+static bool g_writes_blocked = false;
 static int g_ema_mv = -1;
+static int64_t g_tx_low_since_us = 0;
+static int64_t g_write_low_since_us = 0;
 
-// Halt near ~10% on the display curve; resume only after a clear recovery
-// (~20%) so load-induced dips do not chatter the policy.
-static constexpr int kHaltEnterMv = 3520;
-static constexpr int kHaltExitMv = 3680;
+// TX halt is conservative for a live pack under radio load. Flash writes use a
+// lower, slower gate so a healthy (or only moderately discharged) cell cannot
+// silently drop ADIF / Station.txt while QSOs still complete.
+static constexpr int kTxEnterMv = 3400;
+static constexpr int kTxExitMv = 3550;
+static constexpr int kWriteEnterMv = 3250;
+static constexpr int kWriteExitMv = 3400;
 static constexpr int kWarnMv = 3600;
+static constexpr int64_t kHoldUs = 8 * 1000 * 1000;
+// Below this, the pack is disconnected or the ADC is junk (USB, switch OFF).
+static constexpr int kSenseMinMv = 2800;
 static constexpr int kAdcAvgSamples = 8;
 static constexpr int kEmaNum = 3;
 static constexpr int kEmaDen = 4;
+
+static bool hold_hysteresis(bool current, int ema, int enter_mv, int exit_mv, int64_t* low_since_us)
+{
+    const int64_t now = esp_timer_get_time();
+    if (ema <= enter_mv) {
+        if (*low_since_us == 0) {
+            *low_since_us = now;
+        }
+        if ((now - *low_since_us) >= kHoldUs) {
+            return true;
+        }
+        return current;
+    }
+    *low_since_us = 0;
+    if (ema >= exit_mv) {
+        return false;
+    }
+    return current;
+}
 
 static int voltage_to_percent(int mv)
 {
@@ -140,28 +169,54 @@ esp_err_t board_power_read(board_power_status_t* out_status)
     }
 
     int bat_mv = (int)(adc_mv * kAdcRatio + 0.5f);
-    if (g_ema_mv < 0) {
-        g_ema_mv = bat_mv;
-    } else {
-        g_ema_mv = (g_ema_mv * kEmaNum + bat_mv) / kEmaDen;
-    }
+    const bool sense_ok = bat_mv >= kSenseMinMv;
+    if (sense_ok) {
+        if (g_ema_mv < 0) {
+            g_ema_mv = bat_mv;
+        } else {
+            g_ema_mv = (g_ema_mv * kEmaNum + bat_mv) / kEmaDen;
+        }
 
-    if (g_ema_mv <= kHaltEnterMv) {
-        g_halted = true;
-    } else if (g_ema_mv >= kHaltExitMv) {
-        g_halted = false;
+        const bool was_tx = g_tx_halted;
+        const bool was_wr = g_writes_blocked;
+        g_tx_halted = hold_hysteresis(g_tx_halted, g_ema_mv, kTxEnterMv, kTxExitMv, &g_tx_low_since_us);
+        g_writes_blocked = hold_hysteresis(g_writes_blocked, g_ema_mv, kWriteEnterMv, kWriteExitMv, &g_write_low_since_us);
+        if (g_tx_halted && !was_tx) {
+            ESP_LOGW(TAG, "battery TX halt enter ema=%d mV", g_ema_mv);
+        } else if (!g_tx_halted && was_tx) {
+            ESP_LOGI(TAG, "battery TX halt exit ema=%d mV", g_ema_mv);
+        }
+        if (g_writes_blocked && !was_wr) {
+            ESP_LOGW(TAG, "battery write halt enter ema=%d mV", g_ema_mv);
+        } else if (!g_writes_blocked && was_wr) {
+            ESP_LOGI(TAG, "battery write halt exit ema=%d mV", g_ema_mv);
+        }
+    } else {
+        ESP_LOGD(TAG, "battery sense ignored mv=%d", bat_mv);
+        g_tx_low_since_us = 0;
+        g_write_low_since_us = 0;
+        if (g_ema_mv < 0) {
+            g_tx_halted = false;
+            g_writes_blocked = false;
+        }
     }
 
     out_status->valid = true;
-    out_status->voltage_mv = g_ema_mv;
-    out_status->percent = voltage_to_percent(g_ema_mv);
-    out_status->halted = g_halted;
-    out_status->warn = g_halted || g_ema_mv <= kWarnMv;
+    out_status->voltage_mv = sense_ok ? g_ema_mv : bat_mv;
+    out_status->percent = sense_ok ? voltage_to_percent(g_ema_mv) : -1;
+    out_status->halted = g_tx_halted;
+    out_status->writes_blocked = g_writes_blocked;
+    out_status->warn = g_tx_halted || g_writes_blocked || (sense_ok && g_ema_mv <= kWarnMv);
 
     return ESP_OK;
 }
 
 bool board_power_halted(void)
 {
-    return g_halted;
+    return g_tx_halted;
+}
+
+bool board_power_writes_blocked(void)
+{
+    return g_writes_blocked;
 }

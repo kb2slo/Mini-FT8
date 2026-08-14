@@ -2220,10 +2220,14 @@ static std::string menu_sleep_batt_line() {
   char buf[48];
 
   if (board_power_read(&ps) == ESP_OK && ps.valid) {
-    if (ps.halted) {
-      snprintf(buf, sizeof(buf), "LOW BATT HALT");
+    if (ps.writes_blocked) {
+      snprintf(buf, sizeof(buf), "BATT WR %dmV", ps.voltage_mv);
+    } else if (ps.halted) {
+      snprintf(buf, sizeof(buf), "TX HALT %dmV", ps.voltage_mv);
+    } else if (ps.percent < 0) {
+      snprintf(buf, sizeof(buf), "Sleep/Batt --");
     } else if (ps.warn) {
-      snprintf(buf, sizeof(buf), "Batt %d%% LOW", ps.percent);
+      snprintf(buf, sizeof(buf), "Batt %d%% %dmV", ps.percent, ps.voltage_mv);
     } else {
       snprintf(buf, sizeof(buf), "Sleep/Batt %d%%", ps.percent);
     }
@@ -2235,17 +2239,16 @@ static std::string menu_sleep_batt_line() {
 }
 
 static bool storage_writes_blocked() {
-  return board_power_halted();
+  return board_power_writes_blocked();
 }
 
 static void low_batt_apply_halt() {
-  ESP_LOGW(TAG, "Low battery halt: blocking TX arming and flash writes");
-  debug_log_line("LOW BATT HALT");
+  ESP_LOGW(TAG, "Low battery halt: blocking new TX");
+  debug_log_line("LOW BATT TX HALT");
   g_beacon = BeaconMode::OFF;
   g_status_beacon_temp = BeaconMode::OFF;
   g_qso_xmit = false;
   g_pending_tx_valid = false;
-  g_config_save_pending = false;
   if (storage_service_firmware_available()) {
     (void)storage_service_flush_all();
   }
@@ -2260,14 +2263,18 @@ static void low_batt_apply_resume() {
 
 static void low_batt_policy_tick() {
   static bool s_halted = false;
+  static bool s_writes = false;
   board_power_status_t ps = {};
   if (board_power_read(&ps) != ESP_OK || !ps.valid) return;
   if (ps.halted && !s_halted) {
     low_batt_apply_halt();
   } else if (!ps.halted && s_halted) {
     low_batt_apply_resume();
+  } else if (ps.writes_blocked != s_writes && ui_mode == UIMode::MENU) {
+    draw_menu_view();
   }
   s_halted = ps.halted;
+  s_writes = ps.writes_blocked;
 }
 
 static std::string elide_right(const std::string& s, size_t max_len = 22) {
@@ -4636,7 +4643,7 @@ static void enter_mode(UIMode new_mode) {
 
 
 static void enter_msc_mode(const char* reason) {
-  if (board_power_halted()) {
+  if (storage_writes_blocked()) {
     ESP_LOGW(TAG, "USB Drive blocked: low battery halt");
     debug_log_line("USB Drive blocked");
     return;

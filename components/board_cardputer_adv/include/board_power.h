@@ -14,16 +14,20 @@ typedef struct {
     int percent;
     bool charging_known;
     bool charging;
-    // Soft halt: voltage is too low to risk flash writes / new TX.
+    // Stop new TX/beacon. Independent of flash-write gating.
     bool halted;
+    bool writes_blocked;
     bool warn;
 } board_power_status_t;
 
 esp_err_t board_power_init(void);
 esp_err_t board_power_read(board_power_status_t* out_status);
 
-// Last computed halt state (false until the first successful read).
+// Last computed TX-halt state (false until the first successful read).
 bool board_power_halted(void);
+
+// Last computed flash-write gate (stricter and slower than TX halt).
+bool board_power_writes_blocked(void);
 
 #ifdef __cplusplus
 }
