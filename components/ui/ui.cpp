@@ -126,11 +126,15 @@ static void draw_centered_text(int y, int text_size, uint16_t fg, const char* s)
     M5.Display.printf("%s", s);
 }
 
+static void fill_text_row(int row, uint16_t bg) {
+    const int line_h = 19;
+    M5.Display.fillRect(0, UI_START_Y + row * line_h, SCREEN_W, line_h, bg);
+}
+
 void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
-                    bool warn, bool writes_blocked) {
+                    bool warn, bool writes_blocked, bool full_clear) {
     const int line_h = 19;
     const int start_y = UI_START_Y;
-    const int text_h = SCREEN_H - UI_START_Y;
     const int max_chars = SCREEN_W / 12;  // text size 2, 6px glyph
 
     char line0[24] = {0};
@@ -168,13 +172,50 @@ void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
         batt_fg = TFT_YELLOW;
     }
 
+    static char s_line0[24];
+    static char s_line1[24];
+    static char s_mv[20];
+    static char s_pct[20];
+    static uint16_t s_batt_fg = 0;
+    static bool s_valid = false;
+
+    const bool msg_changed = !s_valid || strcmp(s_line0, line0) != 0 || strcmp(s_line1, line1) != 0;
+    const bool batt_changed = !s_valid || strcmp(s_mv, mv_line) != 0 ||
+                              strcmp(s_pct, pct_line) != 0 || s_batt_fg != batt_fg;
+    if (!full_clear && !msg_changed && !batt_changed) {
+        return;
+    }
+
     DispGuard guard;
     M5.Display.startWrite();
-    M5.Display.fillRect(0, start_y, SCREEN_W, text_h, TFT_BLACK);
-    draw_centered_text(start_y, 2, TFT_RED, line0);
-    draw_centered_text(start_y + line_h, 2, TFT_RED, line1);
-    draw_centered_text(start_y + 3 * line_h, 2, batt_fg, mv_line);
-    draw_centered_text(start_y + 4 * line_h, 2, batt_fg, pct_line);
+    if (full_clear || !s_valid) {
+        M5.Display.fillRect(0, start_y, SCREEN_W, SCREEN_H - UI_START_Y, TFT_BLACK);
+        draw_centered_text(start_y, 2, TFT_RED, line0);
+        draw_centered_text(start_y + line_h, 2, TFT_RED, line1);
+        draw_centered_text(start_y + 3 * line_h, 2, batt_fg, mv_line);
+        draw_centered_text(start_y + 4 * line_h, 2, batt_fg, pct_line);
+    } else {
+        if (msg_changed) {
+            fill_text_row(0, TFT_BLACK);
+            fill_text_row(1, TFT_BLACK);
+            draw_centered_text(start_y, 2, TFT_RED, line0);
+            draw_centered_text(start_y + line_h, 2, TFT_RED, line1);
+        }
+        if (batt_changed) {
+            fill_text_row(3, TFT_BLACK);
+            fill_text_row(4, TFT_BLACK);
+            draw_centered_text(start_y + 3 * line_h, 2, batt_fg, mv_line);
+            draw_centered_text(start_y + 4 * line_h, 2, batt_fg, pct_line);
+        }
+    }
+    M5.Display.endWrite();
+
+    snprintf(s_line0, sizeof(s_line0), "%s", line0);
+    snprintf(s_line1, sizeof(s_line1), "%s", line1);
+    snprintf(s_mv, sizeof(s_mv), "%s", mv_line);
+    snprintf(s_pct, sizeof(s_pct), "%s", pct_line);
+    s_batt_fg = batt_fg;
+    s_valid = true;
 
     for (int i = 0; i < RX_LINES; ++i) {
         g_visible_rows[i].clear();
@@ -183,7 +224,6 @@ void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
     g_visible_rows[1] = line1;
     g_visible_rows[3] = mv_line;
     g_visible_rows[4] = pct_line;
-    M5.Display.endWrite();
 }
 
 void ui_init(bool display_only) {

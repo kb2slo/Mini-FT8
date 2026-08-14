@@ -1592,13 +1592,18 @@ static void draw_tx_hud(bool force) {
   (void)board_power_read(&ps);
   const int mv = ps.valid ? ps.voltage_mv : -1;
   if (!force && mv == s_last_mv && (now_ms - s_last_ms) < 1000) return;
+  if (!force && s_last_mv >= 0) {
+    int d = mv - s_last_mv;
+    if (d < 0) d = -d;
+    if (d < 8 && (now_ms - s_last_ms) < 1500) return;
+  }
   s_last_ms = now_ms;
   s_last_mv = mv;
 
   const char* tx_text = (g_pending_tx_valid && !g_pending_tx.text.empty())
                             ? g_pending_tx.text.c_str()
                             : "";
-  ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked);
+  ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked, force);
 }
 
 static void restore_rx_after_tx() {
