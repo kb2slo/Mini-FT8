@@ -672,6 +672,7 @@ static int64_t s_last_tx_slot_idx = -1000;  // Track last TX slot for retry sche
 [[maybe_unused]] static bool g_sync_pending = false;
 [[maybe_unused]] static int g_sync_delta_ms = 0;
 static void enqueue_beacon_cq();
+static void arm_from_autoseq_or_beacon();
 static void load_storage_regular_files(std::vector<std::string>& files);
 static void qso_load_file_list();
 static void qso_load_fetch_file_list();
@@ -2672,6 +2673,25 @@ void arm_pending_tx(const AutoseqTxEntry& pending) {
   g_pending_tx_valid   = true;
 }
 
+// Arm whatever autoseq wants next, or a beacon CQ if the queue is empty.
+// Used after RX decode (including empty slots) and after TX tick so a quiet
+// band cannot stall beacon.
+static void arm_from_autoseq_or_beacon() {
+  if (board_power_halted() || g_tx_active) return;
+  AutoseqTxEntry pending;
+  if (autoseq_fetch_pending_tx(pending)) {
+    arm_pending_tx(pending);
+    ESP_LOGI(TAG, "TX ready: %s parity=%d", pending.text.c_str(), g_target_slot_parity);
+    return;
+  }
+  if (g_beacon == BeaconMode::OFF) return;
+  enqueue_beacon_cq();
+  if (autoseq_fetch_pending_tx(pending)) {
+    arm_pending_tx(pending);
+    ESP_LOGI(TAG, "Beacon CQ ready: %s parity=%d", pending.text.c_str(), g_target_slot_parity);
+  }
+}
+
 static void check_slot_boundary() {
   int64_t now_ms = rtc_now_ms();
   const int slot_period = g_protocol->slot_time_ms;
@@ -2692,6 +2712,11 @@ static void check_slot_boundary() {
     autoseq_tick(slot_idx, slot_parity, 0);
     g_was_txing = false;
     core_fire_qso_changed();  // propagates to all registered consumers
+  }
+
+  if (!g_was_txing && !g_tx_active &&
+      !(g_qso_xmit && g_pending_tx_valid)) {
+    arm_from_autoseq_or_beacon();
   }
 
   // TX trigger: check if we should start TX in this slot
@@ -3072,6 +3097,9 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
       g_decode_applied_slot_idx = g_decode_slot_idx;
     }
     g_decode_in_progress = false;
+    if (!g_was_txing) {
+      arm_from_autoseq_or_beacon();
+    }
     return;
   }
 
@@ -3245,17 +3273,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
       g_last_reply_text = to_me_auto.front().text;
     }
 
-    AutoseqTxEntry pending;
-    if (autoseq_fetch_pending_tx(pending)) {
-      arm_pending_tx(pending);
-      ESP_LOGI(TAG, "TX ready: %s parity=%d", pending.text.c_str(), g_target_slot_parity);
-    } else if (g_beacon != BeaconMode::OFF) {
-      enqueue_beacon_cq();
-      if (autoseq_fetch_pending_tx(pending)) {
-        arm_pending_tx(pending);
-        ESP_LOGI(TAG, "Beacon CQ ready: %s parity=%d", pending.text.c_str(), g_target_slot_parity);
-      }
-    }
+    arm_from_autoseq_or_beacon();
   }
 
   // ---- Zero-heap handoff: static s_dec[] → ui.cpp's static rx_lines[] ----
