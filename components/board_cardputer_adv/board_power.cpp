@@ -35,7 +35,8 @@ static constexpr int kTxEnterMv = 3400;
 static constexpr int kTxExitMv = 3550;
 static constexpr int kWriteEnterMv = 3250;
 static constexpr int kWriteExitMv = 3400;
-static constexpr int kWarnMv = 3600;
+// Yellow UI only: just above TX halt so mid-pack TX sag is not an alarm.
+static constexpr int kWarnMv = 3450;
 static constexpr int64_t kHoldUs = 8 * 1000 * 1000;
 // Below this, the pack is disconnected or the ADC is junk (USB, switch OFF).
 static constexpr int kSenseMinMv = 2800;
