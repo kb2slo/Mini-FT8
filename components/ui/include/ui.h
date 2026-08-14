@@ -74,6 +74,8 @@ void ui_draw_rx(int flash_index = -1);
 void ui_force_redraw_rx();
 // Colors: pass same-length slot_colors (0 even->green, 1 odd->red) for next/queue
 void ui_draw_tx(const std::string& next, const std::vector<std::string>& queue, int page, int selected, const std::vector<bool>& mark_delete, const std::vector<int>& slot_colors = {});
+// Replace the six RX text rows during TX. Waterfall/countdown are unchanged.
+void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent, bool warn, bool writes_blocked);
 // Returns selected absolute index or -1 if none
 int ui_handle_rx_key(char c);
 // Generic list draw (6 lines per page)

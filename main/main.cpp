@@ -1576,6 +1576,37 @@ static void redraw_tx_view() {
   ui_draw_tx(next_line, qtext, tx_page, -1, marks, slots);
 }
 
+static bool tx_hud_visible() {
+  return g_tx_active && ui_mode == UIMode::RX;
+}
+
+static void draw_tx_hud(bool force) {
+  if (!tx_hud_visible()) return;
+
+  static int64_t s_last_ms = 0;
+  static int s_last_mv = -99999;
+  const int64_t now_ms = rtc_now_ms();
+  if (!force && (now_ms - s_last_ms) < 500) return;
+
+  board_power_status_t ps = {};
+  (void)board_power_read(&ps);
+  const int mv = ps.valid ? ps.voltage_mv : -1;
+  if (!force && mv == s_last_mv && (now_ms - s_last_ms) < 1000) return;
+  s_last_ms = now_ms;
+  s_last_mv = mv;
+
+  const char* tx_text = (g_pending_tx_valid && !g_pending_tx.text.empty())
+                            ? g_pending_tx.text.c_str()
+                            : "";
+  ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked);
+}
+
+static void restore_rx_after_tx() {
+  if (ui_mode != UIMode::RX) return;
+  ui_force_redraw_rx();
+  ui_draw_rx();
+}
+
 static void draw_band_view() {
   std::vector<std::string> lines;
   lines.reserve(g_bands.size());
@@ -2778,7 +2809,7 @@ static void rx_flash_tick() {
   if (now >= rx_flash_deadline) {
     rx_flash_idx = -1;
     rx_flash_deadline = 0;
-    if (ui_mode == UIMode::RX) {
+    if (ui_mode == UIMode::RX && !tx_hud_visible()) {
       ui_draw_rx();
     }
   }
@@ -3538,6 +3569,7 @@ static void tx_start(int skip_tones) {
   // Mark TX as active
   ui_set_rx_waterfall_muted(true);
   g_tx_active = true;
+  draw_tx_hud(true);
 }
 
 // TX state machine tick - called from main loop
@@ -3561,6 +3593,7 @@ static void tx_tick() {
     g_tx_cancel_requested = false;
     g_was_txing = false;  // TX was cancelled - don't call tick at slot boundary
     core_fire_qso_changed();  // propagates to all registered consumers
+    restore_rx_after_tx();
     return;
   }
 
@@ -3585,6 +3618,7 @@ static void tx_tick() {
     g_pending_tx_valid = false;
     g_tx_cancel_requested = false;
     core_fire_qso_changed();  // propagates to all registered consumers
+    restore_rx_after_tx();
     return;
   }
 
@@ -4613,7 +4647,11 @@ static void enter_mode(UIMode new_mode) {
     case UIMode::RX:
       // Force RX list redraw
       ui_force_redraw_rx();
-      ui_draw_rx();
+      if (tx_hud_visible()) {
+        draw_tx_hud(true);
+      } else {
+        ui_draw_rx();
+      }
       break;
     case UIMode::TX:
       tx_page = 0;
@@ -4991,7 +5029,9 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     }
 
     if (c == 0) {
-      if (g_rx_dirty && ui_mode == UIMode::RX) {
+      if (tx_hud_visible()) {
+        draw_tx_hud(false);
+      } else if (g_rx_dirty && ui_mode == UIMode::RX) {
         // decode_monitor_results already called ui_set_rx_list_static(),
         // so UI's internal list is current. Just redraw.
         ui_draw_rx(rx_flash_idx);
@@ -5012,7 +5052,9 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     }
   if (c == last_key) {
     // No new keypress - still need to refresh dirty views
-    if (ui_mode == UIMode::TX && g_tx_view_dirty) {
+    if (tx_hud_visible()) {
+      draw_tx_hud(false);
+    } else if (ui_mode == UIMode::TX && g_tx_view_dirty) {
       g_tx_view_dirty = false;
       redraw_tx_view();
     }
@@ -5076,7 +5118,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     ui_set_paused(false);
   }
 
-  if (g_rx_dirty && ui_mode == UIMode::RX) {
+  if (g_rx_dirty && ui_mode == UIMode::RX && !tx_hud_visible()) {
       // decode already populated ui.cpp's internal list via ui_set_rx_list_static
       ui_draw_rx(rx_flash_idx);
       g_rx_dirty = false;
@@ -5093,7 +5135,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
   };
   if (!(ui_mode == UIMode::MENU && (menu_edit_idx >= 0 || menu_long_edit))) {
       // Mode switch keys (disabled while editing in MENU)
-      if (c == 'r' || c == 'R') { cancel_status_edit(); enter_mode(UIMode::RX); ui_force_redraw_rx(); ui_draw_rx(); switched = true; }
+      if (c == 'r' || c == 'R') { cancel_status_edit(); enter_mode(UIMode::RX); switched = true; }
       else if (c == 't' || c == 'T') { cancel_status_edit(); enter_mode(ui_mode == UIMode::TX ? UIMode::RX : UIMode::TX); switched = true; }
       else if (c == 'b' || c == 'B') { cancel_status_edit(); enter_mode(ui_mode == UIMode::BAND ? UIMode::RX : UIMode::BAND); switched = true; }
       else if (c == 'm' || c == 'M') {
@@ -5168,7 +5210,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       case UIMode::PERF: break;
       case UIMode::RX: {
         int sel = ui_handle_rx_key(c);
-        if (sel >= 0 && core_cmd_tap_rx(sel)) {
+        if (sel >= 0 && core_cmd_tap_rx(sel) && !tx_hud_visible()) {
           // TX-state arming lives inside core_cmd_tap_rx for every UI path.
           rx_flash_idx = sel;
           rx_flash_deadline = rtc_now_ms() + 500;

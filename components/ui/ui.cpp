@@ -2,6 +2,7 @@
 #include <M5Unified.h>
 #include <M5Cardputer.h>
 #include <cstring>
+#include <cstdio>
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 
@@ -110,6 +111,78 @@ void ui_draw_tx(const std::string& next, const std::vector<std::string>& queue, 
             g_visible_rows[i + 1].clear();
         }
     }
+    M5.Display.endWrite();
+}
+
+static void draw_centered_text(int y, int text_size, uint16_t fg, const char* s) {
+    if (!s) s = "";
+    const int char_w = 6 * text_size;
+    const int n = (int)strlen(s);
+    int x = (SCREEN_W - n * char_w) / 2;
+    if (x < 0) x = 0;
+    M5.Display.setTextSize(text_size);
+    M5.Display.setTextColor(fg, TFT_BLACK);
+    M5.Display.setCursor(x, y);
+    M5.Display.printf("%s", s);
+}
+
+void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
+                    bool warn, bool writes_blocked) {
+    const int line_h = 19;
+    const int start_y = UI_START_Y;
+    const int text_h = SCREEN_H - UI_START_Y;
+    const int max_chars = SCREEN_W / 12;  // text size 2, 6px glyph
+
+    char line0[24] = {0};
+    char line1[24] = {0};
+    if (tx_text && tx_text[0]) {
+        const int n = (int)strlen(tx_text);
+        if (n <= max_chars) {
+            snprintf(line0, sizeof(line0), "%s", tx_text);
+        } else {
+            snprintf(line0, sizeof(line0), "%.*s", max_chars, tx_text);
+            snprintf(line1, sizeof(line1), "%.*s", max_chars, tx_text + max_chars);
+        }
+    }
+
+    char mv_line[20];
+    if (voltage_mv >= 0) {
+        snprintf(mv_line, sizeof(mv_line), "%d mV", voltage_mv);
+    } else {
+        snprintf(mv_line, sizeof(mv_line), "-- mV");
+    }
+
+    char pct_line[20];
+    if (writes_blocked) {
+        snprintf(pct_line, sizeof(pct_line), "WR BLOCK");
+    } else if (percent >= 0) {
+        snprintf(pct_line, sizeof(pct_line), "%d%%", percent);
+    } else {
+        snprintf(pct_line, sizeof(pct_line), "--");
+    }
+
+    uint16_t batt_fg = TFT_WHITE;
+    if (writes_blocked) {
+        batt_fg = TFT_RED;
+    } else if (warn) {
+        batt_fg = TFT_YELLOW;
+    }
+
+    DispGuard guard;
+    M5.Display.startWrite();
+    M5.Display.fillRect(0, start_y, SCREEN_W, text_h, TFT_BLACK);
+    draw_centered_text(start_y, 2, TFT_RED, line0);
+    draw_centered_text(start_y + line_h, 2, TFT_RED, line1);
+    draw_centered_text(start_y + 3 * line_h, 2, batt_fg, mv_line);
+    draw_centered_text(start_y + 4 * line_h, 2, batt_fg, pct_line);
+
+    for (int i = 0; i < RX_LINES; ++i) {
+        g_visible_rows[i].clear();
+    }
+    g_visible_rows[0] = line0;
+    g_visible_rows[1] = line1;
+    g_visible_rows[3] = mv_line;
+    g_visible_rows[4] = pct_line;
     M5.Display.endWrite();
 }
 
