@@ -464,12 +464,48 @@ static bool g_rx_dirty = false;
 
 static std::vector<std::string> g_msc_lines = {
     "Mini-FT8 USB drive",
-    "now mounted on PC.",
+    "Waiting for computer...",
     "",
-    "Safely eject on PC,",
-    "then press C to",
-    "return to radio."
+    "Eject in Finder,",
+    "then press C."
 };
+static bool g_msc_host_attached_ui = false;
+static bool g_msc_busy = false;
+
+static void msc_set_waiting_lines() {
+  g_msc_busy = false;
+  g_msc_host_attached_ui = false;
+  g_msc_lines = {
+      "Mini-FT8 USB drive",
+      "Waiting for computer...",
+      "",
+      "Then eject in Finder,",
+      "and press C."
+  };
+}
+
+static void msc_set_attached_lines() {
+  g_msc_busy = false;
+  g_msc_host_attached_ui = true;
+  g_msc_lines = {
+      "Mini-FT8 USB drive",
+      "Computer connected.",
+      "",
+      "Eject in Finder,",
+      "then press C."
+  };
+}
+
+static void msc_set_busy_lines() {
+  g_msc_busy = true;
+  g_msc_host_attached_ui = false;
+  g_msc_lines = {
+      "USB busy,",
+      "unplug radio.",
+      "",
+      "Then press C."
+  };
+}
 
 static std::vector<std::string> g_startup_lines = {
     "** Mini-FT8 V2.1d **",
@@ -4729,6 +4765,14 @@ static void enter_msc_mode(const char* reason) {
   audio_source_stop();
   vTaskDelay(pdMS_TO_TICKS(200));
 
+  if (uac_ensure_host_uninstalled() != ESP_OK) {
+    ESP_LOGE(TAG, "USB Drive blocked: USB host still owns the PHY");
+    debug_log_line("USB busy, unplug radio");
+    msc_set_busy_lines();
+    enter_mode(UIMode::MSC);
+    return;
+  }
+
   const esp_err_t err = storage_service_set_usb_drive_enabled(true);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "USB Drive enable failed: %s", esp_err_to_name(err));
@@ -4736,7 +4780,8 @@ static void enter_msc_mode(const char* reason) {
     return;
   }
 
-  ESP_LOGI(TAG, "MSC ready: PC will see Mini-FT8 as a USB drive");
+  msc_set_waiting_lines();
+  ESP_LOGI(TAG, "MSC gadget up; waiting for computer attach");
   enter_mode(UIMode::MSC);
 }
 
@@ -5001,6 +5046,16 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     }
 
     if (ui_mode == UIMode::MSC) {
+      if (!g_msc_busy) {
+        const bool attached = storage_service_usb_host_attached();
+        if (attached && !g_msc_host_attached_ui) {
+          msc_set_attached_lines();
+          ui_draw_debug(g_msc_lines, 0);
+        } else if (!attached && g_msc_host_attached_ui) {
+          msc_set_waiting_lines();
+          ui_draw_debug(g_msc_lines, 0);
+        }
+      }
       if ((c == 'c' || c == 'C') && c != last_key) {
         exit_msc_mode();
       }
