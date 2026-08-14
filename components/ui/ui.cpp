@@ -2,6 +2,7 @@
 #include <M5Unified.h>
 #include <M5Cardputer.h>
 #include <cstring>
+#include <cstdio>
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 
@@ -111,6 +112,118 @@ void ui_draw_tx(const std::string& next, const std::vector<std::string>& queue, 
         }
     }
     M5.Display.endWrite();
+}
+
+static void draw_centered_text(int y, int text_size, uint16_t fg, const char* s) {
+    if (!s) s = "";
+    const int char_w = 6 * text_size;
+    const int n = (int)strlen(s);
+    int x = (SCREEN_W - n * char_w) / 2;
+    if (x < 0) x = 0;
+    M5.Display.setTextSize(text_size);
+    M5.Display.setTextColor(fg, TFT_BLACK);
+    M5.Display.setCursor(x, y);
+    M5.Display.printf("%s", s);
+}
+
+static void fill_text_row(int row, uint16_t bg) {
+    const int line_h = 19;
+    M5.Display.fillRect(0, UI_START_Y + row * line_h, SCREEN_W, line_h, bg);
+}
+
+void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
+                    bool warn, bool writes_blocked, bool full_clear) {
+    const int line_h = 19;
+    const int start_y = UI_START_Y;
+    const int max_chars = SCREEN_W / 12;  // text size 2, 6px glyph
+
+    char line0[24] = {0};
+    char line1[24] = {0};
+    if (tx_text && tx_text[0]) {
+        const int n = (int)strlen(tx_text);
+        if (n <= max_chars) {
+            snprintf(line0, sizeof(line0), "%s", tx_text);
+        } else {
+            snprintf(line0, sizeof(line0), "%.*s", max_chars, tx_text);
+            snprintf(line1, sizeof(line1), "%.*s", max_chars, tx_text + max_chars);
+        }
+    }
+
+    char mv_line[20];
+    if (voltage_mv >= 0) {
+        snprintf(mv_line, sizeof(mv_line), "%d mV", voltage_mv);
+    } else {
+        snprintf(mv_line, sizeof(mv_line), "-- mV");
+    }
+
+    char pct_line[20];
+    if (writes_blocked) {
+        snprintf(pct_line, sizeof(pct_line), "WR BLOCK");
+    } else if (percent >= 0) {
+        snprintf(pct_line, sizeof(pct_line), "%d%%", percent);
+    } else {
+        snprintf(pct_line, sizeof(pct_line), "--");
+    }
+
+    uint16_t batt_fg = TFT_WHITE;
+    if (writes_blocked) {
+        batt_fg = TFT_RED;
+    } else if (warn) {
+        batt_fg = TFT_YELLOW;
+    }
+
+    static char s_line0[24];
+    static char s_line1[24];
+    static char s_mv[20];
+    static char s_pct[20];
+    static uint16_t s_batt_fg = 0;
+    static bool s_valid = false;
+
+    const bool msg_changed = !s_valid || strcmp(s_line0, line0) != 0 || strcmp(s_line1, line1) != 0;
+    const bool batt_changed = !s_valid || strcmp(s_mv, mv_line) != 0 ||
+                              strcmp(s_pct, pct_line) != 0 || s_batt_fg != batt_fg;
+    if (!full_clear && !msg_changed && !batt_changed) {
+        return;
+    }
+
+    DispGuard guard;
+    M5.Display.startWrite();
+    if (full_clear || !s_valid) {
+        M5.Display.fillRect(0, start_y, SCREEN_W, SCREEN_H - UI_START_Y, TFT_BLACK);
+        draw_centered_text(start_y, 2, TFT_RED, line0);
+        draw_centered_text(start_y + line_h, 2, TFT_RED, line1);
+        draw_centered_text(start_y + 3 * line_h, 2, batt_fg, mv_line);
+        draw_centered_text(start_y + 4 * line_h, 2, batt_fg, pct_line);
+    } else {
+        if (msg_changed) {
+            fill_text_row(0, TFT_BLACK);
+            fill_text_row(1, TFT_BLACK);
+            draw_centered_text(start_y, 2, TFT_RED, line0);
+            draw_centered_text(start_y + line_h, 2, TFT_RED, line1);
+        }
+        if (batt_changed) {
+            fill_text_row(3, TFT_BLACK);
+            fill_text_row(4, TFT_BLACK);
+            draw_centered_text(start_y + 3 * line_h, 2, batt_fg, mv_line);
+            draw_centered_text(start_y + 4 * line_h, 2, batt_fg, pct_line);
+        }
+    }
+    M5.Display.endWrite();
+
+    snprintf(s_line0, sizeof(s_line0), "%s", line0);
+    snprintf(s_line1, sizeof(s_line1), "%s", line1);
+    snprintf(s_mv, sizeof(s_mv), "%s", mv_line);
+    snprintf(s_pct, sizeof(s_pct), "%s", pct_line);
+    s_batt_fg = batt_fg;
+    s_valid = true;
+
+    for (int i = 0; i < RX_LINES; ++i) {
+        g_visible_rows[i].clear();
+    }
+    g_visible_rows[0] = line0;
+    g_visible_rows[1] = line1;
+    g_visible_rows[3] = mv_line;
+    g_visible_rows[4] = pct_line;
 }
 
 void ui_init(bool display_only) {

@@ -25,6 +25,8 @@ extern int g_freq_osr;
 extern int64_t g_decode_slot_idx;
 extern volatile bool g_decode_in_progress;
 extern volatile int64_t g_decode_applied_slot_idx;
+extern volatile bool g_tx_active;
+extern volatile bool g_was_txing;
 void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool update_ui);
 int64_t rtc_now_ms();
 
@@ -204,7 +206,13 @@ void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg)
                            mon.wf.num_blocks >= g_protocol->total_symbols) {
                     ESP_LOGI(tag, "Triggering decode at slot %lld blocks=%d wf=%d",
                              (long long)slot_idx, slot_blocks, mon.wf.num_blocks);
-                    if (g_decode_enabled) {
+                    if (g_tx_active || g_was_txing) {
+                        ESP_LOGI(tag, "Skipping decode on TX slot %lld",
+                                 (long long)slot_idx);
+                        if (slot_idx > g_decode_applied_slot_idx) {
+                            g_decode_applied_slot_idx = slot_idx;
+                        }
+                    } else if (g_decode_enabled) {
                         g_decode_slot_idx = slot_idx;
                         g_decode_in_progress = true;
                         decode_monitor_results(&mon, &mon_cfg, false);

@@ -23,6 +23,8 @@
 #include "tinyusb_default_config.h"
 #include "tinyusb_msc.h"
 #include "wear_levelling.h"
+#include "esp_mac.h"
+#include "tusb.h"
 
 namespace {
 
@@ -47,6 +49,16 @@ StorageOwner s_owner = StorageOwner::UNAVAILABLE;
 wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 tinyusb_msc_storage_handle_t s_msc_storage;
 bool s_tinyusb_installed;
+volatile bool s_usb_host_attached;
+char s_usb_serial[13];
+const char kUsbLangId[] = {0x09, 0x04};
+const char* s_usb_strings[] = {
+    kUsbLangId,
+    "N6HAN",
+    "USB DISK",
+    s_usb_serial,
+    "USB DISK",
+};
 size_t s_open_streams;
 bool s_station_sync_attempted;
 sdmmc_card_t* s_sd_card;
@@ -663,6 +675,26 @@ esp_err_t set_storage_mount_point_locked(tinyusb_msc_mount_point_t mount_point) 
     return ESP_OK;
 }
 
+void fill_usb_serial() {
+    uint8_t mac[6] = {};
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
+        memset(mac, 0, sizeof(mac));
+    }
+    snprintf(s_usb_serial, sizeof(s_usb_serial), "%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+void usb_gadget_event_cb(tinyusb_event_t* event, void* /*arg*/) {
+    if (!event) {
+        return;
+    }
+    if (event->id == TINYUSB_EVENT_ATTACHED) {
+        s_usb_host_attached = true;
+    } else if (event->id == TINYUSB_EVENT_DETACHED) {
+        s_usb_host_attached = false;
+    }
+}
+
 }  // namespace
 
 struct StorageStream {
@@ -752,6 +784,10 @@ bool storage_service_usb_drive_enabled() {
     return guard.held() && s_owner == StorageOwner::USB_HOST;
 }
 
+bool storage_service_usb_host_attached() {
+    return s_usb_host_attached;
+}
+
 size_t storage_service_open_stream_count() {
     StorageGuard guard;
     return guard.held() ? s_open_streams : 0;
@@ -785,7 +821,12 @@ esp_err_t storage_service_set_usb_drive_enabled(bool enabled) {
             return err;
         }
 
-        const tinyusb_config_t tinyusb_config = TINYUSB_DEFAULT_CONFIG();
+        fill_usb_serial();
+        s_usb_host_attached = false;
+        tinyusb_config_t tinyusb_config = TINYUSB_DEFAULT_CONFIG(usb_gadget_event_cb);
+        tinyusb_config.descriptor.string = s_usb_strings;
+        tinyusb_config.descriptor.string_count =
+            static_cast<int>(sizeof(s_usb_strings) / sizeof(s_usb_strings[0]));
         err = tinyusb_driver_install(&tinyusb_config);
         if (err != ESP_OK) {
             const esp_err_t rollback =
@@ -794,9 +835,13 @@ esp_err_t storage_service_set_usb_drive_enabled(bool enabled) {
             return err;
         }
 
+        tud_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(120));
+        tud_connect();
+
         s_tinyusb_installed = true;
         s_owner = StorageOwner::USB_HOST;
-        ESP_LOGI(TAG, "USB Drive ON: PC owns FATFS");
+        ESP_LOGI(TAG, "USB Drive ON: serial=%s waiting for host attach", s_usb_serial);
         return ESP_OK;
     }
 
@@ -814,6 +859,7 @@ esp_err_t storage_service_set_usb_drive_enabled(bool enabled) {
         return err;
     }
     s_tinyusb_installed = false;
+    s_usb_host_attached = false;
 
     err = set_storage_mount_point_locked(TINYUSB_MSC_STORAGE_MOUNT_APP);
     if (err != ESP_OK) {
@@ -1200,4 +1246,17 @@ StorageCopyResult storage_copy_all_to_sd(const std::string& priority_file,
                                              : StorageCopyStatus::COPY_FAILED;
     log_copy_summary(result);
     return result;
+}
+
+extern "C" void __wrap_tud_msc_inquiry_cb(uint8_t lun,
+                                          uint8_t vendor_id[8],
+                                          uint8_t product_id[16],
+                                          uint8_t product_rev[4]) {
+    (void)lun;
+    const char vid[] = "N6HAN   ";
+    const char pid[] = "USB DISK        ";
+    const char rev[] = "1.0 ";
+    memcpy(vendor_id, vid, 8);
+    memcpy(product_id, pid, 16);
+    memcpy(product_rev, rev, 4);
 }

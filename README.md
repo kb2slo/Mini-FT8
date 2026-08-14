@@ -43,7 +43,7 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
 | `Q` | QSO | Browse QSO and log files, and view entries. |
 | `D` | Delete Files | Browse and delete files stored in internal FATFS. |
 | `B` | BAND | Edit per-band frequencies. |
-| `C` | USB Drive | Toggle internal FATFS ownership between Mini-FT8 and the PC. |
+| `C` | USB Drive | Expose internal FATFS as a USB disk. Best on Mac or PC; iPhone Files is unreliable. |
 | `P` | Performance | View A Simple Performance Monitor. (added in V2.0.4)|
 
 ## Global Keys and Navigation
@@ -96,7 +96,7 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
 |  | `◀` `▶` | Switch columns (Default view or SNR view). |
 | `D` (Delete Files) | `1..6` | Delete the selected file immediately, without confirmation. |
 | `B` (BAND) | `1..6` | Choose a band slot to edit. |
-| `C` (USB Drive) |  | Stop radio audio and expose FATFS to the PC. Safely eject it on the PC, then press `C` again to remount storage and return to RX. |
+| `C` (USB Drive) |  | Stop radio audio and present FATFS as `USB DISK`. Wait until the computer mounts it, eject it there, then press `C` again to remount storage and return to RX. If the screen says `USB busy, unplug radio`, disconnect the QMX/KH1 USB cable first. |
 | `P` (PERFORMANCE) | | A Simple Performance Monitor. (added in V2.0.4) |
 
 ## Download Logs
@@ -105,6 +105,16 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
   and current M5Launcher installs/reinstalls can switch between the applications
   while preserving an existing compatible FATFS partition. Both applications
   use 512-byte FATFS and wear-levelling sectors.
+
+- Use USB Drive (`C`)
+  - Unplug the radio from USB-C first if you were using QMX/KH1-USBC; the same
+    port cannot be USB host and a disk at once.
+  - Press `C`. The Cardputer enumerates as `USB DISK`. The screen says
+    `Waiting for computer...` until the computer actually attaches.
+  - On Mac or Windows, copy logs off the disk, eject it in Finder/Explorer, then
+    press `C` again to return to RX.
+  - iPhone/iPad Files is best-effort only. ESP flash MSC often fails to appear,
+    stalls, or cannot be ejected cleanly. Prefer Mac, PC, or Copy-to-SD.
 
 - Use SD
   - Insert a FAT/FAT32-formatted SD card.

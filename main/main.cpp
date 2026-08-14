@@ -382,7 +382,7 @@ volatile bool g_config_save_pending = false;
 // Non-static so core_api.cpp can arm it from any UI consumer.
 volatile bool g_qso_xmit = false;        // TX is pending
 volatile int g_target_slot_parity = 0;   // 0=even, 1=odd - parity of slot to TX on
-static volatile bool g_was_txing = false;       // We were transmitting (for tick timing)
+volatile bool g_was_txing = false;              // We were transmitting (for tick timing)
 volatile bool g_decode_in_progress = false; // Block TX trigger while decoding
 static int g_last_slot_parity = -1;             // For slot boundary detection (just parity, like reference)
 
@@ -464,12 +464,48 @@ static bool g_rx_dirty = false;
 
 static std::vector<std::string> g_msc_lines = {
     "Mini-FT8 USB drive",
-    "now mounted on PC.",
+    "Waiting for computer...",
     "",
-    "Safely eject on PC,",
-    "then press C to",
-    "return to radio."
+    "Eject in Finder,",
+    "then press C."
 };
+static bool g_msc_host_attached_ui = false;
+static bool g_msc_busy = false;
+
+static void msc_set_waiting_lines() {
+  g_msc_busy = false;
+  g_msc_host_attached_ui = false;
+  g_msc_lines = {
+      "Mini-FT8 USB drive",
+      "Waiting for computer...",
+      "",
+      "Then eject in Finder,",
+      "and press C."
+  };
+}
+
+static void msc_set_attached_lines() {
+  g_msc_busy = false;
+  g_msc_host_attached_ui = true;
+  g_msc_lines = {
+      "Mini-FT8 USB drive",
+      "Computer connected.",
+      "",
+      "Eject in Finder,",
+      "then press C."
+  };
+}
+
+static void msc_set_busy_lines() {
+  g_msc_busy = true;
+  g_msc_host_attached_ui = false;
+  g_msc_lines = {
+      "USB busy,",
+      "unplug radio.",
+      "",
+      "Then press C."
+  };
+}
 
 static std::vector<std::string> g_startup_lines = {
     "** Mini-FT8 V2.1d **",
@@ -611,7 +647,7 @@ static std::string normalize_grid_maidenhead(const std::string& src);
 std::string grid_ft8_4(const std::string& grid);
 // Single-threaded TX state machine (replaces separate tx_send_task)
 // TX runs in main loop via tx_tick(), one tone at a time
-static bool g_tx_active = false;           // TX state machine is running
+volatile bool g_tx_active = false;         // TX state machine is running
 static int g_tx_tone_idx = 0;              // Current tone index (0..total_symbols-1)
 static int64_t g_tx_next_tone_time = 0;    // When to send next tone (ms)
 static int64_t g_tx_slot_start_ms = 0;     // Slot boundary time for tone alignment
@@ -672,6 +708,7 @@ static int64_t s_last_tx_slot_idx = -1000;  // Track last TX slot for retry sche
 [[maybe_unused]] static bool g_sync_pending = false;
 [[maybe_unused]] static int g_sync_delta_ms = 0;
 static void enqueue_beacon_cq();
+static void arm_from_autoseq_or_beacon();
 static void load_storage_regular_files(std::vector<std::string>& files);
 static void qso_load_file_list();
 static void qso_load_fetch_file_list();
@@ -681,6 +718,7 @@ static void qso_draw_page();
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter = -1);
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd);
+static bool storage_writes_blocked();
 static bool storage_append_text_locked_path(const std::string& path,
                                             const std::string& line,
                                             const std::string& header_if_new,
@@ -738,6 +776,7 @@ static std::string fd_get_section_from_exchange(const std::string& ex) {
 // and use FreeText as our FD exchange (e.g. "1B SCV").
 static bool log_cabrillo_fd_entry(const std::string& dxcall, const std::string& their_fd_exchange) {
   if (g_cq_type != CqType::CQFD) return true;
+  if (storage_writes_blocked()) return false;
 
   const std::string my_fd = fd_strip_R(g_free_text);
   const std::string their_fd = fd_strip_R(their_fd_exchange);
@@ -784,6 +823,7 @@ static bool storage_append_text_locked_path(const std::string& path,
                                              const std::string& line,
                                              const std::string& header_if_new,
                                              bool sync_to_flash) {
+  if (storage_writes_blocked()) return false;
   return storage_file_append(path, line, header_if_new, sync_to_flash);
 }
 
@@ -802,6 +842,7 @@ static bool storage_write_cabrillo_fd_entry(const std::string& mycall,
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter) {
   if (!g_rxtx_log) return;
+  if (storage_writes_blocked()) return;
 
   time_t now = (time_t)(rtc_now_ms() / 1000);
   struct tm t;
@@ -829,6 +870,7 @@ static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& t
 
 static bool log_gps_grid_line(const std::string& grid8) {
   if (!g_rxtx_log) return false;
+  if (storage_writes_blocked()) return false;
   if (grid8.size() != 8) return false;
 
   // GPS grid breadcrumbs use RT files but not log_rxtx_line(), which appends
@@ -900,6 +942,10 @@ static CopyLogsResult copy_logs_busy_result() {
 }
 
 static CopyLogsResult copy_logs_to_sd_overwrite() {
+  if (storage_writes_blocked()) {
+    ESP_LOGW(STORAGE_COPY_TAG, "copy skipped: low battery halt");
+    return copy_logs_busy_result();
+  }
   const std::string qso_name = today_qso_file_name();
   const std::string rt_name = today_rt_file_name();
   const StorageOwner owner = storage_service_owner();
@@ -1196,6 +1242,10 @@ static void adif_dedupe_remember(const std::string& call_norm, int64_t now_ms) {
 }
 
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd) {
+  if (storage_writes_blocked()) {
+    ESP_LOGW(TAG, "ADIF write skipped: low battery halt");
+    return false;
+  }
   const int64_t now_ms = rtc_now_ms();
   const std::string call_norm = normalize_call_token(dxcall);
   if (adif_dedupe_is_duplicate(call_norm, now_ms)) {
@@ -1560,6 +1610,42 @@ static void redraw_tx_view() {
   }
 
   ui_draw_tx(next_line, qtext, tx_page, -1, marks, slots);
+}
+
+static bool tx_hud_visible() {
+  return g_tx_active && ui_mode == UIMode::RX;
+}
+
+static void draw_tx_hud(bool force) {
+  if (!tx_hud_visible()) return;
+
+  static int64_t s_last_ms = 0;
+  static int s_last_mv = -99999;
+  const int64_t now_ms = rtc_now_ms();
+  if (!force && (now_ms - s_last_ms) < 500) return;
+
+  board_power_status_t ps = {};
+  (void)board_power_read(&ps);
+  const int mv = ps.valid ? ps.voltage_mv : -1;
+  if (!force && mv == s_last_mv && (now_ms - s_last_ms) < 1000) return;
+  if (!force && s_last_mv >= 0) {
+    int d = mv - s_last_mv;
+    if (d < 0) d = -d;
+    if (d < 8 && (now_ms - s_last_ms) < 1500) return;
+  }
+  s_last_ms = now_ms;
+  s_last_mv = mv;
+
+  const char* tx_text = (g_pending_tx_valid && !g_pending_tx.text.empty())
+                            ? g_pending_tx.text.c_str()
+                            : "";
+  ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked, force);
+}
+
+static void restore_rx_after_tx() {
+  if (ui_mode != UIMode::RX) return;
+  ui_force_redraw_rx();
+  ui_draw_rx();
 }
 
 static void draw_band_view() {
@@ -2207,12 +2293,61 @@ static std::string menu_sleep_batt_line() {
   char buf[48];
 
   if (board_power_read(&ps) == ESP_OK && ps.valid) {
-    snprintf(buf, sizeof(buf), "Sleep/Batt %d%%", ps.percent);
+    if (ps.writes_blocked) {
+      snprintf(buf, sizeof(buf), "BATT WR %dmV", ps.voltage_mv);
+    } else if (ps.halted) {
+      snprintf(buf, sizeof(buf), "TX HALT %dmV", ps.voltage_mv);
+    } else if (ps.percent < 0) {
+      snprintf(buf, sizeof(buf), "Sleep/Batt --");
+    } else if (ps.warn) {
+      snprintf(buf, sizeof(buf), "Batt %d%% %dmV", ps.percent, ps.voltage_mv);
+    } else {
+      snprintf(buf, sizeof(buf), "Sleep/Batt %d%%", ps.percent);
+    }
   } else {
     snprintf(buf, sizeof(buf), "Sleep/Batt --");
   }
 
   return std::string(buf);
+}
+
+static bool storage_writes_blocked() {
+  return board_power_writes_blocked();
+}
+
+static void low_batt_apply_halt() {
+  ESP_LOGW(TAG, "Low battery halt: blocking new TX");
+  debug_log_line("LOW BATT TX HALT");
+  g_beacon = BeaconMode::OFF;
+  g_status_beacon_temp = BeaconMode::OFF;
+  g_qso_xmit = false;
+  g_pending_tx_valid = false;
+  if (storage_service_firmware_available()) {
+    (void)storage_service_flush_all();
+  }
+  if (ui_mode == UIMode::MENU) draw_menu_view();
+}
+
+static void low_batt_apply_resume() {
+  ESP_LOGI(TAG, "Low battery halt cleared");
+  debug_log_line("BATT OK");
+  if (ui_mode == UIMode::MENU) draw_menu_view();
+}
+
+static void low_batt_policy_tick() {
+  static bool s_halted = false;
+  static bool s_writes = false;
+  board_power_status_t ps = {};
+  if (board_power_read(&ps) != ESP_OK || !ps.valid) return;
+  if (ps.halted && !s_halted) {
+    low_batt_apply_halt();
+  } else if (!ps.halted && s_halted) {
+    low_batt_apply_resume();
+  } else if (ps.writes_blocked != s_writes && ui_mode == UIMode::MENU) {
+    draw_menu_view();
+  }
+  s_halted = ps.halted;
+  s_writes = ps.writes_blocked;
 }
 
 static std::string elide_right(const std::string& s, size_t max_len = 22) {
@@ -2599,11 +2734,34 @@ static int resolve_tx_offset(const AutoseqTxEntry& e) {
 // block that used to be repeated at every scheduling site (autoseq tick,
 // beacon-on, free-text queue, and RX selection).
 void arm_pending_tx(const AutoseqTxEntry& pending) {
+  if (board_power_halted()) {
+    ESP_LOGW(TAG, "TX arm skipped: low battery halt");
+    return;
+  }
   g_qso_xmit           = true;
   g_target_slot_parity = pending.slot_id & 1;
   g_pending_tx         = pending;
   g_pending_tx.offset_hz = resolve_tx_offset(g_pending_tx);
   g_pending_tx_valid   = true;
+}
+
+// Arm whatever autoseq wants next, or a beacon CQ if the queue is empty.
+// Used after RX decode (including empty slots) and after TX tick so a quiet
+// band cannot stall beacon.
+static void arm_from_autoseq_or_beacon() {
+  if (board_power_halted() || g_tx_active) return;
+  AutoseqTxEntry pending;
+  if (autoseq_fetch_pending_tx(pending)) {
+    arm_pending_tx(pending);
+    ESP_LOGI(TAG, "TX ready: %s parity=%d", pending.text.c_str(), g_target_slot_parity);
+    return;
+  }
+  if (g_beacon == BeaconMode::OFF) return;
+  enqueue_beacon_cq();
+  if (autoseq_fetch_pending_tx(pending)) {
+    arm_pending_tx(pending);
+    ESP_LOGI(TAG, "Beacon CQ ready: %s parity=%d", pending.text.c_str(), g_target_slot_parity);
+  }
 }
 
 static void check_slot_boundary() {
@@ -2628,6 +2786,11 @@ static void check_slot_boundary() {
     core_fire_qso_changed();  // propagates to all registered consumers
   }
 
+  if (!g_was_txing && !g_tx_active &&
+      !(g_qso_xmit && g_pending_tx_valid)) {
+    arm_from_autoseq_or_beacon();
+  }
+
   // TX trigger: check if we should start TX in this slot
   // Conditions: qso_xmit flag set, correct parity, early enough in slot, not already TXing,
   // and decode must be complete (TX is always triggered by decode results).
@@ -2638,6 +2801,7 @@ static void check_slot_boundary() {
   // TX based on a prior cycle's state. See AUTOSEQ_INACTIVE_QUEUE.md.
   // Window = 4/15 of slot_time_ms (~26.7%): FT8=4000ms, FT4=2000ms.
   if (g_qso_xmit &&
+      !board_power_halted() &&
       g_target_slot_parity == slot_parity &&
       slot_ms < (g_protocol->slot_time_ms * 4 / 15) &&
       !g_tx_active &&
@@ -2686,7 +2850,7 @@ static void rx_flash_tick() {
   if (now >= rx_flash_deadline) {
     rx_flash_idx = -1;
     rx_flash_deadline = 0;
-    if (ui_mode == UIMode::RX) {
+    if (ui_mode == UIMode::RX && !tx_hud_visible()) {
       ui_draw_rx();
     }
   }
@@ -2998,16 +3162,16 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   int num_decoded = 0;
 
   if (num_candidates <= 0) {
-    ESP_LOGW(TAG, "No candidates found");
-    ui_set_rx_list_static(nullptr, 0);
-    if (update_ui) { ui_draw_rx(); }
-    else core_fire_rx_changed();
+    ESP_LOGW(TAG, "No candidates found; keeping RX list");
     // No candidates means we processed the slot's audio but found nothing —
     // still counts as "applied" for the TX-trigger guard.
     if (g_decode_slot_idx > g_decode_applied_slot_idx) {
       g_decode_applied_slot_idx = g_decode_slot_idx;
     }
     g_decode_in_progress = false;
+    if (!g_was_txing) {
+      arm_from_autoseq_or_beacon();
+    }
     return;
   }
 
@@ -3152,7 +3316,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   qsort(s_dec, s_dec_count, sizeof(DecodeMsg), dec_sort_cmp);
 
   // ---- Autoseq: build small to_me vector at boundary (only to_me entries) ----
-  if (!g_was_txing) {
+  if (!g_was_txing && !board_power_halted()) {
     std::vector<UiRxLine> to_me_auto;
     for (int i = 0; i < s_dec_count; ++i) {
       if (!s_dec[i].is_to_me) break;  // sorted, so once we pass to_me we're done
@@ -3181,29 +3345,22 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
       g_last_reply_text = to_me_auto.front().text;
     }
 
-    AutoseqTxEntry pending;
-    if (autoseq_fetch_pending_tx(pending)) {
-      arm_pending_tx(pending);
-      ESP_LOGI(TAG, "TX ready: %s parity=%d", pending.text.c_str(), g_target_slot_parity);
-    } else if (g_beacon != BeaconMode::OFF) {
-      enqueue_beacon_cq();
-      if (autoseq_fetch_pending_tx(pending)) {
-        arm_pending_tx(pending);
-        ESP_LOGI(TAG, "Beacon CQ ready: %s parity=%d", pending.text.c_str(), g_target_slot_parity);
-      }
-    }
+    arm_from_autoseq_or_beacon();
   }
 
   // ---- Zero-heap handoff: static s_dec[] → ui.cpp's static rx_lines[] ----
-  ui_set_rx_list_static(s_dec, s_dec_count);
-
-  if (update_ui) {
-    ui_draw_rx();
-    char buf[64];
-    snprintf(buf, sizeof(buf), "Heap %u", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
-    debug_log_line(buf);
+  if (s_dec_count > 0) {
+    ui_set_rx_list_static(s_dec, s_dec_count);
+    if (update_ui) {
+      ui_draw_rx();
+      char buf[64];
+      snprintf(buf, sizeof(buf), "Heap %u", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
+      debug_log_line(buf);
+    } else {
+      core_fire_rx_changed();
+    }
   } else {
-    core_fire_rx_changed();
+    ESP_LOGI(TAG, "No messages decoded; keeping RX list");
   }
 
   // ---- heap instrumentation (exit) ----
@@ -3453,6 +3610,7 @@ static void tx_start(int skip_tones) {
   // Mark TX as active
   ui_set_rx_waterfall_muted(true);
   g_tx_active = true;
+  draw_tx_hud(true);
 }
 
 // TX state machine tick - called from main loop
@@ -3476,6 +3634,7 @@ static void tx_tick() {
     g_tx_cancel_requested = false;
     g_was_txing = false;  // TX was cancelled - don't call tick at slot boundary
     core_fire_qso_changed();  // propagates to all registered consumers
+    restore_rx_after_tx();
     return;
   }
 
@@ -3500,6 +3659,7 @@ static void tx_tick() {
     g_pending_tx_valid = false;
     g_tx_cancel_requested = false;
     core_fire_qso_changed();  // propagates to all registered consumers
+    restore_rx_after_tx();
     return;
   }
 
@@ -4422,6 +4582,10 @@ static void load_station_data() {
 }
 
 void save_station_data() {
+  if (storage_writes_blocked()) {
+    ESP_LOGW(TAG, "Station save skipped: low battery halt");
+    return;
+  }
   if (!storage_service_firmware_available()) {
     static bool warned_once = false;
     if (!warned_once) {
@@ -4486,6 +4650,9 @@ void save_station_data() {
 static void enter_mode(UIMode new_mode) {
   // No special handling needed when leaving TX mode - autoseq manages queue internally
   if (ui_mode == UIMode::STATUS && new_mode != UIMode::STATUS) {
+    if (board_power_halted()) {
+      g_status_beacon_temp = BeaconMode::OFF;
+    }
     if (g_beacon != g_status_beacon_temp) {
       bool was_off = (g_beacon == BeaconMode::OFF);
       g_beacon = g_status_beacon_temp;
@@ -4521,7 +4688,11 @@ static void enter_mode(UIMode new_mode) {
     case UIMode::RX:
       // Force RX list redraw
       ui_force_redraw_rx();
-      ui_draw_rx();
+      if (tx_hud_visible()) {
+        draw_tx_hud(true);
+      } else {
+        ui_draw_rx();
+      }
       break;
     case UIMode::TX:
       tx_page = 0;
@@ -4569,6 +4740,11 @@ static void enter_mode(UIMode new_mode) {
 
 
 static void enter_msc_mode(const char* reason) {
+  if (storage_writes_blocked()) {
+    ESP_LOGW(TAG, "USB Drive blocked: low battery halt");
+    debug_log_line("USB Drive blocked");
+    return;
+  }
   ESP_LOGI(TAG, "Entering MSC mode: %s", reason);
   debug_log_line("Entering MSC mode");
 
@@ -4589,6 +4765,14 @@ static void enter_msc_mode(const char* reason) {
   audio_source_stop();
   vTaskDelay(pdMS_TO_TICKS(200));
 
+  if (uac_ensure_host_uninstalled() != ESP_OK) {
+    ESP_LOGE(TAG, "USB Drive blocked: USB host still owns the PHY");
+    debug_log_line("USB busy, unplug radio");
+    msc_set_busy_lines();
+    enter_mode(UIMode::MSC);
+    return;
+  }
+
   const esp_err_t err = storage_service_set_usb_drive_enabled(true);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "USB Drive enable failed: %s", esp_err_to_name(err));
@@ -4596,7 +4780,8 @@ static void enter_msc_mode(const char* reason) {
     return;
   }
 
-  ESP_LOGI(TAG, "MSC ready: PC will see Mini-FT8 as a USB drive");
+  msc_set_waiting_lines();
+  ESP_LOGI(TAG, "MSC gadget up; waiting for computer attach");
   enter_mode(UIMode::MSC);
 }
 
@@ -4722,6 +4907,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     debug_log_line(buf);
   }
   log_heap("BOOT");
+  low_batt_policy_tick();
 
   g_app_core0_stack_last_sample_tick = xTaskGetTickCount();
   {
@@ -4817,6 +5003,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       if (ui_mode == UIMode::PERF) {
         draw_perf_view(false);
       }
+      low_batt_policy_tick();
     }
     // Startup splash: show briefly, then remain in RX. Radio connection is
     // explicit through STATUS -> 2; direct-mode keys still work immediately.
@@ -4859,6 +5046,16 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     }
 
     if (ui_mode == UIMode::MSC) {
+      if (!g_msc_busy) {
+        const bool attached = storage_service_usb_host_attached();
+        if (attached && !g_msc_host_attached_ui) {
+          msc_set_attached_lines();
+          ui_draw_debug(g_msc_lines, 0);
+        } else if (!attached && g_msc_host_attached_ui) {
+          msc_set_waiting_lines();
+          ui_draw_debug(g_msc_lines, 0);
+        }
+      }
       if ((c == 'c' || c == 'C') && c != last_key) {
         exit_msc_mode();
       }
@@ -4874,7 +5071,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     tx_tick();              // Process TX state machine (single-threaded, non-blocking)
 
     // Drain deferred config saves requested by core commands.
-    if (g_config_save_pending && storage_service_firmware_available()) {
+    if (g_config_save_pending && storage_service_firmware_available() &&
+        !storage_writes_blocked()) {
       g_config_save_pending = false;
       save_station_data();
     }
@@ -4891,7 +5089,9 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     }
 
     if (c == 0) {
-      if (g_rx_dirty && ui_mode == UIMode::RX) {
+      if (tx_hud_visible()) {
+        draw_tx_hud(false);
+      } else if (g_rx_dirty && ui_mode == UIMode::RX) {
         // decode_monitor_results already called ui_set_rx_list_static(),
         // so UI's internal list is current. Just redraw.
         ui_draw_rx(rx_flash_idx);
@@ -4912,7 +5112,9 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     }
   if (c == last_key) {
     // No new keypress - still need to refresh dirty views
-    if (ui_mode == UIMode::TX && g_tx_view_dirty) {
+    if (tx_hud_visible()) {
+      draw_tx_hud(false);
+    } else if (ui_mode == UIMode::TX && g_tx_view_dirty) {
       g_tx_view_dirty = false;
       redraw_tx_view();
     }
@@ -4976,7 +5178,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     ui_set_paused(false);
   }
 
-  if (g_rx_dirty && ui_mode == UIMode::RX) {
+  if (g_rx_dirty && ui_mode == UIMode::RX && !tx_hud_visible()) {
       // decode already populated ui.cpp's internal list via ui_set_rx_list_static
       ui_draw_rx(rx_flash_idx);
       g_rx_dirty = false;
@@ -4993,7 +5195,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
   };
   if (!(ui_mode == UIMode::MENU && (menu_edit_idx >= 0 || menu_long_edit))) {
       // Mode switch keys (disabled while editing in MENU)
-      if (c == 'r' || c == 'R') { cancel_status_edit(); enter_mode(UIMode::RX); ui_force_redraw_rx(); ui_draw_rx(); switched = true; }
+      if (c == 'r' || c == 'R') { cancel_status_edit(); enter_mode(UIMode::RX); switched = true; }
       else if (c == 't' || c == 'T') { cancel_status_edit(); enter_mode(ui_mode == UIMode::TX ? UIMode::RX : UIMode::TX); switched = true; }
       else if (c == 'b' || c == 'B') { cancel_status_edit(); enter_mode(ui_mode == UIMode::BAND ? UIMode::RX : UIMode::BAND); switched = true; }
       else if (c == 'm' || c == 'M') {
@@ -5068,7 +5270,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       case UIMode::PERF: break;
       case UIMode::RX: {
         int sel = ui_handle_rx_key(c);
-        if (sel >= 0 && core_cmd_tap_rx(sel)) {
+        if (sel >= 0 && core_cmd_tap_rx(sel) && !tx_hud_visible()) {
           // TX-state arming lives inside core_cmd_tap_rx for every UI path.
           rx_flash_idx = sel;
           rx_flash_deadline = rtc_now_ms() + 500;

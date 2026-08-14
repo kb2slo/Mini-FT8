@@ -86,6 +86,7 @@ static uac_host_device_handle_t s_mic_handle = NULL;
 static cdc_acm_dev_hdl_t s_cdc_handle = NULL;
 static TaskHandle_t s_usb_task_handle = NULL;
 static TaskHandle_t s_uac_task_handle = NULL;
+static volatile bool s_host_installed = false;
 
 // Speaker (UAC OUT) is captured and fully allocated during enumeration.
 // QDX transmission only resumes or suspends the pre-opened endpoint.
@@ -374,6 +375,7 @@ static void usb_lib_task(void* arg) {
         return;
     }
 
+    s_host_installed = true;
     ESP_LOGI(TAG, "USB Host installed");
 
     if (s_profile == UAC_PROFILE_QMX) {
@@ -430,9 +432,23 @@ static void usb_lib_task(void* arg) {
     }
 
     ESP_LOGI(TAG, "USB Host uninstalling");
-    esp_err_t uerr = usb_host_uninstall();
+    esp_err_t uerr = ESP_FAIL;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        uint32_t event_flags = 0;
+        usb_host_lib_handle_events(pdMS_TO_TICKS(20), &event_flags);
+        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
+            usb_host_device_free_all();
+        }
+        uerr = usb_host_uninstall();
+        if (uerr == ESP_OK) {
+            s_host_installed = false;
+            break;
+        }
+        ESP_LOGW(TAG, "usb_host_uninstall attempt %d: %s", attempt + 1, esp_err_to_name(uerr));
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     if (uerr != ESP_OK) {
-        ESP_LOGW(TAG, "usb_host_uninstall: %s", esp_err_to_name(uerr));
+        ESP_LOGE(TAG, "USB host still owns the PHY; TinyUSB gadget will not enumerate");
     }
     s_usb_task_handle = NULL;
     vTaskDelete(NULL);
@@ -933,6 +949,44 @@ void uac_stop(void) {
     ft8_audio_pipeline_clear_latest_waterfall_row();
     snprintf(s_status_string, sizeof(s_status_string), "Idle");
     ESP_LOGI(TAG, "UAC host stopped");
+}
+
+bool uac_usb_host_released(void) {
+    return !s_host_installed && s_usb_task_handle == NULL;
+}
+
+esp_err_t uac_ensure_host_uninstalled(void) {
+    uac_stop();
+
+    int timeout = 50;
+    while (s_usb_task_handle != NULL && timeout > 0) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        timeout--;
+    }
+    if (s_usb_task_handle != NULL) {
+        ESP_LOGE(TAG, "USB host task still running; cannot start USB Drive");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_host_installed) {
+        return ESP_OK;
+    }
+
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        uint32_t event_flags = 0;
+        usb_host_lib_handle_events(pdMS_TO_TICKS(20), &event_flags);
+        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
+            usb_host_device_free_all();
+        }
+        const esp_err_t uerr = usb_host_uninstall();
+        if (uerr == ESP_OK) {
+            s_host_installed = false;
+            ESP_LOGI(TAG, "USB host released for device-mode MSC");
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "USB host release attempt %d: %s", attempt + 1, esp_err_to_name(uerr));
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return ESP_ERR_INVALID_STATE;
 }
 
 // UAC OUT synthesis for QDX mode.
