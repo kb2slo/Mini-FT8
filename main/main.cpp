@@ -13,6 +13,7 @@ extern "C" {
   }
 
 #include "board_power.h"
+#include "build_identity.h"
 #include "ui.h"
 #include <vector>
 #include <string>
@@ -508,7 +509,7 @@ static void msc_set_busy_lines() {
 }
 
 static std::vector<std::string> g_startup_lines = {
-    "** Mini-FT8 V2.1d **",
+    "** Mini-FT8 V" MINIFT8_PRODUCT_VER " **",
     " S/R/T: Operate",
     " M/N/O: Menu",
     " Q/F/D: File",
@@ -4095,7 +4096,7 @@ static void draw_perf_view(bool force_redraw) {
       TFT_WHITE,
       TFT_WHITE,
       TFT_WHITE,
-      TFT_WHITE,
+      TFT_CYAN,
   };
 
   perf_make_cpu_line(lines[0], sizeof(lines[0]), 0);
@@ -4103,9 +4104,7 @@ static void draw_perf_view(bool force_redraw) {
   perf_make_heap_line(lines[2], sizeof(lines[2]), "8B", MALLOC_CAP_8BIT);
   perf_make_heap_line(lines[3], sizeof(lines[3]), "IN", MALLOC_CAP_INTERNAL);
   perf_make_heap_line(lines[4], sizeof(lines[4]), "DM", MALLOC_CAP_DMA);
-  snprintf(lines[5], sizeof(lines[5]), "ST C%uK M%uK",
-           perf_kib_rounded(g_app_core0_stack_cur_free_bytes),
-           perf_kib_rounded(g_app_core0_stack_min_free_bytes));
+  snprintf(lines[5], sizeof(lines[5]), "%s", MINIFT8_UI_LINE);
 
   const int line_h = 19;
   const int start_y = UI_START_Y;

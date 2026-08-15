@@ -39,6 +39,7 @@ Not scheduled. Move to Backlog with a Done-when before implementing. Large produ
 | I4 | docs | `NATIVE_CLIENT_ARCHITECTURE.md` | Referenced by `core_api.cpp`; missing. Write when `core_api` is more than a facade over `main.cpp` globals. Needed for I3. |
 | I5 | feature | More radios (FTX-1, FT-817, …) | Field + CAT; not host-CI. After radio_control is less tangled with `main`. |
 | I6 | feature | Multi-mode product (working name `miniFTx` or similar) | Stop treating FT8 as the product. FT4 should be first-class (already compile/runtime, not a second-class `ENABLE_FT4` carve-out). JS8Call next as a real mode (timing, alphabet, autoseq — not a skin). Prefer a name that is not FT-only; exact name is an RFC, not a drive-by rename of repo/binaries. Depends on extract (B3) and a mode-agnostic slot/audio core. |
+| I7 | ci | Hash-first build identity | In progress on `feat/build-identity`. `a9f64c2-minift8-dev.bin` (dirty: `-dirty-`); PERF line `dev a9f64c2*`. CI zip must contain that name, not `MiniFT8_Merged_Auto.bin`. |
 
 Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, full-slot audio.
 
