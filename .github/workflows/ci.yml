@@ -1,0 +1,110 @@
+# Production firmware + host tests.
+# Merged image is the same POST_BUILD output as a local `idf.py build`:
+#   build/MiniFT8_Merged_Auto.bin  — flash at 0x0 (8 MB, custom partitions).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Autoseq host_mock
+        working-directory: host_mock
+        run: |
+          make -j"$(nproc)"
+          failed=0
+          for f in test_*.json; do
+            echo "===== $f ====="
+            ./host_test "$f" || failed=1
+          done
+          exit "$failed"
+
+      - name: TX e2e (CTest)
+        working-directory: tests/tx_e2e
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+          ctest --test-dir build --output-on-failure
+
+  firmware:
+    name: Firmware (ESP32-S3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build with ESP-IDF 5.5.1
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          command: idf.py build
+
+      - name: Stage release files
+        run: |
+          mkdir -p dist
+          cp build/MiniFT8_Merged_Auto.bin dist/MiniFT8_Merged_Auto.bin
+          sha256sum dist/MiniFT8_Merged_Auto.bin | tee dist/MiniFT8_Merged_Auto.bin.sha256
+          {
+            echo "ref=${GITHUB_REF}"
+            echo "sha=${GITHUB_SHA}"
+            echo "idf=v5.5.1"
+            echo "target=esp32s3"
+            echo "flash=esptool.py --chip esp32s3 write_flash 0x0 MiniFT8_Merged_Auto.bin"
+          } > dist/BUILD.txt
+
+      - name: Upload merged binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiniFT8-Cardputer-ADV
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            dist/MiniFT8_Merged_Auto.bin
+            dist/MiniFT8_Merged_Auto.bin.sha256
+            dist/BUILD.txt
+
+  release:
+    name: GitHub Release
+    needs: [host-tests, firmware]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: MiniFT8-Cardputer-ADV
+          path: dist
+
+      - name: Name tagged binaries
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          cp dist/MiniFT8_Merged_Auto.bin "dist/MiniFT8-${tag}-Merged.bin"
+          sha256sum "dist/MiniFT8-${tag}-Merged.bin" | tee "dist/MiniFT8-${tag}-Merged.bin.sha256"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/MiniFT8-${{ github.ref_name }}-Merged.bin
+            dist/MiniFT8-${{ github.ref_name }}-Merged.bin.sha256
+          body: |
+            Flash the merged image at `0x0` (full 8 MB image, custom FATFS partition table).
+
+            ```
+            esptool.py --chip esp32s3 write_flash 0x0 MiniFT8-${{ github.ref_name }}-Merged.bin
+            ```
+
+            First boot may format the FATFS partition.
