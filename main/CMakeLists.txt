@@ -17,3 +17,5 @@ idf_component_register(
     REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib usb_host_uac usb_host_cdc_acm storage_service external_rtc efuse
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Werror)
+add_dependencies(${COMPONENT_LIB} minift8_build_identity)
+target_include_directories(${COMPONENT_LIB} PRIVATE ${CMAKE_BINARY_DIR}/generated)
