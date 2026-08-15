@@ -65,6 +65,14 @@ bool ui_is_paused() { return ui_paused; }
 static bool s_rx_waterfall_muted = false;
 void ui_set_rx_waterfall_muted(bool muted) { s_rx_waterfall_muted = muted; }
 
+static bool s_tx_halt_sticky = false;
+void ui_set_tx_halt_sticky(bool on) {
+    if (s_tx_halt_sticky == on) return;
+    s_tx_halt_sticky = on;
+    last_page = -1;
+    last_drawn_count = 0;
+}
+
 bool ui_waterfall_dirty() { return waterfall_dirty; }
 void ui_draw_waterfall_if_dirty() { if (waterfall_dirty) ui_draw_waterfall(); }
 
@@ -133,7 +141,7 @@ static void fill_text_row(int row, uint16_t bg) {
 
 void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
                     bool warn, bool writes_blocked, float power_w, float swr,
-                    bool full_clear) {
+                    bool full_clear, bool tx_aborted) {
     const int line_h = 19;
     const int start_y = UI_START_Y;
     const int max_chars = SCREEN_W / 12;  // text size 2, 6px glyph
@@ -168,8 +176,12 @@ void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
     }
 
     char rf_line[24] = {0};
-    const bool show_rf = (power_w >= 0.f) || (swr >= 0.f);
-    if (power_w >= 0.f && swr >= 0.f) {
+    // Size-2 glyphs are 12px; 20 chars fill the 240px row. The abort
+    // phrasing is shortened so it stays on the power/SWR line.
+    const bool show_rf = tx_aborted || (power_w >= 0.f) || (swr >= 0.f);
+    if (tx_aborted) {
+        snprintf(rf_line, sizeof(rf_line), "TX ABORT (low batt)");
+    } else if (power_w >= 0.f && swr >= 0.f) {
         snprintf(rf_line, sizeof(rf_line), "%.1fW  SWR %.2f", (double)power_w, (double)swr);
     } else if (power_w >= 0.f) {
         snprintf(rf_line, sizeof(rf_line), "%.1fW", (double)power_w);
@@ -185,7 +197,9 @@ void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
     }
 
     uint16_t swr_fg = TFT_WHITE;
-    if (swr >= 3.f) {
+    if (tx_aborted) {
+        swr_fg = TFT_RED;
+    } else if (swr >= 3.f) {
         swr_fg = TFT_RED;
     } else if (swr >= 2.f) {
         swr_fg = TFT_YELLOW;
@@ -400,6 +414,9 @@ void ui_draw_countdown(float fraction, bool even_slot, int offset_hz) {
     M5.Display.fillRect(0, y, SCREEN_W, COUNTDOWN_H, rgb565(20, 20, 40));
     if (filled > 0) {
         uint16_t color = even_slot ? rgb565(0, 180, 0) : rgb565(180, 0, 0);
+        if (s_tx_halt_sticky) {
+            color = rgb565(220, 160, 0);
+        }
         M5.Display.fillRect(0, y, filled, COUNTDOWN_H, color);
     }
     // draw cursor last so countdown never overwrites it
@@ -510,19 +527,26 @@ void ui_draw_rx(int flash_index) {
     M5.Display.startWrite();
     M5.Display.setTextSize(2);
     const bool can_page_up = (rx_page > 0);
-    const bool can_page_down = ((rx_page + 1) * RX_LINES < rx_lines_count);
-    int start = rx_page * RX_LINES;
-    for (int i = 0; i < RX_LINES; ++i) {
+    const int vis_rows = s_tx_halt_sticky ? (RX_LINES - 1) : RX_LINES;
+    const bool can_page_down = ((rx_page + 1) * vis_rows < rx_lines_count);
+    int start = rx_page * vis_rows;
+    for (int i = 0; i < vis_rows; ++i) {
         int idx = start + i;
         int y = start_y + i * line_h;
         M5.Display.fillRect(0, y, SCREEN_W, line_h, TFT_BLACK);
         if (idx < rx_lines_count) {
             bool selected = (idx == flash_index);
-            bool cyan_marker = ((i == 0) && can_page_up) || ((i == RX_LINES - 1) && can_page_down);
+            bool cyan_marker = ((i == 0) && can_page_up) || ((i == vis_rows - 1) && can_page_down);
             draw_rx_line(y, rx_lines[idx], i + 1, selected, cyan_marker);
         } else {
             g_visible_rows[i].clear();
         }
+    }
+    if (s_tx_halt_sticky) {
+        const int y = start_y + (RX_LINES - 1) * line_h;
+        M5.Display.fillRect(0, y, SCREEN_W, line_h, TFT_BLACK);
+        draw_centered_text(y, 2, TFT_RED, "TX ABORT (low batt)");
+        g_visible_rows[RX_LINES - 1] = "TX ABORT (low batt)";
     }
     M5.Display.endWrite();
 
@@ -553,13 +577,18 @@ int ui_handle_rx_key(char c) {
             ui_draw_rx();
         }
     } else if (c == '.') {
-        if ((rx_page + 1) * RX_LINES < rx_lines_count) {
+        const int vis_rows = s_tx_halt_sticky ? (RX_LINES - 1) : RX_LINES;
+        if ((rx_page + 1) * vis_rows < rx_lines_count) {
             rx_page++;
             ui_draw_rx();
         }
     } else if (c >= '1' && c <= '6') {
         int line = c - '1';
-        int idx = rx_page * RX_LINES + line;
+        if (s_tx_halt_sticky && line >= (RX_LINES - 1)) {
+            return selected_idx;
+        }
+        const int vis_rows = s_tx_halt_sticky ? (RX_LINES - 1) : RX_LINES;
+        int idx = rx_page * vis_rows + line;
         if (idx >= 0 && idx < rx_lines_count) {
             rx_selected = idx;
             ui_draw_rx();

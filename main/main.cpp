@@ -694,6 +694,7 @@ static void draw_status_view();
 static void draw_status_line(int idx, const std::string& text, bool highlight);
 void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool update_ui);
 static void update_countdown();
+static void redraw_countdown_now();
 static void consume_cdc_initial_sync();
 // Non-static so core_api.cpp can push band changes to the radio immediately.
 bool sync_radio_to_current_band(const char* reason);
@@ -1612,17 +1613,24 @@ static void redraw_tx_view() {
   ui_draw_tx(next_line, qtext, tx_page, -1, marks, slots);
 }
 
+static bool g_tx_abort_hud = false;
+static int64_t g_tx_abort_hud_until_ms = 0;
+static char g_tx_abort_text[48] = {0};
+
 static bool tx_hud_visible() {
-  return g_tx_active && ui_mode == UIMode::RX;
+  return ui_mode == UIMode::RX && (g_tx_active || g_tx_abort_hud);
 }
 
 static void draw_tx_hud(bool force) {
   if (!tx_hud_visible()) return;
 
+  const bool aborted = g_tx_abort_hud && !g_tx_active;
+
   static int64_t s_last_ms = 0;
   static int s_last_mv = -99999;
   static int s_last_pc = -99999;
   static int s_last_sw = -99999;
+  static bool s_last_aborted = false;
   const int64_t now_ms = rtc_now_ms();
   if (!force && (now_ms - s_last_ms) < 500) return;
 
@@ -1630,18 +1638,20 @@ static void draw_tx_hud(bool force) {
   (void)board_power_read(&ps);
   const int mv = ps.valid ? ps.voltage_mv : -1;
 
-  radio_control_poll_tx_meters();
   float power_w = -1.f;
   float swr = -1.f;
-  (void)radio_control_get_tx_meters(&power_w, &swr);
+  if (!aborted) {
+    radio_control_poll_tx_meters();
+    (void)radio_control_get_tx_meters(&power_w, &swr);
+  }
   const int pc_key = (int)(power_w * 10.f + 0.5f);
   const int sw_key = (int)(swr * 100.f + 0.5f);
 
-  if (!force && mv == s_last_mv && pc_key == s_last_pc && sw_key == s_last_sw &&
-      (now_ms - s_last_ms) < 1000) {
+  if (!force && aborted == s_last_aborted && mv == s_last_mv && pc_key == s_last_pc &&
+      sw_key == s_last_sw && (now_ms - s_last_ms) < 1000) {
     return;
   }
-  if (!force && s_last_mv >= 0) {
+  if (!force && !aborted && s_last_mv >= 0) {
     int d = mv - s_last_mv;
     if (d < 0) d = -d;
     if (d < 8 && pc_key == s_last_pc && sw_key == s_last_sw &&
@@ -1653,18 +1663,50 @@ static void draw_tx_hud(bool force) {
   s_last_mv = mv;
   s_last_pc = pc_key;
   s_last_sw = sw_key;
+  s_last_aborted = aborted;
 
-  const char* tx_text = (g_pending_tx_valid && !g_pending_tx.text.empty())
-                            ? g_pending_tx.text.c_str()
-                            : "";
+  const char* tx_text = "";
+  if (aborted && g_tx_abort_text[0]) {
+    tx_text = g_tx_abort_text;
+  } else if (g_pending_tx_valid && !g_pending_tx.text.empty()) {
+    tx_text = g_pending_tx.text.c_str();
+  }
   ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked,
-                 power_w, swr, force);
+                 power_w, swr, force, aborted);
 }
 
 static void restore_rx_after_tx() {
   if (ui_mode != UIMode::RX) return;
   ui_force_redraw_rx();
   ui_draw_rx();
+}
+
+static void begin_low_batt_tx_abort_hud() {
+  if (g_tx_active) return;
+  if (g_pending_tx_valid && !g_pending_tx.text.empty()) {
+    snprintf(g_tx_abort_text, sizeof(g_tx_abort_text), "%s", g_pending_tx.text.c_str());
+  }
+  g_tx_abort_hud = true;
+  const int slot_ms = (g_protocol && g_protocol->slot_time_ms > 0) ? g_protocol->slot_time_ms : 15000;
+  g_tx_abort_hud_until_ms = rtc_now_ms() + slot_ms;
+  if (ui_mode == UIMode::RX) {
+    draw_tx_hud(true);
+  }
+}
+
+static void tx_abort_hud_tick() {
+  if (!g_tx_abort_hud || g_tx_active) return;
+  if (rtc_now_ms() < g_tx_abort_hud_until_ms) return;
+  g_tx_abort_hud = false;
+  g_tx_abort_text[0] = '\0';
+  restore_rx_after_tx();
+}
+
+static void end_low_batt_tx_abort_hud() {
+  if (!g_tx_abort_hud) return;
+  g_tx_abort_hud = false;
+  g_tx_abort_text[0] = '\0';
+  restore_rx_after_tx();
 }
 
 static void draw_band_view() {
@@ -2337,6 +2379,8 @@ static bool storage_writes_blocked() {
 static void low_batt_apply_halt() {
   ESP_LOGW(TAG, "Low battery halt: blocking new TX");
   debug_log_line("LOW BATT TX HALT");
+  ui_set_tx_halt_sticky(true);
+  begin_low_batt_tx_abort_hud();
   g_beacon = BeaconMode::OFF;
   g_status_beacon_temp = BeaconMode::OFF;
   g_qso_xmit = false;
@@ -2344,13 +2388,32 @@ static void low_batt_apply_halt() {
   if (storage_service_firmware_available()) {
     (void)storage_service_flush_all();
   }
-  if (ui_mode == UIMode::MENU) draw_menu_view();
+  redraw_countdown_now();
+  if (ui_mode == UIMode::STATUS) {
+    draw_status_view();
+  } else if (ui_mode == UIMode::MENU) {
+    draw_menu_view();
+  } else if (ui_mode == UIMode::TX) {
+    redraw_tx_view();
+  }
+  core_fire_qso_changed();
 }
 
 static void low_batt_apply_resume() {
   ESP_LOGI(TAG, "Low battery halt cleared");
   debug_log_line("BATT OK");
-  if (ui_mode == UIMode::MENU) draw_menu_view();
+  ui_set_tx_halt_sticky(false);
+  end_low_batt_tx_abort_hud();
+  redraw_countdown_now();
+  if (ui_mode == UIMode::RX && !tx_hud_visible()) {
+    ui_force_redraw_rx();
+    ui_draw_rx();
+  }
+  if (ui_mode == UIMode::STATUS) {
+    draw_status_view();
+  } else if (ui_mode == UIMode::MENU) {
+    draw_menu_view();
+  }
 }
 
 static void low_batt_policy_tick() {
@@ -2753,8 +2816,13 @@ static int resolve_tx_offset(const AutoseqTxEntry& e) {
 // block that used to be repeated at every scheduling site (autoseq tick,
 // beacon-on, free-text queue, and RX selection).
 void arm_pending_tx(const AutoseqTxEntry& pending) {
-  if (board_power_halted()) {
+    if (board_power_halted()) {
     ESP_LOGW(TAG, "TX arm skipped: low battery halt");
+    ui_set_tx_halt_sticky(true);
+    if (!pending.text.empty()) {
+      snprintf(g_tx_abort_text, sizeof(g_tx_abort_text), "%s", pending.text.c_str());
+    }
+    begin_low_batt_tx_abort_hud();
     return;
   }
   g_qso_xmit           = true;
@@ -5088,6 +5156,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     consume_cdc_initial_sync();  // auto-sync VFO on first QMX connect (every iter)
     check_slot_boundary();  // TX trigger at slot boundary (matching reference architecture)
     tx_tick();              // Process TX state machine (single-threaded, non-blocking)
+    tx_abort_hud_tick();
 
     // Drain deferred config saves requested by core commands.
     if (g_config_save_pending && storage_service_firmware_available() &&
@@ -5150,6 +5219,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
   // branches; no need to repeat here.
   check_slot_boundary();  // TX trigger at slot boundary (matching reference architecture)
   tx_tick();              // Process TX state machine (single-threaded, non-blocking)
+  tx_abort_hud_tick();
   menu_flash_tick();
   rx_flash_tick();
   apply_pending_sync();
@@ -5372,7 +5442,14 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         case UIMode::STATUS: {
         if (status_edit_idx == -1) {
           if (handle_kh1_diag_key(c)) { draw_status_view(); }
-          else if (c == '1') { g_status_beacon_temp = (BeaconMode)(((int)g_status_beacon_temp + 1) % 3); draw_status_view(); }
+          else if (c == '1') {
+            if (board_power_halted()) {
+              g_status_beacon_temp = BeaconMode::OFF;
+            } else {
+              g_status_beacon_temp = (BeaconMode)(((int)g_status_beacon_temp + 1) % 3);
+            }
+            draw_status_view();
+          }
           else if (c == '2') {
             begin_usb_host_mode();
           }
