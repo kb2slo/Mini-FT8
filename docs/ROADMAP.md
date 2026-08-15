@@ -1,21 +1,10 @@
 # Mini-FT8 roadmap (fork)
 
-Living plan for this fork. Chat is intake; **this file is the source of truth** for later implementation (human or LLM). Git history is the changelog — do not keep a narrative log here.
+Living plan for this fork. How to use it, and the rest of `docs/`, is in [README.md](README.md).
 
 Architecture details stay in `AUTOSEQ_ARCHITECTURE.md` and `AUTOSEQ_INACTIVE_QUEUE.md`. Long features get an RFC; this file only points at them.
 
 Work on the fork first. Upstream what is clearly useful.
-
-## How to use this file
-
-Each item has a **type**: `fix` | `extract` | `feature` | `ci` | `docs`.
-
-- **Now** — next implementation, one theme at a time.
-- **Backlog** — agreed, sequenced, not started.
-- **Ideas** — not scheduled. Do not implement from this section unless moved up.
-- **Done** — one line + commit when known.
-
-Do not expand `main.cpp` (~6000 lines) without extracting a tested function. Do not mix a `feature` PR with an unrelated `fix`.
 
 ## Now
 
@@ -42,15 +31,16 @@ Highest-ROI host tests while extracting: Station.txt round-trip, SD import must 
 
 ## Ideas
 
-Not scheduled. Move to Backlog with a Done-when before implementing.
+Not scheduled. Move to Backlog with a Done-when before implementing. Large product shifts get an RFC in `docs/rfcs/` before code.
 
 | ID | Type | Item | Notes |
 |---|---|---|---|
 | I1 | feature | CQ-only R filter | Community ask; sort/filter only, after decode-sort extract (B3). |
 | I2 | feature | Accidental `C` (USB Drive) guard | Easy to enter MSC; confirm or require long-press. |
-| I3 | feature | BLE companion | Optional add-on. Spec: `docs/rfcs/0001-ble-companion.md` (branch `rfc/0001-ble-companion`). |
-| I4 | docs | `NATIVE_CLIENT_ARCHITECTURE.md` | Referenced by `core_api.cpp`; missing. Write when `core_api` is more than a facade over `main.cpp` globals. |
+| I3 | feature | Companion app | Phone/desktop beside the Cardputer: logs, spotting, maybe config. Started as BLE RFC: `docs/rfcs/0001-ble-companion.md` on branch `rfc/0001-ble-companion`. Transport (BLE vs USB vs Wi‑Fi) is still open; do not grow `main.cpp` into an app server. Ties to I4 (`core_api` / native client). |
+| I4 | docs | `NATIVE_CLIENT_ARCHITECTURE.md` | Referenced by `core_api.cpp`; missing. Write when `core_api` is more than a facade over `main.cpp` globals. Needed for I3. |
 | I5 | feature | More radios (FTX-1, FT-817, …) | Field + CAT; not host-CI. After radio_control is less tangled with `main`. |
+| I6 | feature | Multi-mode product (working name `miniFTx` or similar) | Stop treating FT8 as the product. FT4 should be first-class (already compile/runtime, not a second-class `ENABLE_FT4` carve-out). JS8Call next as a real mode (timing, alphabet, autoseq — not a skin). Prefer a name that is not FT-only; exact name is an RFC, not a drive-by rename of repo/binaries. Depends on extract (B3) and a mode-agnostic slot/audio core. |
 
 Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, full-slot audio.
 
@@ -59,7 +49,6 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | ID | Type | Item | Where |
 |---|---|---|---|
 | D1 | fix | Low-batt halt: R overlay + STATUS beacon stays OFF | `main` `4beace4` |
-| D2 | docs | This roadmap (was quality-only) | `docs/ROADMAP.md` |
 
 ## Test map
 
