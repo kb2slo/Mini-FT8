@@ -3173,14 +3173,20 @@ static void dec_normalize_call(const char* src, char* out, int out_sz) {
   out[len] = '\0';
 }
 
-// Sort comparator: to_me first (0), then CQ (1), then others (2)
+// Sort: to_me, then fresh CQ (strongest first), then other fresh, then recent QSOs.
+static int dec_sort_group(const DecodeMsg* d) {
+  if (d->is_to_me) return 0;
+  if (d->is_recent_qso) return 3;
+  if (d->is_cq) return 1;
+  return 2;
+}
+
 static int dec_sort_cmp(const void* a, const void* b) {
   const DecodeMsg* da = (const DecodeMsg*)a;
   const DecodeMsg* db = (const DecodeMsg*)b;
-  int ga = da->is_to_me ? 0 : (da->is_cq ? 1 : 2);
-  int gb = db->is_to_me ? 0 : (db->is_cq ? 1 : 2);
+  int ga = dec_sort_group(da);
+  int gb = dec_sort_group(db);
   if (ga != gb) return ga - gb;
-  // CQ block only: strongest first.
   if (ga == 1 && da->snr != db->snr) {
     return db->snr - da->snr;
   }
@@ -3199,6 +3205,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
 
   s_dec_count = 0;
 
+  const int64_t now_ms = rtc_now_ms();
   const int max_cand = 50;
   static ftx_candidate_t candidates[max_cand];
   int num_candidates = ftx_find_candidates(&mon->wf, max_cand, candidates, 5);
@@ -3367,6 +3374,11 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
     dec_normalize_call(d->field1, f1_norm, DEC_FIELD_MAX);
     d->is_to_me = (mycall_up[0] != '\0' && strcmp(f1_norm, mycall_up) == 0);
 
+    char dxnorm[DEC_FIELD_MAX];
+    dec_normalize_call(d->field2, dxnorm, DEC_FIELD_MAX);
+    d->is_recent_qso = (dxnorm[0] != '\0') &&
+                       adif_dedupe_is_duplicate(std::string(dxnorm), now_ms);
+
     log_rxtx_line('R', snr_q, (int)lrintf(freq_hz), std::string(final_text), -1);
 
     s_dec_count++;
@@ -3399,7 +3411,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
     }
   }
 
-  // ---- Sort in-place: to_me first, CQ second, others last ----
+  // ---- Sort in-place: to_me, fresh CQ, other fresh, recent QSOs ----
   qsort(s_dec, s_dec_count, sizeof(DecodeMsg), dec_sort_cmp);
 
   // ---- Autoseq: build small to_me vector at boundary (only to_me entries) ----
@@ -3411,6 +3423,10 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
       dec_normalize_call(s_dec[i].field2, dxnorm, DEC_FIELD_MAX);
       if (ignorelist_matches_normalized_dxcall(std::string(dxnorm))) {
         ESP_LOGI(TAG, "IgnoreList: skip auto reply to %s", dxnorm);
+        continue;
+      }
+      if (s_dec[i].is_recent_qso) {
+        ESP_LOGI(TAG, "Recent QSO: skip auto reply to %s", dxnorm);
         continue;
       }
       UiRxLine rx;

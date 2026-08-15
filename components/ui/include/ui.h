@@ -26,6 +26,7 @@ struct UiRxLine {
     std::string field3; // parsed token 3 (grid/report/etc)
     bool is_cq = false;
     bool is_to_me = false;
+    bool is_recent_qso = false;
 };
 
 // Plain-C RX entry used for zero-heap decode/display pipeline.
@@ -45,6 +46,7 @@ struct RxDecodeEntry {
     float time_s;
     bool is_cq;
     bool is_to_me;
+    bool is_recent_qso;
 };
 
 void ui_init(bool display_only = false);

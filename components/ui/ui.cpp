@@ -27,6 +27,7 @@ struct RxDrawCacheEntry {
     char text[RX_TEXT_MAX];
     bool is_cq;
     bool is_to_me;
+    bool is_recent_qso;
     bool valid;
 };
 static RxDrawCacheEntry last_drawn_cache[RX_MAX_DECODES];
@@ -435,6 +436,7 @@ static void ui_copy_uirxline_to_entry(const UiRxLine& src, RxDecodeEntry* dst) {
     dst->time_s    = 0.0f;
     dst->is_cq     = src.is_cq;
     dst->is_to_me  = src.is_to_me;
+    dst->is_recent_qso = src.is_recent_qso;
 }
 
 void ui_set_rx_list(const std::vector<UiRxLine>& lines) {
@@ -483,6 +485,8 @@ static void draw_rx_line(int y, const RxDecodeEntry& l, int line_no, bool select
     uint16_t color = TFT_WHITE;
     if (l.is_to_me) {
         color = rgb565(255, 0, 0);
+    } else if (l.is_recent_qso) {
+        color = rgb565(120, 120, 120);
     } else if (l.is_cq) {
         color = rgb565(0, 220, 0);
     }
@@ -514,7 +518,8 @@ void ui_draw_rx(int flash_index) {
             for (int i = 0; i < rx_lines_count; ++i) {
                 if (strcmp(rx_lines[i].text, last_drawn_cache[i].text) != 0 ||
                     rx_lines[i].is_cq != last_drawn_cache[i].is_cq ||
-                    rx_lines[i].is_to_me != last_drawn_cache[i].is_to_me) {
+                    rx_lines[i].is_to_me != last_drawn_cache[i].is_to_me ||
+                    rx_lines[i].is_recent_qso != last_drawn_cache[i].is_recent_qso) {
                     same = false;
                     break;
                 }
@@ -559,6 +564,7 @@ void ui_draw_rx(int flash_index) {
             last_drawn_cache[i].text[RX_TEXT_MAX - 1] = '\0';
             last_drawn_cache[i].is_cq = rx_lines[i].is_cq;
             last_drawn_cache[i].is_to_me = rx_lines[i].is_to_me;
+            last_drawn_cache[i].is_recent_qso = rx_lines[i].is_recent_qso;
             last_drawn_cache[i].valid = true;
         }
     } else {
