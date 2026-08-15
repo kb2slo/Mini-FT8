@@ -44,6 +44,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    env:
+      MINIFT8_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v5
 
@@ -52,20 +54,27 @@ jobs:
         with:
           esp_idf_version: v5.5.1
           target: esp32s3
+          extra_docker_args: -e MINIFT8_GIT_SHA=${{ env.MINIFT8_GIT_SHA }}
           command: idf.py build
 
-      - name: Stage release files
+      - name: Stage hash-first merged image
         run: |
           mkdir -p dist
-          cp build/MiniFT8_Merged_Auto.bin dist/MiniFT8_Merged_Auto.bin
-          sha256sum dist/MiniFT8_Merged_Auto.bin | tee dist/MiniFT8_Merged_Auto.bin.sha256
+          name="$(tr -d '[:space:]' < build/generated/merged_bin_name.txt)"
+          test -n "$name"
+          test -f "build/${name}"
+          cp "build/${name}" "dist/${name}"
+          sha256sum "dist/${name}" | tee "dist/${name}.sha256"
           {
             echo "ref=${GITHUB_REF}"
             echo "sha=${GITHUB_SHA}"
+            echo "head=${MINIFT8_GIT_SHA:0:7}"
             echo "idf=v5.5.1"
             echo "target=esp32s3"
-            echo "flash=esptool.py --chip esp32s3 write_flash 0x0 MiniFT8_Merged_Auto.bin"
+            echo "bin=${name}"
+            echo "flash=esptool.py --chip esp32s3 write_flash 0x0 ${name}"
           } > dist/BUILD.txt
+          echo "BIN_FILE=${name}" >> "$GITHUB_ENV"
 
       - name: Upload merged binary
         id: bin
@@ -75,8 +84,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           path: |
-            dist/MiniFT8_Merged_Auto.bin
-            dist/MiniFT8_Merged_Auto.bin.sha256
+            dist/${{ env.BIN_FILE }}
+            dist/${{ env.BIN_FILE }}.sha256
             dist/BUILD.txt
 
       - name: Job summary
@@ -84,12 +93,12 @@ jobs:
           {
             echo "## Firmware artifact"
             echo
-            echo "- SHA: \`${GITHUB_SHA}\`"
+            echo "- Image: \`${BIN_FILE}\`"
             echo "- [MiniFT8-Cardputer-ADV](${{ steps.bin.outputs.artifact-url }})"
             echo "- [This run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
             echo
             echo '```'
-            echo 'esptool.py --chip esp32s3 write_flash 0x0 MiniFT8_Merged_Auto.bin'
+            echo "esptool.py --chip esp32s3 write_flash 0x0 ${BIN_FILE}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -99,11 +108,13 @@ jobs:
         env:
           ARTIFACT_URL: ${{ steps.bin.outputs.artifact-url }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BIN_FILE: ${{ env.BIN_FILE }}
         with:
           script: |
             const marker = '<!-- minift8-ci-firmware -->';
             const sha = process.env.HEAD_SHA;
             const short = sha.slice(0, 7);
+            const bin = process.env.BIN_FILE;
             const artifactUrl = process.env.ARTIFACT_URL;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             const commitUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/commit/${sha}`;
@@ -114,11 +125,12 @@ jobs:
               'Latest CI image for this PR (this comment is replaced on each push).',
               '',
               `- Commit: [\`${short}\`](${commitUrl})`,
-              `- Download: [MiniFT8-Cardputer-ADV](${artifactUrl}) (zip; flash \`MiniFT8_Merged_Auto.bin\` at \`0x0\`)`,
+              `- File: \`${bin}\` (hash first, for M5Launcher)`,
+              `- Download: [MiniFT8-Cardputer-ADV](${artifactUrl})`,
               `- [Workflow run](${runUrl})`,
               '',
               '```',
-              'esptool.py --chip esp32s3 write_flash 0x0 MiniFT8_Merged_Auto.bin',
+              `esptool.py --chip esp32s3 write_flash 0x0 ${bin}`,
               '```',
               '',
               'First boot may format FATFS. Artifact expires in 30 days.',
@@ -151,7 +163,10 @@ jobs:
       - name: Name tagged binaries
         run: |
           tag="${GITHUB_REF_NAME}"
-          cp dist/MiniFT8_Merged_Auto.bin "dist/MiniFT8-${tag}-Merged.bin"
+          bin="$(awk -F= '/^bin=/{print $2}' dist/BUILD.txt)"
+          test -n "$bin"
+          test -f "dist/${bin}"
+          cp "dist/${bin}" "dist/MiniFT8-${tag}-Merged.bin"
           sha256sum "dist/MiniFT8-${tag}-Merged.bin" | tee "dist/MiniFT8-${tag}-Merged.bin.sha256"
 
       - uses: softprops/action-gh-release@v3

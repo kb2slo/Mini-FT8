@@ -35,6 +35,7 @@ execute_process(
         -DGIT_DIR=${CMAKE_SOURCE_DIR}
         -DOUT_DIR=${MINIFT8_GEN_DIR}
         -DMINIFT8_BUILD_KIND=${MINIFT8_BUILD_KIND}
+        -DMINIFT8_GIT_SHA=$ENV{MINIFT8_GIT_SHA}
         -P ${CMAKE_SOURCE_DIR}/tools/gen_build_identity.cmake
 )
 add_custom_target(minift8_build_identity
@@ -43,6 +44,7 @@ add_custom_target(minift8_build_identity
         -DGIT_DIR=${CMAKE_SOURCE_DIR}
         -DOUT_DIR=${MINIFT8_GEN_DIR}
         -DMINIFT8_BUILD_KIND=${MINIFT8_BUILD_KIND}
+        -DMINIFT8_GIT_SHA=$ENV{MINIFT8_GIT_SHA}
         -P ${CMAKE_SOURCE_DIR}/tools/gen_build_identity.cmake
     COMMENT "Refreshing Mini-FT8 build identity"
     VERBATIM

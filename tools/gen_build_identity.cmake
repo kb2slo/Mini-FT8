@@ -13,15 +13,24 @@ endif()
 set(MINIFT8_PRODUCT_VER "2.1d")
 
 set(SHA "unknown")
-execute_process(
-  COMMAND git -C "${GIT_DIR}" rev-parse --short=7 HEAD
-  RESULT_VARIABLE sha_rv
-  OUTPUT_VARIABLE sha_out
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-  ERROR_QUIET
-)
-if(sha_rv EQUAL 0 AND sha_out)
-  set(SHA "${sha_out}")
+if(MINIFT8_GIT_SHA)
+  set(_sha_in "${MINIFT8_GIT_SHA}")
+elseif(DEFINED ENV{MINIFT8_GIT_SHA} AND NOT "$ENV{MINIFT8_GIT_SHA}" STREQUAL "")
+  set(_sha_in "$ENV{MINIFT8_GIT_SHA}")
+endif()
+if(_sha_in)
+  string(SUBSTRING "${_sha_in}" 0 7 SHA)
+else()
+  execute_process(
+    COMMAND git -C "${GIT_DIR}" rev-parse --short=7 HEAD
+    RESULT_VARIABLE sha_rv
+    OUTPUT_VARIABLE sha_out
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(sha_rv EQUAL 0 AND sha_out)
+    set(SHA "${sha_out}")
+  endif()
 endif()
 
 set(DIRTY 0)
