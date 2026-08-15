@@ -8,11 +8,11 @@ Work on the fork first. Upstream what is clearly useful.
 
 ## Now
 
-CI firmware artifacts are on branch `ci` (not merged). Merge when the first GitHub Actions binary looks right.
+First-phase CI is on `main` (this PR). Next theme is the sequencer.
 
 | ID | Type | Item | Done when |
 |---|---|---|---|
-| N1 | ci | Merge `ci` workflow: host_mock + tx_e2e + IDF 5.5.1 `esp32s3` build; artifact `MiniFT8_Merged_Auto.bin` at `0x0`; `v*` GitHub Release | Workflow on `main`; artifact downloads and flashes |
+| N2 | fix | Lock autoseq; atomic beacon CQ re-arm | Public autoseq API serialized (mutex or core 0 only). Tick pop of CALLING + `start_cq` under that lock when beacon is on. `host_mock/test_beacon_lifecycle.json` expects a re-armed queue, not empty. Was B1/B2. |
 
 ## Backlog
 
@@ -20,8 +20,6 @@ Highest-ROI host tests while extracting: Station.txt round-trip, SD import must 
 
 | ID | Type | Item | Why / constraint |
 |---|---|---|---|
-| B1 | fix | Beacon CQ pop vs re-arm | Tick pops CALLING; re-arm is later `arm_from_autoseq_or_beacon()`. T can look empty while beacon is ON (worse if FATFS blocks the main loop). `host_mock/test_beacon_lifecycle.json` currently **expects** empty queue after tick. Fix under a lock; update the mock. |
-| B2 | fix | Autoseq unlocked | Decode (`ft8_audio_pipeline`, core 1) vs tick/UI (core 0). Mutex around public API, or confine autoseq to core 0. Do this before or with B1. |
 | B3 | extract | Pure functions host+firmware both link | Station parse/serialize, ADIF format + dedupe, TA format (stop reimplementing in `tx_e2e`), decode sort, power hysteresis (mV → halt/write/warn). |
 | B4 | fix | SD `Station.txt` clobbers flash | `storage_sync_station_from_sd()` on boot, no timestamp. Stale SD can wipe `gnss_lora`. Flash is source of truth; SD is export unless newer **and** operator opted in. |
 | B5 | fix | `sscanf(line, "date=%63s", line)` (and `time=`) | Destination overlaps scan buffer. Fix in the extracted Station parser (B3). |
@@ -49,6 +47,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | ID | Type | Item | Where |
 |---|---|---|---|
 | D1 | fix | Low-batt halt: R overlay + STATUS beacon stays OFF | `main` `4beace4` |
+| D2 | ci | First-phase CI: host_mock + tx_e2e + IDF 5.5.1 `esp32s3` merged `MiniFT8_Merged_Auto.bin` artifact; Node 24 actions | this PR (`ci` → `main`) |
 
 ## Test map
 
