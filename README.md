@@ -92,7 +92,7 @@ Host autoseq (`host_mock`) and `tests/tx_e2e` CTest run in a separate job. Hardw
 |  | `3` | Edit FreeText (Long Edit). Used for SOTAMAT, park/summit reference, ARRL Field Day exchange, CQ modifiers (`CQ EU`, `CQ ASIA`), and similar text. |
 |  | `4` | Edit Call (in place). |
 |  | `5` | Edit Grid (in place). Supports 4/6/8-character grid. If GPS is available, the GPS grid is shown and used, but not saved. |
-|  | `6` | Enter Sleep. Shows battery info. |
+|  | `6` | Charge Mode: Launcher stripe + Mini-FT8 version; `SW ON to charge` under the bar. Screen off after ~25 s idle. First key wakes; any key after that exits. |
 | `N` (MENU P2) | `1` | Select offset source: Random / RX / Fixed. Random values are within 500-2500 Hz. |
 |  | `2` | Edit fixed cursor offset (in place). Enter directly or use `▲` `▼` `◀` `▶`. |
 |  | `3` | Select radio (`QMX` / `QDX` / `KH1-USBC` / `KH1-MIC`). |

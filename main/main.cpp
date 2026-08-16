@@ -49,6 +49,7 @@ extern "C" {
 #include <sys/time.h>
 #include "esp_timer.h"
 #include "esp_sleep.h"
+#include "soc/rtc.h"
 #include "audio_source.h"
 #include "stream_uac.h"
 #include "dds_q15.h"
@@ -447,7 +448,10 @@ volatile bool g_tx_cancel_requested = false;   // visible to core_api.cpp
 static void host_process_bytes(const uint8_t* buf, size_t len);
 [[maybe_unused]] static void poll_host_uart();
 static void enter_mode(UIMode new_mode);
+static void tx_tick();
+static void redraw_countdown_now();
 static std::string menu_sleep_batt_line();
+static void enter_charge_mode();
 static int normalize_gps_baud_value(int value);
 static gps_pins_t gps_pins_for_current_source();
 static const char* gps_source_name();
@@ -2360,17 +2364,180 @@ static std::string menu_sleep_batt_line() {
     } else if (ps.halted) {
       snprintf(buf, sizeof(buf), "TX HALT %dmV", ps.voltage_mv);
     } else if (ps.percent < 0) {
-      snprintf(buf, sizeof(buf), "Sleep/Batt --");
+      snprintf(buf, sizeof(buf), "Batt -- / Charge");
     } else if (ps.warn) {
       snprintf(buf, sizeof(buf), "Batt %d%% %dmV", ps.percent, ps.voltage_mv);
     } else {
-      snprintf(buf, sizeof(buf), "Sleep/Batt %d%%", ps.percent);
+      snprintf(buf, sizeof(buf), "Batt %d%% / Charge", ps.percent);
     }
   } else {
-    snprintf(buf, sizeof(buf), "Sleep/Batt --");
+    snprintf(buf, sizeof(buf), "Batt -- / Charge");
   }
 
   return std::string(buf);
+}
+
+// M5Launcher CFG Charge Mode: 80 MHz CPU, ~5% backlight, displayRedStripe,
+// idle dim then screen-off; first key wakes, next key exits.
+// Font metrics and stripe geometry copied from bmorcelli/Launcher display.cpp.
+static constexpr int k_launcher_fp = 1;
+static constexpr int k_launcher_fm = 2;
+static constexpr int k_launcher_lw = 6;
+static constexpr int k_launcher_lh = 8;
+static constexpr uint16_t k_launcher_bgcolor = 0x0000;
+static constexpr uint16_t k_launcher_alcolor = 0xF800;
+static constexpr uint8_t k_charge_mode_bright = 13; // Launcher 5 on a 0–100 scale
+static constexpr int64_t k_charge_dimmer_us = 20 * 1000000LL;
+static constexpr int64_t k_charge_screen_off_extra_us = 5 * 1000000LL;
+
+static uint16_t launcher_complementary_color(uint16_t color) {
+  const int r = 31 - ((color >> 11) & 0x1F);
+  const int g = 63 - ((color >> 5) & 0x3F);
+  const int b = 31 - (color & 0x1F);
+  return static_cast<uint16_t>((r << 11) | (g << 5) | b);
+}
+
+static void charge_mode_paint() {
+  char text[24] = "SW ON to charge";
+  board_power_status_t ps = {};
+  if (board_power_read(&ps) == ESP_OK) {
+    board_power_format_charge_stripe(&ps, text, sizeof(text));
+  }
+
+  const int tft_w = M5.Display.width();
+  const int tft_h = M5.Display.height();
+  const int text_len = static_cast<int>(strlen(text));
+  const int size =
+      (text_len * k_launcher_lw * k_launcher_fm < (tft_w - 2 * k_launcher_fm * k_launcher_lw))
+          ? k_launcher_fm
+          : k_launcher_fp;
+  const int padding_y = 5;
+  const int rect_x = 10;
+  const int rect_w = tft_w - 20;
+  const int line_height = size * k_launcher_lh;
+  int rect_h = line_height + 2 * padding_y;
+  const int max_rect_h = tft_h > 20 ? tft_h - 20 : tft_h;
+  if (rect_h > max_rect_h) {
+    rect_h = max_rect_h;
+  }
+  int rect_y = tft_h / 2 - rect_h / 2;
+  if (rect_y < 0) {
+    rect_y = 0;
+  }
+  const uint16_t fg = launcher_complementary_color(k_launcher_bgcolor);
+  const int visible_lines = (rect_h - 2 * padding_y) / line_height;
+  const int text_y = rect_y + (rect_h - visible_lines * line_height) / 2;
+  const int title_h = k_launcher_fp * k_launcher_lh;
+  int title_y = rect_y - title_h - 4;
+  if (title_y < 2) {
+    title_y = 2;
+  }
+
+  char title[40];
+  snprintf(title, sizeof(title), "Mini-FT8 V%s. %s", MINIFT8_PRODUCT_VER, MINIFT8_UI_LINE);
+
+  M5.Display.fillScreen(k_launcher_bgcolor);
+  M5.Display.setTextColor(fg, k_launcher_bgcolor);
+  M5.Display.setTextSize(k_launcher_fp);
+  M5.Display.drawCentreString(title, tft_w / 2, title_y);
+  M5.Display.fillRoundRect(rect_x, rect_y, rect_w, rect_h, 7, k_launcher_alcolor);
+  M5.Display.setTextColor(fg, k_launcher_alcolor);
+  M5.Display.setTextSize(size);
+  M5.Display.drawCentreString(text, tft_w / 2, text_y);
+  const int hint_y = rect_y + rect_h + 4;
+  if (hint_y + k_launcher_fp * k_launcher_lh < tft_h) {
+    M5.Display.setTextColor(fg, k_launcher_bgcolor);
+    M5.Display.setTextSize(k_launcher_fp);
+    M5.Display.drawCentreString("SW ON to charge", tft_w / 2, hint_y);
+  }
+}
+
+static bool charge_mode_key_down() {
+  M5Cardputer.update();
+  M5Cardputer.Keyboard.updateKeysState();
+  const auto& state = M5Cardputer.Keyboard.keysState();
+  if (!state.word.empty() || state.del || state.enter) {
+    return true;
+  }
+  return M5Cardputer.BtnA.wasPressed() || M5Cardputer.BtnA.isPressed();
+}
+
+static bool charge_mode_set_cpu_mhz(uint32_t mhz) {
+  rtc_cpu_freq_config_t conf;
+  if (!rtc_clk_cpu_freq_mhz_to_config(mhz, &conf)) {
+    ESP_LOGE(TAG, "charge mode: unsupported CPU freq %u MHz", (unsigned)mhz);
+    return false;
+  }
+  rtc_clk_cpu_freq_set_config_fast(&conf);
+  return true;
+}
+
+static void enter_charge_mode() {
+  ESP_LOGI(TAG, "Entering charge mode (Launcher-style)");
+  core_cmd_cancel_tx();
+  if (g_tx_active) {
+    tx_tick();
+  }
+  const bool was_streaming = audio_source_is_streaming();
+  g_decode_enabled = false;
+  audio_source_stop();
+
+  const uint8_t saved_bright = M5.Display.getBrightness();
+  charge_mode_set_cpu_mhz(80);
+  M5.Display.setBrightness(k_charge_mode_bright);
+  vTaskDelay(pdMS_TO_TICKS(500));
+  M5.Display.fillScreen(k_launcher_bgcolor);
+  int64_t last_paint_us = 0;
+  int64_t idle_origin_us = esp_timer_get_time();
+  bool dimmed = false;
+  bool screen_off = false;
+  bool key_was_down = charge_mode_key_down();
+  for (;;) {
+    const int64_t now_us = esp_timer_get_time();
+    const bool key_down = charge_mode_key_down();
+    const bool key_edge = key_down && !key_was_down;
+    key_was_down = key_down;
+
+    if (key_edge) {
+      if (screen_off) {
+        screen_off = false;
+        dimmed = false;
+        M5.Display.setBrightness(k_charge_mode_bright);
+        idle_origin_us = now_us;
+        last_paint_us = 0;
+      } else {
+        break;
+      }
+    }
+
+    if (!screen_off && (now_us - idle_origin_us) >= (k_charge_dimmer_us + k_charge_screen_off_extra_us)) {
+      screen_off = true;
+      dimmed = true;
+      M5.Display.setBrightness(0);
+    } else if (!dimmed && !screen_off && (now_us - idle_origin_us) >= k_charge_dimmer_us) {
+      dimmed = true;
+      M5.Display.setBrightness(k_charge_mode_bright);
+    }
+
+    if (!screen_off && (now_us - last_paint_us > 5000000LL)) {
+      charge_mode_paint();
+      last_paint_us = now_us;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+  charge_mode_set_cpu_mhz(CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
+  M5.Display.setBrightness(saved_bright);
+  M5Cardputer.Keyboard.updateKeysState();
+  M5Cardputer.Keyboard.keysState().word.clear();
+  M5.Display.fillScreen(TFT_BLACK);
+  ui_draw_waterfall();
+  redraw_countdown_now();
+  if (was_streaming) {
+    const bool kh1_usbc = (canonical_radio_type(g_radio) == RadioType::KH1_USBC);
+    start_rx_audio_for_current_radio("charge mode exit", !kh1_usbc);
+    g_decode_enabled = true;
+  }
+  draw_menu_view();
 }
 
 static bool storage_writes_blocked() {
@@ -5829,21 +5996,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 menu_edit_buf = g_grid;
                 draw_menu_view();
               } else if (c == '6') {
-                ESP_LOGI(TAG, "Entering deep sleep (GPIO0 wake)");
-                // Save current accurate time for compensation after wake-up
-                if (rtc_valid) {
-                  g_rtc_sleep_epoch = rtc_epoch_base +
-                      (esp_timer_get_time() / 1000 - rtc_ms_start) / 1000;
-                  rtc_sync_to_esp_rtc();
-                  save_station_data();
-                  ESP_LOGI(TAG, "Saved sleep epoch: %ld, comp=%d",
-                           (long)g_rtc_sleep_epoch, g_rtc_comp);
-                }
-                M5.Display.sleep();
-                vTaskDelay(pdMS_TO_TICKS(100));
-                // Configure GPIO0 as wake-up source (active low)
-                esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
-                esp_deep_sleep_start();
+                enter_charge_mode();
               }
             } else if (menu_page == 1) {
                 if (c == '1') {
