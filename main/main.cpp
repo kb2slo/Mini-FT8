@@ -1250,6 +1250,7 @@ static void adif_dedupe_remember(const std::string& call_norm, int64_t now_ms) {
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd) {
   if (storage_writes_blocked()) {
     ESP_LOGW(TAG, "ADIF write skipped: low battery halt");
+    debug_log_line("ADIF skip: batt write halt");
     return false;
   }
   const int64_t now_ms = rtc_now_ms();
@@ -1308,7 +1309,9 @@ static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid,
            comment_expanded.size(), comment_expanded.c_str());
   bool ok = storage_append_text_locked_path(path, line, "ADIF EXPORT\n<eoh>\n", true);
   if (!ok) {
-    ESP_LOGW(TAG, "ADIF write failed: %s", path);
+    ESP_LOGW(TAG, "ADIF write failed: %s owner=%s",
+             path, storage_owner_label(storage_service_owner()));
+    debug_log_line(std::string("ADIF fail ") + path);
     return false;
   }
   adif_dedupe_remember(call_norm, now_ms);
@@ -4853,6 +4856,7 @@ static void load_station_data() {
 void save_station_data() {
   if (storage_writes_blocked()) {
     ESP_LOGW(TAG, "Station save skipped: low battery halt");
+    debug_log_line("Station skip: batt write halt");
     return;
   }
   if (!storage_service_firmware_available()) {
@@ -4861,6 +4865,7 @@ void save_station_data() {
       warned_once = true;
       ESP_LOGW(TAG, "Firmware does not own storage; station data save skipped");
     }
+    debug_log_line("Station skip: storage busy");
     return;
   }
   std::ostringstream out;
@@ -4909,6 +4914,7 @@ void save_station_data() {
 #endif
   if (!storage_file_write_atomic(STATION_FILE, out.str())) {
     ESP_LOGE(TAG, "Failed to write %s", STATION_FILE);
+    debug_log_line("Station write failed");
     return;
   }
   // Every config mutation in the Cardputer UI funnels through here, so this
@@ -5033,6 +5039,8 @@ static void enter_msc_mode(const char* reason) {
   ui_set_paused(true);
   audio_source_stop();
   vTaskDelay(pdMS_TO_TICKS(200));
+
+  (void)storage_service_flush_all();
 
   if (uac_ensure_host_uninstalled() != ESP_OK) {
     ESP_LOGE(TAG, "USB Drive blocked: USB host still owns the PHY");
