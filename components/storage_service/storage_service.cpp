@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
+#include <fcntl.h>
 #include <new>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -184,8 +185,39 @@ bool build_path(const std::string& input, std::string& path) {
     return true;
 }
 
+bool sync_fd(int fd) {
+    if (fd < 0) {
+        return false;
+    }
+    if (fsync(fd) == 0) {
+        return true;
+    }
+    // Some VFS FAT fds report ENOTSUP; caller must still have flushed writes.
+    return errno == ENOTSUP || errno == EINVAL;
+}
+
 bool sync_file(FILE* file) {
-    return file && fflush(file) == 0 && fsync(fileno(file)) == 0;
+    if (!file) {
+        return false;
+    }
+    if (fflush(file) != 0) {
+        return false;
+    }
+    return sync_fd(fileno(file));
+}
+
+// FAT is 8.3 with LFN disabled. "foo.adi.tmp" is invalid; "foo.tmp" is fine.
+std::string make_temp_name(const std::string& name) {
+    if (name == kStationFile) {
+        return kStationTemp;
+    }
+    const size_t dot = name.find_last_of('.');
+    if (dot != std::string::npos && dot > 0 && dot <= 8 &&
+        name.size() - dot - 1 <= 3 && name.find('.', dot + 1) == std::string::npos) {
+        return name.substr(0, dot) + ".tmp";
+    }
+    std::string base = name.substr(0, std::min<size_t>(name.size(), 8));
+    return base + ".tmp";
 }
 
 bool flush_all_locked() {
@@ -207,7 +239,7 @@ bool write_atomic_locked(const std::string& input, const std::string& content) {
     if (!normalize_name(input, name) || !build_path(name, final_path)) {
         return false;
     }
-    const std::string temp_name = (name == kStationFile) ? kStationTemp : name + ".tmp";
+    const std::string temp_name = make_temp_name(name);
     std::string temp_path;
     if (!build_path(temp_name, temp_path)) {
         return false;
@@ -812,6 +844,8 @@ esp_err_t storage_service_set_usb_drive_enabled(bool enabled) {
             return ESP_ERR_INVALID_STATE;
         }
 
+        (void)flush_all_locked();
+
         s_owner = StorageOwner::TRANSITION;
         esp_err_t err = set_storage_mount_point_locked(TINYUSB_MSC_STORAGE_MOUNT_USB);
         if (err != ESP_OK) {
@@ -931,29 +965,79 @@ bool storage_file_append(const std::string& name,
     StorageGuard guard;
     std::string path;
     if (!guard.held() || !firmware_owns_storage_locked() || !build_path(name, path)) {
+        ESP_LOGW(TAG, "append skipped %s held=%d owner=%d",
+                 name.c_str(), (int)guard.held(), (int)s_owner);
         return false;
     }
+    (void)sync_to_flash;  // always sync; MSC remount otherwise shows 0-byte ghosts
 
-    bool need_header = false;
-    if (!header_if_new.empty()) {
-        struct stat info {};
-        need_header = stat(path.c_str(), &info) != 0 || info.st_size == 0;
+    struct stat before {};
+    const bool existed = stat(path.c_str(), &before) == 0 && S_ISREG(before.st_mode);
+    const off_t size_before = existed ? before.st_size : 0;
+    const bool need_header =
+        !header_if_new.empty() && (!existed || size_before == 0);
+    const off_t expected_grow =
+        static_cast<off_t>((need_header ? header_if_new.size() : 0) + content.size());
+
+    // Empty/missing files: same path as Station.txt (temp + fsync + rename).
+    // fopen("ab") was creating a 0-byte dirent that never grew on this volume.
+    if (size_before == 0) {
+        std::string payload;
+        payload.reserve(static_cast<size_t>(expected_grow));
+        if (need_header) {
+            payload.append(header_if_new);
+        }
+        payload.append(content);
+        if (!write_atomic_locked(name, payload)) {
+            ESP_LOGE(TAG, "append atomic create failed %s", path.c_str());
+            return false;
+        }
+        struct stat after {};
+        const bool sized = stat(path.c_str(), &after) == 0 && S_ISREG(after.st_mode);
+        const off_t size_after = sized ? after.st_size : -1;
+        if (expected_grow > 0 && (!sized || size_after < expected_grow)) {
+            ESP_LOGE(TAG, "append atomic size mismatch %s after=%ld expected=%ld",
+                     path.c_str(), (long)size_after, (long)expected_grow);
+            return false;
+        }
+        ESP_LOGI(TAG, "append atomic ok %s -> %ld", path.c_str(), (long)size_after);
+        return true;
     }
 
-    FILE* file = fopen(path.c_str(), "ab");
-    if (!file) {
+    // Growing an existing file: POSIX append + fsync (avoid stdio "ab").
+    const int fd = open(path.c_str(), O_WRONLY | O_APPEND, 0);
+    if (fd < 0) {
+        ESP_LOGE(TAG, "append open failed %s errno=%d", path.c_str(), errno);
         return false;
     }
-    bool ok = !need_header ||
-              fwrite(header_if_new.data(), 1, header_if_new.size(), file) ==
-                  header_if_new.size();
-    ok = ok && (content.empty() ||
-                fwrite(content.data(), 1, content.size(), file) == content.size());
-    if (ok && sync_to_flash) {
-        ok = sync_file(file);
+    bool ok = true;
+    if (need_header && !header_if_new.empty()) {
+        ok = write(fd, header_if_new.data(), header_if_new.size()) ==
+             static_cast<ssize_t>(header_if_new.size());
     }
-    if (fclose(file) != 0) {
+    if (ok && !content.empty()) {
+        ok = write(fd, content.data(), content.size()) ==
+             static_cast<ssize_t>(content.size());
+    }
+    ok = ok && sync_fd(fd);
+    if (close(fd) != 0) {
         ok = false;
+    }
+
+    struct stat after {};
+    const bool sized = stat(path.c_str(), &after) == 0 && S_ISREG(after.st_mode);
+    const off_t size_after = sized ? after.st_size : -1;
+    if (ok && expected_grow > 0 && (!sized || size_after < size_before + expected_grow)) {
+        ESP_LOGE(TAG, "append size mismatch %s before=%ld after=%ld expected+=%ld",
+                 path.c_str(), (long)size_before, (long)size_after, (long)expected_grow);
+        ok = false;
+    }
+    if (!ok) {
+        ESP_LOGE(TAG, "append failed %s errno=%d before=%ld after=%ld",
+                 path.c_str(), errno, (long)size_before, (long)size_after);
+    } else {
+        ESP_LOGI(TAG, "append ok %s %ld -> %ld", path.c_str(), (long)size_before,
+                 (long)size_after);
     }
     return ok;
 }
@@ -1107,6 +1191,16 @@ bool storage_sync_station_from_sd() {
         return true;
     }
     s_station_sync_attempted = true;
+
+    std::string internal_path;
+    struct stat internal_info {};
+    if (build_path(kStationFile, internal_path) &&
+        stat(internal_path.c_str(), &internal_info) == 0 &&
+        S_ISREG(internal_info.st_mode) && internal_info.st_size > 0) {
+        ESP_LOGI(TAG, "Keeping internal Station.txt (%ld B); skip SD import",
+                 (long)internal_info.st_size);
+        return false;
+    }
 
     if (mount_sd_locked() != ESP_OK) {
         ESP_LOGI(TAG, "SD not mounted; using internal Station.txt");

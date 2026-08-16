@@ -28,4 +28,16 @@ Each row has a type: `fix` | `extract` | `feature` | `ci` | `docs`.
 
 Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`. Work on the fork first; upstream what is clearly useful.
 
+### Local IDF build / flash
+
+After `source` of the idf5.5 venv and `esp-idf/export.sh`, prefer one command:
+
+```bash
+idf.py -p /dev/cu.usbmodemXXXX build flash
+```
+
+Do not split into separate `build` then `flash` unless the user asks.
+
+**`monitor`:** The Cardputer USB-C is either ESP USB Serial/JTAG (Mac ↔ firmware logs) **or** USB host for the radio (QMX / KH1-USBC) — not both. So `idf.py … flash monitor` works with the **radio unplugged** from USB-C. Live logs while the radio is connected need the console UART on **G4 (TX) / G5 (RX)** (USB–TTL adapter), not PORTA/Grove (`G1`/`G2`, GPS/CAT). That G4/G5 path is off when `GNSS_LoRa:ON`.
+
 The repo-root `AGENTS.md` exists only so Claude Code, Codex, and Cursor load this agreement. Do not duplicate the plan there.
