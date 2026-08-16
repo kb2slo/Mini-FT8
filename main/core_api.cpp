@@ -23,6 +23,8 @@
 
 #include "radio_control.h"   // for radio_control_{ready,end_tx}()
 
+void debug_log_line_public(const std::string& msg);
+
 // ---------------------------------------------------------------------------
 // Access to main.cpp's globals (un-staticized for this purpose).
 // ---------------------------------------------------------------------------
@@ -408,7 +410,16 @@ bool core_cmd_tap_rx(int rx_list_idx) {
   msg.slot_id   = entry.slot_id;
   msg.is_cq     = entry.is_cq;
   msg.is_to_me  = entry.is_to_me;
-  autoseq_on_touch(msg);
+  const AutoseqTouchResult touch = autoseq_on_touch(msg);
+  if (touch == AutoseqTouchResult::IgnoredInProgress) {
+    debug_log_line_public("QSO in progress");
+    core_fire_qso_changed();
+    return false;
+  }
+  if (touch == AutoseqTouchResult::NoRoom) {
+    debug_log_line_public("TX queue full");
+    return false;
+  }
 
   // Arm the TX state machine for the next matching slot boundary so the
   // user's pick is honoured immediately instead of waiting for the next

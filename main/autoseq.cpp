@@ -83,6 +83,12 @@ static QsoContext* append_ctx();
 static void move_to_inactive(int idx);
 static void evict_oldest_inactive();
 static int find_inactive_by_dxcall(const std::string& dxcall);
+static void remove_active_at(int idx);
+static void force_active_to_front(int idx);
+static bool same_dxcall(const std::string& a, const std::string& b);
+static bool is_live_qso_state(AutoseqState state);
+static bool is_dx_queue_marker(const std::string& dxcall);
+static bool purge_dxcall_for_touch(const std::string& dxcall, bool* blocked_live);
 static void reactivate(int inactive_idx);
 static void sort_and_clean();
 static bool looks_like_grid(const std::string& s);
@@ -244,21 +250,108 @@ bool autoseq_schedule_freetext(const std::string& text, int fallback_slot_parity
     return false;
 }
 
-void autoseq_on_touch(const UiRxLine& msg) {
+static void remove_active_at(int idx) {
+    if (idx < 0 || idx >= s_active_count) return;
+    for (int i = idx; i + 1 < s_active_count; ++i) {
+        s_queue[i] = s_queue[i + 1];
+    }
+    --s_active_count;
+}
+
+static void force_active_to_front(int idx) {
+    if (idx <= 0 || idx >= s_active_count) return;
+    QsoContext moved = s_queue[idx];
+    for (int i = idx; i > 0; --i) {
+        s_queue[i] = s_queue[i - 1];
+    }
+    s_queue[0] = moved;
+}
+
+static bool same_dxcall(const std::string& a, const std::string& b) {
+    if (a.empty() || b.empty()) return false;
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (toupper((unsigned char)a[i]) != toupper((unsigned char)b[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool is_live_qso_state(AutoseqState state) {
+    return state == AutoseqState::REPLYING ||
+           state == AutoseqState::REPORT ||
+           state == AutoseqState::ROGER_REPORT ||
+           state == AutoseqState::ROGERS ||
+           state == AutoseqState::SIGNOFF;
+}
+
+static bool is_dx_queue_marker(const std::string& dxcall) {
+    return dxcall.empty() || dxcall == "CQ" || dxcall == "(FT)";
+}
+
+// Drop every active + inactive entry for dxcall. Returns true if queue[0] was
+// a live QSO for that call (caller should ignore the tap).
+static bool purge_dxcall_for_touch(const std::string& dxcall, bool* blocked_live) {
+    *blocked_live = false;
+    if (is_dx_queue_marker(dxcall)) return false;
+
+    if (s_active_count > 0 &&
+        same_dxcall(s_queue[0].dxcall, dxcall) &&
+        is_live_qso_state(s_queue[0].state) &&
+        !s_queue[0].is_freetext) {
+        *blocked_live = true;
+        return true;
+    }
+
+    for (int i = s_active_count - 1; i >= 0; --i) {
+        if (s_queue[i].is_freetext) continue;
+        if (same_dxcall(s_queue[i].dxcall, dxcall)) {
+            remove_active_at(i);
+        }
+    }
+
+    int inact = find_inactive_by_dxcall(dxcall);
+    while (inact >= 0) {
+        // Same removal pattern as evict_oldest_inactive for one index.
+        for (int i = inact; i > s_inactive_start; --i) {
+            s_queue[i] = s_queue[i - 1];
+        }
+        ++s_inactive_start;
+        inact = find_inactive_by_dxcall(dxcall);
+    }
+    return false;
+}
+
+AutoseqTouchResult autoseq_on_touch(const UiRxLine& msg) {
+    // Resolve DX callsign before mutating the queue (normalize <> hashes).
+    std::string dxcall;
+    if (!msg.field2.empty()) {
+        dxcall = normalize_call_token(msg.field2);
+    } else if (!msg.field1.empty() && msg.field1 != "CQ") {
+        dxcall = normalize_call_token(msg.field1);
+    }
+
+    bool blocked_live = false;
+    if (purge_dxcall_for_touch(dxcall, &blocked_live)) {
+        if (blocked_live) {
+            ESP_LOGI(TAG, "Touch ignored: live QSO with %s at queue head",
+                     dxcall.c_str());
+            return AutoseqTouchResult::IgnoredInProgress;
+        }
+    }
+
     // If no free space, evict an inactive entry to make room
     if (s_inactive_start <= s_active_count) {
         evict_oldest_inactive();
-        if (s_inactive_start <= s_active_count) return;  // Still no room
+        if (s_inactive_start <= s_active_count) {
+            return AutoseqTouchResult::NoRoom;
+        }
     }
 
     QsoContext* ctx = append_ctx();
-
-    // Determine the DX callsign from the message (normalize to handle <> wrapped hashed calls)
-    std::string dxcall;
-    if (!msg.field2.empty()) {
-        dxcall = normalize_call_token(msg.field2);  // field2 is the sender
-    } else if (!msg.field1.empty() && msg.field1 != "CQ") {
-        dxcall = normalize_call_token(msg.field1);
+    if (!ctx) {
+        return AutoseqTouchResult::NoRoom;
     }
 
     // Check if it's addressed to me (normalize to handle <> wrapped hashed calls)
@@ -268,8 +361,16 @@ void autoseq_on_touch(const UiRxLine& msg) {
     if (!my_norm.empty() && f1_norm == my_norm) {
         generate_response(ctx, msg, true);
         sort_and_clean();
+        // Keep the operator's pick as next TX even if another QSO is "ahead"
+        // by state. Find the new ctx (may have moved during sort).
+        for (int i = 0; i < s_active_count; ++i) {
+            if (same_dxcall(s_queue[i].dxcall, dxcall) && !s_queue[i].is_freetext) {
+                force_active_to_front(i);
+                break;
+            }
+        }
         refresh_tx_msg_buffer();
-        return;
+        return AutoseqTouchResult::Queued;
     }
 
     // Treat as calling CQ - we're initiating contact
@@ -277,39 +378,28 @@ void autoseq_on_touch(const UiRxLine& msg) {
     if (looks_like_grid(msg.field3)) {
         ctx->dxgrid = msg.field3;
     }
-    //dlogf("r:=%d %s %s %s",
-    //  msg.snr, msg.field1.c_str(), msg.field2.c_str(), msg.field3.c_str());
-    //dlogf("s:=%d", ctx->snr_tx);
 
-    ctx->snr_tx = msg.snr;  // Our measurement of their signal
+    ctx->snr_tx = msg.snr;
     ctx->offset_hz = msg.offset_hz;
-    ctx->slot_id = msg.slot_id ^ 1;  // TX on opposite slot
+    ctx->slot_id = msg.slot_id ^ 1;
 
-    // Mark this QSO as Field Day only if the *received* message is CQ FD
-    // (This avoids sending FD exchange when answering a normal CQ while our CQType is FD.)
     {
         std::string f1 = msg.field1;
         for (auto& ch : f1) ch = toupper((unsigned char)ch);
-        // Handle both "FD" (decoder strips CQ prefix) and "CQ FD" (raw format)
         ctx->is_fd = (f1 == "FD" || f1 == "CQ FD" || f1.rfind("CQ FD", 0) == 0);
     }
-
-    //dlogf("TH: %s %s %s snr=%d",
-    //  msg.field1.c_str(), msg.field2.c_str(), msg.field3.c_str(), msg.snr);
-
-    //dlogf("TH: bf snr_tx=%d skip=%d",
-    //  ctx->snr_tx, (int)s_skip_tx1);
 
     set_state(ctx, s_skip_tx1 ? AutoseqState::REPORT : AutoseqState::REPLYING,
               s_skip_tx1 ? TxMsgType::TX2 : TxMsgType::TX1, s_max_retry);
     sort_and_clean();
+    for (int i = 0; i < s_active_count; ++i) {
+        if (same_dxcall(s_queue[i].dxcall, dxcall) && !s_queue[i].is_freetext) {
+            force_active_to_front(i);
+            break;
+        }
+    }
     refresh_tx_msg_buffer();
-
-    //dlogf("TH: af snr_tx=%d state=%d",
-    //  ctx->snr_tx, (int)ctx->state);
-
-    //ESP_LOGI(TAG, "Touch: %s grid=%s snr=%d", ctx->dxcall.c_str(),
-    //         ctx->dxgrid.c_str(), ctx->snr_tx);
+    return AutoseqTouchResult::Queued;
 }
 
 void autoseq_on_decodes(const std::vector<UiRxLine>& to_me_messages) {
