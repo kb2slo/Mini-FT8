@@ -27,13 +27,13 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
 
 ## CI firmware builds
 
-Pushes and pull requests run GitHub Actions (ESP-IDF **v5.5.1**, target **esp32s3**). The job uploads a flashable merged image as artifact **MiniFT8-Cardputer-ADV**:
+Pushes and pull requests run GitHub Actions (ESP-IDF **v5.5.1**, target **esp32s3**). The job uploads a flashable merged image as artifact **MiniFT8-Cardputer-ADV** (hash-first `.bin` inside the zip).
 
-- `MiniFT8_Merged_Auto.bin` — same POST_BUILD output as a local `idf.py build`. Flash at `0x0`.
-- Tags matching `v*` also attach that image to a GitHub Release.
+- Each merge to `main` updates a prerelease at tag [`dev`](https://github.com/kb2slo/Mini-FT8/releases/tag/dev) with `minift8-dev.bin`. Flash at `0x0`.
+- Tags matching `v*` also create a versioned GitHub Release (`MiniFT8-<tag>-Merged.bin`).
 
 ```
-esptool.py --chip esp32s3 write_flash 0x0 MiniFT8_Merged_Auto.bin
+esptool.py --chip esp32s3 write_flash 0x0 minift8-dev.bin
 ```
 
 Host autoseq (`host_mock`) and `tests/tx_e2e` CTest run in a separate job. Hardware CAT/flash is still local.
