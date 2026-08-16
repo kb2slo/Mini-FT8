@@ -26,6 +26,7 @@ Highest-ROI host tests while extracting: Station.txt round-trip, SD import must 
 | B6 | fix | Held key stalls slot | `c == last_key` skips `check_slot_boundary` / `tx_tick`. |
 | B7 | extract | Main loop never blocks on FATFS | QSO browse/copy and Station save on a worker or time-sliced reads. Slot/TX keep running. |
 | B8 | fix | `DECODE_HEAP` every decode | `ESP_LOGW` enter/exit; UART time on a tight loop. Demote or gate. |
+| B9 | extract | `ft8_lib` as an updatable dependency | Vendored under `components/ft8_lib/` with no upstream SHA; ESP static-FFT and FD/nonstd/Dxpedition patches live in Karlis’s files. Submodule (or our fork) plus Mini-FT8 wrappers for buffers/`fft_wrapper`; keep protocol patches rebaseable. Done when a documented 3-way merge from `kgoba/ft8_lib` plus `tx_e2e` golden RX/encode is the bump path. |
 
 ## Ideas
 
