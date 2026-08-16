@@ -1,5 +1,6 @@
 #include "board_power.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -199,11 +200,24 @@ esp_err_t board_power_read(board_power_status_t* out_status)
     out_status->valid = true;
     out_status->voltage_mv = sense_ok ? g_ema_mv : bat_mv;
     out_status->percent = sense_ok ? voltage_to_percent(g_ema_mv) : -1;
+    out_status->pack_present = sense_ok;
     out_status->halted = g_tx_halted;
     out_status->writes_blocked = g_writes_blocked;
     out_status->warn = g_tx_halted || g_writes_blocked || (sense_ok && g_ema_mv <= kWarnMv);
 
     return ESP_OK;
+}
+
+void board_power_format_charge_stripe(const board_power_status_t* status, char* buf, size_t buf_len)
+{
+    if (!buf || buf_len == 0) {
+        return;
+    }
+    if (!status || !status->valid || !status->pack_present || status->percent < 0) {
+        snprintf(buf, buf_len, "SW ON to charge");
+        return;
+    }
+    snprintf(buf, buf_len, "%d %%", status->percent);
 }
 
 bool board_power_halted(void)
