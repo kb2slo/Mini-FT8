@@ -2444,6 +2444,12 @@ static void charge_mode_paint() {
   M5.Display.setTextColor(fg, k_launcher_alcolor);
   M5.Display.setTextSize(size);
   M5.Display.drawCentreString(text, tft_w / 2, text_y);
+  const int hint_y = rect_y + rect_h + 4;
+  if (hint_y + k_launcher_fp * k_launcher_lh < tft_h) {
+    M5.Display.setTextColor(fg, k_launcher_bgcolor);
+    M5.Display.setTextSize(k_launcher_fp);
+    M5.Display.drawCentreString("SW ON to charge", tft_w / 2, hint_y);
+  }
 }
 
 static bool charge_mode_key_down() {

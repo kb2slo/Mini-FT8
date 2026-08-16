@@ -15,7 +15,9 @@ typedef struct {
     int percent;
     bool charging_known;
     bool charging;
-    // GPIO10 sense: false when the pack is disconnected (side switch OFF on USB).
+    // GPIO10 is on BAT+ through 100k/100k. The side switch isolates the pack
+    // from the charge path, not from this divider, so this is often still true
+    // with the switch OFF.
     bool pack_present;
     // Stop new TX/beacon. Independent of flash-write gating.
     bool halted;
@@ -26,7 +28,9 @@ typedef struct {
 esp_err_t board_power_init(void);
 esp_err_t board_power_read(board_power_status_t* out_status);
 
-// Charge Mode stripe: "NN %" or "SW ON to charge" when the ADV switch is OFF.
+// Charge Mode stripe: "NN %" when GPIO10 looks like a pack, else "SW ON to charge".
+// The ADV side switch does not remove BAT+ from the divider, so this is not a
+// reliable switch-position detector.
 void board_power_format_charge_stripe(const board_power_status_t* status, char* buf, size_t buf_len);
 
 // Last computed TX-halt state (false until the first successful read).
