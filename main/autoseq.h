@@ -132,8 +132,16 @@ void autoseq_start_cq(int slot_parity);
 // Returns false if no room or text is empty.
 bool autoseq_schedule_freetext(const std::string& text, int fallback_slot_parity);
 
-// Manual response: user taps on a decoded message
-void autoseq_on_touch(const UiRxLine& msg);
+// Manual response: user taps on a decoded message.
+// Prevents duplicate active QSOs for the same DX callsign: promotes a fresh
+// entry to the front, or ignores the tap when that call is already the live
+// queue head (REPLYING..SIGNOFF).
+enum class AutoseqTouchResult : uint8_t {
+    Queued = 0,
+    IgnoredInProgress,
+    NoRoom,
+};
+AutoseqTouchResult autoseq_on_touch(const UiRxLine& msg);
 
 // Automatic response: process all decoded messages addressed to us
 void autoseq_on_decodes(const std::vector<UiRxLine>& to_me_messages);

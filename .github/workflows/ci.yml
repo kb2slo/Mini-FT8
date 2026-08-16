@@ -29,6 +29,8 @@ jobs:
             echo "===== $f ====="
             ./host_test "$f" || failed=1
           done
+          echo "===== host_test_unique_callsign ====="
+          ./host_test_unique_callsign || failed=1
           exit "$failed"
 
       - name: TX e2e (CTest)

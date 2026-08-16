@@ -13,6 +13,7 @@ First-phase CI is on `main` (this PR). Next theme is the sequencer.
 | ID | Type | Item | Done when |
 |---|---|---|---|
 | N2 | fix | Lock autoseq; atomic beacon CQ re-arm | Public autoseq API serialized (mutex or core 0 only). Tick pop of CALLING + `start_cq` under that lock when beacon is on. `host_mock/test_beacon_lifecycle.json` expects a re-armed queue, not empty. Was B1/B2. |
+| N3 | fix | Unique remote callsign in TX queue on R-tap | `autoseq_on_touch`: no duplicate callsign; re-tap promotes to front; live `queue[0]` QSO ignores with HUD `QSO in progress`. Host: `host_test_unique_callsign`. |
 
 ## Backlog
 
@@ -59,7 +60,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 
 | Harness | Covers | Command |
 |---|---|---|
-| `host_mock/` | `autoseq.cpp`; JSON QSO / FD / beacon / reincarnation | `cd host_mock && make && ./host_test test_qso.json` |
+| `host_mock/` | `autoseq.cpp`; JSON QSO / FD / beacon / reincarnation; unique R-tap callsign | `cd host_mock && make && ./host_test test_qso.json` / `./host_test_unique_callsign` |
 | `tests/tx_e2e/` | Encode, TA format, KH1 map, golden WAV RX | `cmake -S tests/tx_e2e -B tests/tx_e2e/build && cmake --build tests/tx_e2e/build && ctest --test-dir tests/tx_e2e/build --output-on-failure` |
 | `idf.py build` | `main/` `-Werror`; merged bin | ESP-IDF 5.5.1, target `esp32s3` |
 

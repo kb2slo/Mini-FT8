@@ -1,4 +1,5 @@
 .cache
 *.o
 host_test
+host_test_unique_callsign
 
