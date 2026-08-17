@@ -8,11 +8,7 @@ Ship on `origin/main`. Talk through changes before any `git push origin`. Do not
 
 ## Now
 
-First-phase CI is on `main` (this PR). Next theme is the sequencer.
-
-| ID | Type | Item | Done when |
-|---|---|---|---|
-| N3 | fix | Unique remote callsign in TX queue on R-tap | `autoseq_on_touch`: no duplicate callsign; re-tap promotes to front; live `queue[0]` QSO ignores with HUD `QSO in progress`. Host: `host_test_unique_callsign`. |
+None. Remaining sequencer work is in Backlog.
 
 ## Backlog
 
@@ -59,6 +55,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | D5 | docs | CLI flash that keeps Launcher | `tools/flash_keep_launcher.py` writes `mini_ft8.bin` to the device OTA slot only |
 | D6 | fix | Beacon OFF drops queued CQ | `main` `803e8cf`; host `host_test_beacon_cancel` |
 | D7 | ci | Skip firmware artifact unless the binary can change | `ci.yml` path filter; docs/roadmap-only pushes do not rebuild or retag `dev` |
+| D8 | fix | Unique remote callsign in TX queue on R-tap | `main` `4f19015`; host `host_test_unique_callsign` |
 
 ## Test map
 
