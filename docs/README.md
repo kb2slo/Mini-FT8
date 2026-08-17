@@ -28,6 +28,13 @@ Each row has a type: `fix` | `extract` | `feature` | `ci` | `docs`.
 
 Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`. Work on the fork first; upstream what is clearly useful.
 
+### Roadmap intake (ideas)
+
+If the operator asks to add an idea or “add to the backlog”:
+1. Draft the `docs/ROADMAP.md` row in chat. Do not commit yet.
+2. New items go in **Ideas**. Use **Backlog** only when they give a Done-when or say it is sequenced.
+3. After they approve, commit that row on `main` and push `origin` (not `upstream`).
+
 ### Local IDF build / flash
 
 After `source` of the idf5.5 venv and `esp-idf/export.sh`, prefer one command:
