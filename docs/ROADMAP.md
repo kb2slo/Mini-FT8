@@ -16,7 +16,7 @@ Highest-ROI host tests while extracting: Station.txt round-trip, SD import must 
 
 | ID | Type | Item | Why / constraint |
 |---|---|---|---|
-| B3 | extract | Pure functions host+firmware both link | Station parse/serialize, ADIF format + dedupe, TA format (stop reimplementing in `tx_e2e`), decode sort, power hysteresis (mV → halt/write/warn). |
+| B3 | extract | Pure functions host+firmware both link | Station parse/serialize, ADIF 10-min logger dedupe (merge/parse is `components/adif`), TA format (stop reimplementing in `tx_e2e`), decode sort, power hysteresis (mV → halt/write/warn). |
 | B4 | fix | SD `Station.txt` clobbers flash | `storage_sync_station_from_sd()` on boot. **Partial:** skip import when internal `Station.txt` already exists. Still no timestamp/opt-in if flash is empty and SD is stale. |
 | B5 | fix | `sscanf(line, "date=%63s", line)` (and `time=`) | Destination overlaps scan buffer. Fix in the extracted Station parser (B3). |
 | B6 | fix | Held key stalls slot | `c == last_key` skips `check_slot_boundary` / `tx_tick`. |
@@ -56,12 +56,13 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | D6 | fix | Beacon OFF drops queued CQ | `main` `803e8cf`; host `host_test_beacon_cancel` |
 | D7 | ci | Skip firmware artifact unless the binary can change | `ci.yml` path filter; docs/roadmap-only pushes do not rebuild or retag `dev` |
 | D8 | fix | Unique remote callsign in TX queue on R-tap | `main` `4f19015`; host `host_test_unique_callsign` |
+| D9 | feature | Copy Files to SD unions `.adi` onto the card | `components/adif`; host `host_test_adif_merge`. Archive wins on duplicate key; unparseable SD file is not overwritten. Other files still byte-copy. |
 
 ## Test map
 
 | Harness | Covers | Command |
 |---|---|---|
-| `host_mock/` | `autoseq.cpp`; JSON QSO / FD / beacon / reincarnation; unique R-tap callsign | `cd host_mock && make && ./host_test test_qso.json` / `./host_test_unique_callsign` |
+| `host_mock/` | `autoseq.cpp`; JSON QSO / FD / beacon / reincarnation; unique R-tap callsign; ADIF merge | `cd host_mock && make && ./host_test test_qso.json` / `./host_test_unique_callsign` / `./host_test_adif_merge` |
 | `tests/tx_e2e/` | Encode, TA format, KH1 map, golden WAV RX | `cmake -S tests/tx_e2e -B tests/tx_e2e/build && cmake --build tests/tx_e2e/build && ctest --test-dir tests/tx_e2e/build --output-on-failure` |
 | `idf.py build` | `main/` `-Werror`; merged bin | ESP-IDF 5.5.1, target `esp32s3` |
 

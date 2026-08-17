@@ -2,6 +2,7 @@ idf_component_register(
     SRCS "storage_service.cpp"
     INCLUDE_DIRS "include"
     PRIV_REQUIRES
+        adif
         driver
         esp_hw_support
         esp_partition

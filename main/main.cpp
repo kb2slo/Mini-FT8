@@ -126,6 +126,7 @@ static bool storage_is_active_log_name(const std::string& name_or_path) {
          name == "fieldday.txt";
 }
 
+// .adi files are union-merged onto the SD archive; other files overwrite.
 static CopyLogsResult copy_logs_to_sd_overwrite();
 
 // 128 entries × 16 bytes = 2 KB of BSS. 256 was the original size but

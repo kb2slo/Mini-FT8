@@ -5,7 +5,8 @@ CFLAGS   = -DHOST_MOCK -g -Wall
 
 # host_mock first so mock esp_log.h shadows the real one
 INCLUDES = -I. -I../main -I../components/ui/include \
-           -I../components/ft8_lib -I../components/ft8_lib/ft8
+           -I../components/ft8_lib -I../components/ft8_lib/ft8 \
+           -I../components/adif/include
 
 CORE_SRC   = ../main/autoseq.cpp
 MOCK_SRC   = host_main.cpp host_mocks.cpp json_parser.cpp
@@ -24,8 +25,9 @@ OBJ     = $(CXX_OBJ) $(C_OBJ)
 TARGET = host_test
 UNIQUE_TARGET = host_test_unique_callsign
 CANCEL_TARGET = host_test_beacon_cancel
+ADIF_TARGET = host_test_adif_merge
 
-all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET)
+all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -38,6 +40,12 @@ CANCEL_OBJ = ../main/autoseq.o host_mocks.o test_beacon_cancel.o
 $(CANCEL_TARGET): $(CANCEL_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+ADIF_OBJ = adif.o test_adif_merge.o
+adif.o: ../components/adif/adif.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(ADIF_TARGET): $(ADIF_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
@@ -45,6 +53,7 @@ $(CANCEL_TARGET): $(CANCEL_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 clean:
-	rm -f $(OBJ) $(UNIQUE_OBJ) $(CANCEL_OBJ) $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET)
+	rm -f $(OBJ) $(UNIQUE_OBJ) $(CANCEL_OBJ) $(ADIF_OBJ) \
+	      $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET)
 
 .PHONY: all clean

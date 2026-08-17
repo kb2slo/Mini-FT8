@@ -1,7 +1,10 @@
 #include "storage_service.h"
 
+#include "adif.h"
+
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
@@ -229,22 +232,9 @@ bool flush_all_locked() {
     return rc == 0;
 }
 
-bool write_atomic_locked(const std::string& input, const std::string& content) {
-    if (!firmware_owns_storage_locked()) {
-        return false;
-    }
-
-    std::string name;
-    std::string final_path;
-    if (!normalize_name(input, name) || !build_path(name, final_path)) {
-        return false;
-    }
-    const std::string temp_name = make_temp_name(name);
-    std::string temp_path;
-    if (!build_path(temp_name, temp_path)) {
-        return false;
-    }
-
+bool write_atomic_file(const std::string& final_path,
+                       const std::string& temp_path,
+                       const std::string& content) {
     FILE* file = fopen(temp_path.c_str(), "wb");
     if (!file) {
         return false;
@@ -270,6 +260,25 @@ bool write_atomic_locked(const std::string& input, const std::string& content) {
         return false;
     }
     return true;
+}
+
+bool write_atomic_locked(const std::string& input, const std::string& content) {
+    if (!firmware_owns_storage_locked()) {
+        return false;
+    }
+
+    std::string name;
+    std::string final_path;
+    if (!normalize_name(input, name) || !build_path(name, final_path)) {
+        return false;
+    }
+    const std::string temp_name = make_temp_name(name);
+    std::string temp_path;
+    if (!build_path(temp_name, temp_path)) {
+        return false;
+    }
+
+    return write_atomic_file(final_path, temp_path, content);
 }
 
 bool list_files_locked(std::vector<std::string>& files) {
@@ -460,6 +469,89 @@ CopyFileStatus copy_file_retry_locked(const std::string& name,
     return result;
 }
 
+bool read_entire_file(const std::string& path, std::string& content, bool missing_ok) {
+    content.clear();
+    FILE* file = fopen(path.c_str(), "rb");
+    if (!file) {
+        return missing_ok && errno == ENOENT;
+    }
+    uint8_t buffer[4096];
+    bool ok = true;
+    while (true) {
+        const size_t count = fread(buffer, 1, sizeof(buffer), file);
+        if (count > 0) {
+            content.append(reinterpret_cast<const char*>(buffer), count);
+        }
+        if (count < sizeof(buffer)) {
+            if (ferror(file)) {
+                ok = false;
+            }
+            break;
+        }
+    }
+    fclose(file);
+    if (!ok) {
+        content.clear();
+    }
+    return ok;
+}
+
+CopyFileStatus merge_adi_to_sd_locked(const std::string& name,
+                                      const std::string& source,
+                                      const std::string& destination,
+                                      const char* pass_name,
+                                      int attempts) {
+    std::string incoming;
+    if (!read_entire_file(source, incoming, false)) {
+        return copy_error(ESP_FAIL, errno, "open-src");
+    }
+
+    std::string archive;
+    if (!read_entire_file(destination, archive, true)) {
+        return copy_error(ESP_FAIL, errno, "open-dst");
+    }
+
+    std::string merged;
+    const AdifMergeStatus merge_status = adif_merge_export(archive, incoming, merged);
+    if (merge_status == AdifMergeStatus::PARSE_ARCHIVE) {
+        ESP_LOGE(COPY_TAG,
+                 "adi merge refused pass=%s file=%s: SD file is not parseable ADIF",
+                 pass_name, name.c_str());
+        return copy_error(ESP_FAIL, EINVAL, "adi-parse-sd");
+    }
+    if (merge_status != AdifMergeStatus::OK) {
+        ESP_LOGE(COPY_TAG,
+                 "adi merge refused pass=%s file=%s: internal file is not parseable ADIF",
+                 pass_name, name.c_str());
+        return copy_error(ESP_FAIL, EINVAL, "adi-parse-src");
+    }
+
+    const std::string temp_path = std::string(kSdBasePath) + "/" + make_temp_name(name);
+    ESP_LOGI(COPY_TAG,
+             "adi merge pass=%s file=%s archive_bytes=%u incoming_bytes=%u out_bytes=%u",
+             pass_name, name.c_str(),
+             static_cast<unsigned>(archive.size()),
+             static_cast<unsigned>(incoming.size()),
+             static_cast<unsigned>(merged.size()));
+
+    CopyFileStatus result = copy_error(ESP_FAIL, 0, "not-run");
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        if (write_atomic_file(destination, temp_path, merged)) {
+            result = CopyFileStatus {};
+            break;
+        }
+        result = copy_error(ESP_FAIL, errno, "write");
+        ESP_LOGW(COPY_TAG,
+                 "adi merge write failed pass=%s file=%s attempt=%d/%d errno=%d (%s)",
+                 pass_name, name.c_str(), attempt + 1, attempts,
+                 result.err_no, strerror(result.err_no));
+        if (attempt + 1 < attempts) {
+            vTaskDelay(pdMS_TO_TICKS(80));
+        }
+    }
+    return result;
+}
+
 struct CopyFileRecord {
     std::string name;
     bool copied = false;
@@ -509,11 +601,15 @@ CopyFileStatus copy_named_file_locked(const std::string& name,
 
     const std::string destination = std::string(kSdBasePath) + "/" + name;
     ESP_LOGI(COPY_TAG,
-             "copy start pass=%s file=%s size=%lld source=%s destination=%s attempts=%d",
+             "copy start pass=%s file=%s size=%lld source=%s destination=%s attempts=%d adi=%d",
              pass_name, name.c_str(), source_size, source.c_str(), destination.c_str(),
-             attempts);
-    CopyFileStatus status =
-        copy_file_retry_locked(name, source, destination, pass_name, attempts);
+             attempts, adif_is_adi_filename(name) ? 1 : 0);
+    CopyFileStatus status = copy_error(ESP_FAIL, 0, "not-run");
+    if (adif_is_adi_filename(name)) {
+        status = merge_adi_to_sd_locked(name, source, destination, pass_name, attempts);
+    } else {
+        status = copy_file_retry_locked(name, source, destination, pass_name, attempts);
+    }
     if (status.err == ESP_OK) {
         ESP_LOGI(COPY_TAG, "copy ok pass=%s file=%s size=%lld destination=%s",
                  pass_name, name.c_str(), source_size, destination.c_str());
