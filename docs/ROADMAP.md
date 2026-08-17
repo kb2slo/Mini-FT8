@@ -4,7 +4,7 @@ Living plan for this fork. How to use it, and the rest of `docs/`, is in [README
 
 Architecture details stay in `AUTOSEQ_ARCHITECTURE.md` and `AUTOSEQ_INACTIVE_QUEUE.md`. Long features get an RFC; this file only points at them.
 
-Work on the fork first. Upstream what is clearly useful.
+Ship on `origin/main`. Do not open `upstream` PRs unless explicitly asked.
 
 ## Now
 
@@ -58,6 +58,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | D3 | ci | Merge to `main` publishes rolling GitHub prerelease tag `dev` (`minift8-dev.bin`). `v*` tags stay versioned releases. | `feat/ci-main-release` |
 | D4 | fix | Internal FAT append left 0-byte ADI/RT after first-boot format; Station atomic OK | Atomic create + POSIX `O_APPEND`+fsync; WL SAFE; `FATFS_IMMEDIATE_FSYNC`. Hardware: QSO logged. |
 | D5 | docs | CLI flash that keeps Launcher | `tools/flash_keep_launcher.py` writes `mini_ft8.bin` to the device OTA slot only |
+| D6 | fix | Beacon OFF drops queued CQ | `main` `803e8cf`; host `host_test_beacon_cancel` |
 
 ## Test map
 

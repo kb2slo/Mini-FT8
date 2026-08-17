@@ -28,6 +28,8 @@ PTABLE_LEN = 0xC00
 APP_TYPE = 0x00
 OTA_SUBTYPE_MIN = 0x10
 OTA_SUBTYPE_MAX = 0x1F  # ota_0 .. ota_15
+# This Cardputer's Mini-FT8 Launcher slot (PMan name). Prefer when present.
+PREFERRED_OTA = "bt4000"
 
 
 def die(msg: str, code: int = 1) -> None:
@@ -160,6 +162,9 @@ def pick_ota(table, name: str | None):
             if p.name == name:
                 return p
         die(f"OTA partition '{name}' not found. Have: {', '.join(p.name for p in ota)}")
+    for p in ota:
+        if p.name == PREFERRED_OTA:
+            return p
     if len(ota) == 1:
         return ota[0]
     for p in ota:
@@ -205,7 +210,7 @@ def main() -> None:
     ap.add_argument("-p", "--port", help="USB serial port (default: auto-detect)")
     ap.add_argument(
         "--partition",
-        help="OTA partition name (default: the only ota_* slot, else ota_0)",
+        help="OTA partition name (default: bt4000 if present, else the only ota_* slot, else ota_0)",
     )
     ap.add_argument(
         "--bin",

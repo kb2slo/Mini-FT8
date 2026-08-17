@@ -26,14 +26,16 @@ Update `ROADMAP.md` in the **same turn** as the work:
 
 Each row has a type: `fix` | `extract` | `feature` | `ci` | `docs`.
 
-Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`. Work on the fork first; upstream what is clearly useful.
+Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`.
+
+This fork ships on **`origin/main`** (`kb2slo/Mini-FT8`). Iterate and push there. Do **not** push or open PRs to `upstream` (`wcheng95/Mini-FT8`) unless the operator explicitly asks. Staying mergeable with upstream is not a goal.
 
 ### Roadmap intake (ideas)
 
 If the operator asks to add an idea or “add to the backlog”:
 1. Draft the `docs/ROADMAP.md` row in chat. Do not commit yet.
 2. New items go in **Ideas**. Use **Backlog** only when they give a Done-when or say it is sequenced.
-3. After they approve, commit that row on `main` and push `origin` (not `upstream`).
+3. After they approve, commit that row on `main` and push `origin`. Never `upstream` unless they explicitly ask.
 
 ### Backlog grooming reminder
 
@@ -53,7 +55,9 @@ After `source` of the idf5.5 venv and `esp-idf/export.sh`. Radio unplugged from 
 python tools/flash_keep_launcher.py
 ```
 
-Reads the *device* partition table and writes `build/mini_ft8.bin` into an OTA slot only. Never factory (Launcher), bootloader, or the table. `--dry-run` prints the layout. `--no-build` skips `idf.py build`. `--partition ota_0` if there are several OTA slots.
+Reads the *device* partition table and writes `build/mini_ft8.bin` into an OTA slot only. Never factory (Launcher), bootloader, or the table. `--dry-run` prints the layout. `--no-build` skips `idf.py build`.
+
+This Cardputer’s Mini-FT8 slot is **`bt4000`** (Launcher PMan name). The helper prefers that partition when it exists; `--partition NAME` overrides.
 
 Do **not** use `idf.py flash` or `idf.py app-flash` on a Launcher unit: both write `0x10000` / factory and replace Launcher.
 
