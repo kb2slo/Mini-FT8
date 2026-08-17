@@ -45,7 +45,19 @@ The grooming *workflow* is still TBD. Until then:
 
 ### Local IDF build / flash
 
-After `source` of the idf5.5 venv and `esp-idf/export.sh`, prefer one command:
+After `source` of the idf5.5 venv and `esp-idf/export.sh`. Radio unplugged from Cardputer USB-C. Leave Launcher **USB** (MSC) first so `/dev/cu.usbmodem*` exists.
+
+**Keep Launcher** (daily iterate once Mini-FT8 has been installed from Launcher once):
+
+```bash
+python tools/flash_keep_launcher.py
+```
+
+Reads the *device* partition table and writes `build/mini_ft8.bin` into an OTA slot only. Never factory (Launcher), bootloader, or the table. `--dry-run` prints the layout. `--no-build` skips `idf.py build`. `--partition ota_0` if there are several OTA slots.
+
+Do **not** use `idf.py flash` or `idf.py app-flash` on a Launcher unit: both write `0x10000` / factory and replace Launcher.
+
+**No Launcher** (factory-only Mini-FT8 layout):
 
 ```bash
 idf.py -p /dev/cu.usbmodemXXXX build flash

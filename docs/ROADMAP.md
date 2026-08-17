@@ -57,6 +57,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | D2 | ci | First-phase CI: host_mock + tx_e2e + IDF 5.5.1 `esp32s3` merged `MiniFT8_Merged_Auto.bin` artifact; Node 24 actions | this PR (`ci` → `main`) |
 | D3 | ci | Merge to `main` publishes rolling GitHub prerelease tag `dev` (`minift8-dev.bin`). `v*` tags stay versioned releases. | `feat/ci-main-release` |
 | D4 | fix | Internal FAT append left 0-byte ADI/RT after first-boot format; Station atomic OK | Atomic create + POSIX `O_APPEND`+fsync; WL SAFE; `FATFS_IMMEDIATE_FSYNC`. Hardware: QSO logged. |
+| D5 | docs | CLI flash that keeps Launcher | `tools/flash_keep_launcher.py` writes `mini_ft8.bin` to the device OTA slot only |
 
 ## Test map
 
