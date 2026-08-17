@@ -5,6 +5,7 @@ Human- and tool-readable project memory. Prefer this tree over Cursor rules, `CL
 | File | Role |
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Plan: Now / Backlog / Ideas / Done. Chat is intake; this file is truth. |
+| [STYLE.md](STYLE.md) | Small coding preferences for our C/C++ (not vendored `M5*` / `ft8_lib`). Prefer `switch` over chained `if` for closed constant sets. |
 | [AUTOSEQ_ARCHITECTURE.md](AUTOSEQ_ARCHITECTURE.md) | Sequencer design (slot events, tick vs decode). |
 | [AUTOSEQ_INACTIVE_QUEUE.md](AUTOSEQ_INACTIVE_QUEUE.md) | Retry exhaustion / reincarnation / inactive zone. |
 | [RTC_COMPENSATION.md](RTC_COMPENSATION.md) | Clock compensation. |
@@ -26,7 +27,7 @@ Update `ROADMAP.md` in the **same turn** as the work:
 
 Each row has a type: `fix` | `extract` | `feature` | `ci` | `docs`.
 
-Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`.
+Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`. Follow [STYLE.md](STYLE.md) for our C/C++.
 
 This fork ships on **`origin/main`** (`kb2slo/Mini-FT8`). Do **not** push or open PRs to `upstream` (`wcheng95/Mini-FT8`) unless the operator explicitly asks. Staying mergeable with upstream is not a goal.
 
