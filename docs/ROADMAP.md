@@ -12,12 +12,11 @@ First-phase CI is on `main` (this PR). Next theme is the sequencer.
 
 | ID | Type | Item | Done when |
 |---|---|---|---|
-| N2 | fix | Lock autoseq; atomic beacon CQ re-arm | Public autoseq API serialized (mutex or core 0 only). Tick pop of CALLING + `start_cq` under that lock when beacon is on. `host_mock/test_beacon_lifecycle.json` expects a re-armed queue, not empty. Was B1/B2. |
 | N3 | fix | Unique remote callsign in TX queue on R-tap | `autoseq_on_touch`: no duplicate callsign; re-tap promotes to front; live `queue[0]` QSO ignores with HUD `QSO in progress`. Host: `host_test_unique_callsign`. |
 
 ## Backlog
 
-Highest-ROI host tests while extracting: Station.txt round-trip, SD import must not clobber newer flash, ADIF 10-min dedupe + R-sort groups, beacon re-arm in the same tick as pop.
+Highest-ROI host tests while extracting: Station.txt round-trip, SD import must not clobber newer flash, ADIF 10-min dedupe + R-sort groups.
 
 | ID | Type | Item | Why / constraint |
 |---|---|---|---|
