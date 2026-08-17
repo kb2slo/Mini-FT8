@@ -59,6 +59,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | D4 | fix | Internal FAT append left 0-byte ADI/RT after first-boot format; Station atomic OK | Atomic create + POSIX `O_APPEND`+fsync; WL SAFE; `FATFS_IMMEDIATE_FSYNC`. Hardware: QSO logged. |
 | D5 | docs | CLI flash that keeps Launcher | `tools/flash_keep_launcher.py` writes `mini_ft8.bin` to the device OTA slot only |
 | D6 | fix | Beacon OFF drops queued CQ | `main` `803e8cf`; host `host_test_beacon_cancel` |
+| D7 | ci | Skip firmware artifact unless the binary can change | `ci.yml` path filter; docs/roadmap-only pushes do not rebuild or retag `dev` |
 
 ## Test map
 

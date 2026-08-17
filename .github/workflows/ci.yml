@@ -1,6 +1,9 @@
 # Production firmware + host tests.
 # Merged image is the same POST_BUILD output as a local `idf.py build`:
 #   build/MiniFT8_Merged_Auto.bin  — flash at 0x0 (8 MB, custom partitions).
+#
+# Firmware + the rolling `dev` release run only when sources that can change
+# the binary (or this workflow) change. Docs/roadmap-only commits skip them.
 name: CI
 
 on:
@@ -14,6 +17,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      firmware: ${{ steps.filter.outputs.firmware }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            firmware:
+              - 'main/**'
+              - 'components/**'
+              - 'CMakeLists.txt'
+              - 'sdkconfig'
+              - 'sdkconfig.defaults'
+              - 'partitions.csv'
+              - 'dependencies.lock'
+              - '**/idf_component.yml'
+              - 'tools/**/*.cmake'
+              - '.github/workflows/ci.yml'
+
   host-tests:
     name: Host tests
     runs-on: ubuntu-latest
@@ -44,6 +75,8 @@ jobs:
 
   firmware:
     name: Firmware (ESP32-S3)
+    needs: changes
+    if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.firmware == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
