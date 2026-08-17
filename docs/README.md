@@ -18,7 +18,11 @@ Git history is the changelog. Do not keep a narrative log in these files.
 
 At the start of a session, read `docs/ROADMAP.md` (and the architecture or RFC for the area you touch). Follow [STYLE.md](STYLE.md) for our C/C++.
 
-**Workflow matches documentation.** Committed docs are the workflow: this file, `ROADMAP.md`, `STYLE.md`, RFCs, and the architecture notes. Cite the relevant doc when proposing or making a change. If the operator asks for something that violates those docs, point it out, cite the rule, and talk it through **before** coding. Then the operator may retract, grant a one-off exception, or update the doc in the same turn and proceed. Do not silently diverge. An exception or doc change is an explicit decision, not a shortcut.
+**Workflow matches documentation.** Committed docs are the workflow: this file, `ROADMAP.md`, `STYLE.md`, RFCs, and the architecture notes. Cite the relevant doc when proposing or making a change.
+
+**Push back before tools.** Classify the request against `ROADMAP.md` Now, the active RFC, and `STYLE.md` **before any search, read, or edit of implementation.** If it is not the current Now theme, not an explicit exception in those docs, or is still Ideas/Backlog (including “quick” UI/product tweaks), the first reply cites the doc and talks it through. No codebase exploration to be helpful. Tools only after the operator retracts, grants an exception, or updates the doc in the same turn. Docs and roadmap questions are allowed without that gate.
+
+If the operator asks for something that violates those docs, point it out, cite the rule, and talk it through **before** coding. Then the operator may retract, grant a one-off exception, or update the doc in the same turn and proceed. Do not silently diverge. An exception or doc change is an explicit decision, not a shortcut.
 
 Update `ROADMAP.md` in the **same turn** as the work:
 

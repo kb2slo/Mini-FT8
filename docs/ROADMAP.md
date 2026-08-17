@@ -58,6 +58,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | D8 | fix | Unique remote callsign in TX queue on R-tap | `main` `4f19015`; host `host_test_unique_callsign` |
 | D9 | feature | Copy Files to SD unions `.adi` onto the card | `components/adif`; host `host_test_adif_merge`. Archive wins on duplicate key; unparseable SD file is not overwritten. Other files still byte-copy. |
 | D10 | docs | Extract/style/boundaries RFC + agent workflow tenant | `docs/rfcs/0002-extract-and-boundaries.md`; `STYLE.md`; `docs/README.md` |
+| D11 | docs | Push back before tools | Agents cite Now/RFC/STYLE before any implementation search or edit |
 
 ## Test map
 
