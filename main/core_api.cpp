@@ -532,7 +532,13 @@ bool core_cmd_set_cq_freetext(const std::string& text) {
   return true;
 }
 bool core_cmd_set_beacon(CoreBeaconMode m) {
-  return apply_config_write([&]{ g_beacon = map_in(m); });
+  return apply_config_write([&]{
+    const BeaconMode next = map_in(m);
+    if (next == BeaconMode::OFF) {
+      autoseq_cancel_cq();
+    }
+    g_beacon = next;
+  });
 }
 
 bool core_cmd_set_offset_src(CoreOffsetSrc s) {

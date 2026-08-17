@@ -115,6 +115,7 @@ int main(int argc, char* argv[]) {
             BeaconMode old_beacon = g_beacon;
             if (tp.beacon_change.beacon_on == 0) {
                 g_beacon = BeaconMode::OFF;
+                autoseq_cancel_cq();
             } else if (tp.beacon_change.beacon_on == 1) {
                 g_beacon = BeaconMode::EVEN;
             } else {

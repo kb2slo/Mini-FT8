@@ -4932,16 +4932,32 @@ static void enter_mode(UIMode new_mode) {
       bool was_off = (g_beacon == BeaconMode::OFF);
       g_beacon = g_status_beacon_temp;
       save_station_data();
-      // No need to clear autoseq when beacon is turned off.
-      // Any CQ in queue will transmit once, then tick moves CALLING→IDLE.
       core_fire_qso_changed();  // propagates to all registered consumers
 
-      // If beacon was just enabled, enqueue CQ and set TX flag
-      // TX will trigger at next slot boundary via check_slot_boundary()
-      if (was_off && g_beacon != BeaconMode::OFF) {
+      if (g_beacon == BeaconMode::OFF) {
+        autoseq_cancel_cq(g_tx_active);
+        AutoseqTxEntry pending;
+        if (!g_tx_active) {
+          if (autoseq_fetch_pending_tx(pending)) {
+            arm_pending_tx(pending);
+          } else {
+            g_qso_xmit = false;
+            g_pending_tx_valid = false;
+          }
+        }
+      } else if (was_off) {
+        // Beacon just enabled: enqueue CQ; TX at next matching slot boundary.
         enqueue_beacon_cq();
         AutoseqTxEntry pending;
         if (autoseq_fetch_pending_tx(pending)) {
+          arm_pending_tx(pending);
+        }
+      } else {
+        // EVEN <-> ODD: drop the old-parity CQ and arm the new one.
+        autoseq_cancel_cq(g_tx_active);
+        enqueue_beacon_cq();
+        AutoseqTxEntry pending;
+        if (!g_tx_active && autoseq_fetch_pending_tx(pending)) {
           arm_pending_tx(pending);
         }
       }

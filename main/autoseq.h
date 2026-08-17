@@ -124,6 +124,10 @@ bool autoseq_rotate_same_parity();
 // slot_parity: 0 for even slots, 1 for odd slots
 void autoseq_start_cq(int slot_parity);
 
+// Drop pending beacon CQ entries (CALLING, not free-text). QSOs unchanged.
+// If skip_head is true, leave queue[0] (safe while that entry is on the air).
+bool autoseq_cancel_cq(bool skip_head = false);
+
 // Schedule a Free Text one-shot transmission.
 // - Inherits slot parity from queue[0] if queue is non-empty, so FT joins the
 //   current activation period instead of colliding with other QSOs' slots.

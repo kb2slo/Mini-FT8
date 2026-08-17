@@ -31,6 +31,8 @@ jobs:
           done
           echo "===== host_test_unique_callsign ====="
           ./host_test_unique_callsign || failed=1
+          echo "===== host_test_beacon_cancel ====="
+          ./host_test_beacon_cancel || failed=1
           exit "$failed"
 
       - name: TX e2e (CTest)

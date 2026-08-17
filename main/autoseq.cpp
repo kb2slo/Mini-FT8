@@ -224,6 +224,23 @@ void autoseq_start_cq(int slot_parity) {
     }
 }
 
+bool autoseq_cancel_cq(bool skip_head) {
+    bool removed = false;
+    const int last = skip_head ? 1 : 0;
+    for (int i = s_active_count - 1; i >= last; --i) {
+        if (s_queue[i].is_freetext) continue;
+        if (s_queue[i].state == AutoseqState::CALLING || s_queue[i].dxcall == "CQ") {
+            remove_active_at(i);
+            removed = true;
+        }
+    }
+    if (removed) {
+        ESP_LOGI(TAG, "Cancelled beacon CQ");
+        refresh_tx_msg_buffer();
+    }
+    return removed;
+}
+
 bool autoseq_schedule_freetext(const std::string& text, int fallback_slot_parity) {
     if (text.empty()) return false;
     // Don't duplicate an already-pending Free Text.

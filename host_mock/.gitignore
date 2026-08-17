@@ -2,4 +2,5 @@
 *.o
 host_test
 host_test_unique_callsign
+host_test_beacon_cancel
 
