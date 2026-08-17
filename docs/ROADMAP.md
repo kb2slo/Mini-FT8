@@ -2,7 +2,7 @@
 
 Living plan for this fork. How to use it, and the rest of `docs/`, is in [README.md](README.md).
 
-Architecture details stay in `AUTOSEQ_ARCHITECTURE.md` and `AUTOSEQ_INACTIVE_QUEUE.md`. Long features get an RFC; this file only points at them.
+Architecture details stay in `AUTOSEQ_ARCHITECTURE.md` and `AUTOSEQ_INACTIVE_QUEUE.md`. Extract/style/boundaries: [RFC 0002](rfcs/0002-extract-and-boundaries.md). Long features get an RFC; this file only points at them.
 
 Ship on `origin/main`. Talk through changes before any `git push origin`. Do not open `upstream` PRs unless explicitly asked.
 
@@ -40,7 +40,7 @@ Not scheduled. Move to Backlog with a Done-when before implementing. Large produ
 | I8 | feature | QMX band SWR curve | Field goal: SWR-vs-frequency for the **selected band**. Mini-FT8 orchestrates: `MD8;` (SWR Tune → PA at Protection **Tune %**) → step `FA` + poll `SW;` → `MD0;` + restore digi (`MD6;`). No Kenwood `PC` *set* (`PC;` is get-only wattmeter — [CAT 1_04_004](https://www.qrp-labs.com/images/qmx/manuals/cat_1_04_004.pdf)). Tune % stays an on-radio setting; `MM` only if we must change it from CAT. Hardware-prove `MD8` keys TX, `FA`/`SW;` work, then extract out of `main.cpp`. |
 | I9 | feature | QMX terminal (settings / alignment) | Separate from I8. QMX’s rich serial terminal (menus, RF/SWR/image sweeps, config) is not Kenwood CAT. Full VT-style UI on 240×135 is a large product; likely needs an RFC and may fit the companion (I3) better than Cardputer-native. Shared USB-C with UAC/CAT — exclusive session, leave digi mode. |
 | I10 | feature | QMX CAT power-off with Cardputer idle | On Charge Mode (or a later deeper sleep), send QMX `PS0;` so the radio is not left keyed/USB-hosted. QMX-only ([CAT 1_04_004](https://www.qrp-labs.com/images/qmx/manuals/cat_1_04_004.pdf)); never send on QDX/KH1. After `PS0;` CAT is dead until the operator long-presses VOL on the radio — Mini-FT8 cannot wake it. Hardware: confirm `PS0;` saves VFO/mode like the VOL shutdown. Do not mix into Charge Mode without an explicit confirm or a QMX-only path. |
-| I11 | extract | Dead code + coding standards | Hygiene pass, not a behavior change: drop unused/commented paths (esp. `main.cpp`), then apply a **small written** style (naming, includes, no drive-by clang-format of vendored `M5*` / `ft8_lib`). Slice with extracts (B3); do not mix with features. Host tests must stay green; field-only paths unchanged unless a dedicated follow-up. |
+| I11 | extract | Dead code + coding standards | Plan: [RFC 0002](rfcs/0002-extract-and-boundaries.md). Slice A (docs + `STYLE.md`) landed. Remaining slices B–G stay on that RFC. |
 
 Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, full-slot audio.
 
@@ -57,6 +57,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | D7 | ci | Skip firmware artifact unless the binary can change | `ci.yml` path filter; docs/roadmap-only pushes do not rebuild or retag `dev` |
 | D8 | fix | Unique remote callsign in TX queue on R-tap | `main` `4f19015`; host `host_test_unique_callsign` |
 | D9 | feature | Copy Files to SD unions `.adi` onto the card | `components/adif`; host `host_test_adif_merge`. Archive wins on duplicate key; unparseable SD file is not overwritten. Other files still byte-copy. |
+| D10 | docs | Extract/style/boundaries RFC + agent workflow tenant | `docs/rfcs/0002-extract-and-boundaries.md`; `STYLE.md`; `docs/README.md` |
 
 ## Test map
 

@@ -5,18 +5,20 @@ Human- and tool-readable project memory. Prefer this tree over Cursor rules, `CL
 | File | Role |
 |---|---|
 | [ROADMAP.md](ROADMAP.md) | Plan: Now / Backlog / Ideas / Done. Chat is intake; this file is truth. |
-| [STYLE.md](STYLE.md) | Small coding preferences for our C/C++ (not vendored `M5*` / `ft8_lib`). Prefer `switch` over chained `if` for closed constant sets. |
+| [STYLE.md](STYLE.md) | Coding standard for our C/C++ (not vendored `M5*` / `ft8_lib`). |
 | [AUTOSEQ_ARCHITECTURE.md](AUTOSEQ_ARCHITECTURE.md) | Sequencer design (slot events, tick vs decode). |
 | [AUTOSEQ_INACTIVE_QUEUE.md](AUTOSEQ_INACTIVE_QUEUE.md) | Retry exhaustion / reincarnation / inactive zone. |
 | [RTC_COMPENSATION.md](RTC_COMPENSATION.md) | Clock compensation. |
 | [FT8 Free-Text Reference Extension.md](FT8%20Free-Text%20Reference%20Extension.md) | Free-text / SOTA-style payload notes. |
-| `rfcs/` | Long feature specs (e.g. BLE companion on branch `rfc/0001-ble-companion`). Roadmap only links them. |
+| `rfcs/` | Long specs. Extract/style/boundaries: [0002](rfcs/0002-extract-and-boundaries.md). BLE companion on branch `rfc/0001-ble-companion`. Roadmap only links them. |
 
 Git history is the changelog. Do not keep a narrative log in these files.
 
 ## Working agreement (any agent)
 
-At the start of a session, read `docs/ROADMAP.md` (and the architecture doc for the area you touch).
+At the start of a session, read `docs/ROADMAP.md` (and the architecture or RFC for the area you touch). Follow [STYLE.md](STYLE.md) for our C/C++.
+
+**Workflow matches documentation.** Committed docs are the workflow: this file, `ROADMAP.md`, `STYLE.md`, RFCs, and the architecture notes. Cite the relevant doc when proposing or making a change. If the operator asks for something that violates those docs, point it out, cite the rule, and talk it through **before** coding. Then the operator may retract, grant a one-off exception, or update the doc in the same turn and proceed. Do not silently diverge. An exception or doc change is an explicit decision, not a shortcut.
 
 Update `ROADMAP.md` in the **same turn** as the work:
 
@@ -27,7 +29,7 @@ Update `ROADMAP.md` in the **same turn** as the work:
 
 Each row has a type: `fix` | `extract` | `feature` | `ci` | `docs`.
 
-Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`. Follow [STYLE.md](STYLE.md) for our C/C++.
+Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`. Extract/style/radio/`ft8_lib` campaign: [RFC 0002](rfcs/0002-extract-and-boundaries.md).
 
 This fork ships on **`origin/main`** (`kb2slo/Mini-FT8`). Do **not** push or open PRs to `upstream` (`wcheng95/Mini-FT8`) unless the operator explicitly asks. Staying mergeable with upstream is not a goal.
 

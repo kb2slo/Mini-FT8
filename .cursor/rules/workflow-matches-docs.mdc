@@ -1,0 +1,10 @@
+---
+description: Development must match committed docs; talk through divergence
+alwaysApply: true
+---
+
+# Workflow matches documentation
+
+Read and follow `docs/README.md`, then `docs/ROADMAP.md`, `docs/STYLE.md`, and the RFC or architecture doc for the area you touch. Do not keep a second plan in chat or extra rule files.
+
+If the operator asks for something that violates those docs, **stop and say so**. Cite the doc. Talk it through. Then they may retract, grant a one-off exception, or update the doc in the same turn and proceed. Do not silently diverge.
