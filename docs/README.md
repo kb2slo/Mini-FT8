@@ -35,6 +35,14 @@ If the operator asks to add an idea or “add to the backlog”:
 2. New items go in **Ideas**. Use **Backlog** only when they give a Done-when or say it is sequenced.
 3. After they approve, commit that row on `main` and push `origin` (not `upstream`).
 
+### Backlog grooming reminder
+
+The grooming *workflow* is still TBD. Until then:
+
+- Once per session start, check `git log -1 --format=%ci -- docs/ROADMAP.md`.
+- If that commit is older than about **1–2 days**, remind the operator once that it is time to groom Now / Backlog / Ideas / Done (promote, drop shipped Now rows, sequence or park ideas).
+- Do not repeat the reminder in later turns of the same session, and do not interrupt an in-progress coding task.
+
 ### Local IDF build / flash
 
 After `source` of the idf5.5 venv and `esp-idf/export.sh`, prefer one command:
