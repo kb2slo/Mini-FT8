@@ -28,14 +28,16 @@ Each row has a type: `fix` | `extract` | `feature` | `ci` | `docs`.
 
 Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`.
 
-This fork ships on **`origin/main`** (`kb2slo/Mini-FT8`). Iterate and push there. Do **not** push or open PRs to `upstream` (`wcheng95/Mini-FT8`) unless the operator explicitly asks. Staying mergeable with upstream is not a goal.
+This fork ships on **`origin/main`** (`kb2slo/Mini-FT8`). Do **not** push or open PRs to `upstream` (`wcheng95/Mini-FT8`) unless the operator explicitly asks. Staying mergeable with upstream is not a goal.
+
+Talk through any code change or proposed solution in chat **before** pushing to `origin`. Local edits and commits are fine when the operator asked for the work; `git push origin` waits until they have seen the diff/plan and said to push. Do not treat “ship on main” as standing permission to push.
 
 ### Roadmap intake (ideas)
 
 If the operator asks to add an idea or “add to the backlog”:
 1. Draft the `docs/ROADMAP.md` row in chat. Do not commit yet.
 2. New items go in **Ideas**. Use **Backlog** only when they give a Done-when or say it is sequenced.
-3. After they approve, commit that row on `main` and push `origin`. Never `upstream` unless they explicitly ask.
+3. After they approve, commit that row on `main`. Push `origin` only when they ask to push. Never `upstream` unless they explicitly ask.
 
 ### Backlog grooming reminder
 
