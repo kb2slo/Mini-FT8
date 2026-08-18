@@ -4,7 +4,7 @@ Living plan for this fork. How to use it, and the rest of `docs/`, is in [README
 
 Architecture details stay in `AUTOSEQ_ARCHITECTURE.md` and `AUTOSEQ_INACTIVE_QUEUE.md`. Extract/style/boundaries: [RFC 0002](rfcs/0002-extract-and-boundaries.md). Long features get an RFC; this file only points at them.
 
-Ship on `origin/main`. Talk through changes before any `git push origin`. Do not open `upstream` PRs unless explicitly asked.
+Ship on `origin/main`. Talk through changes before a local commit (see [README.md](README.md)). Do not open `upstream` PRs unless explicitly asked.
 
 ## Now
 

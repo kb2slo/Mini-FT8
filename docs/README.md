@@ -37,7 +37,7 @@ Do not expand `main.cpp` without extracting a tested function. Extract/style/rad
 
 This fork ships on **`origin/main`** (`kb2slo/Mini-FT8`). Do **not** push or open PRs to `upstream` (`wcheng95/Mini-FT8`) unless the operator explicitly asks. Staying mergeable with upstream is not a goal.
 
-Talk through any code change or proposed solution in chat **before** pushing to `origin`. Local edits and commits are fine when the operator asked for the work; `git push origin` waits until they have seen the diff/plan and said to push. Do not treat “ship on main” as standing permission to push.
+Talk through any code change or proposed solution in chat **before** a local commit. Local edits are fine when the operator asked for the work; `git commit` waits until they have seen the diff/plan and said to commit. `git push origin` waits until they have seen it and said to push. Do not treat “ship on main” or “local commits are fine” as standing permission to commit or push.
 
 ### Roadmap intake (ideas)
 
