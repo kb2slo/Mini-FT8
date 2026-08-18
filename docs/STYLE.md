@@ -42,6 +42,8 @@ Document the mix. Do not rename `main.cpp` to match a purer scheme.
 - `CamelCase` types and enums
 - Component prefix on exported symbols (`adif_`, `storage_`, `autoseq_`, `radio_control_`)
 
+Prefer a full word over an unexplained abbreviation in new and extracted names (`capabilities` not `caps`). Documented prefixes (`g_`, `s_`) stay. Do not restyle `main.cpp` or vendored `M5*` / `ft8_lib` to match.
+
 New extracts follow this on day one. Old names in `main.cpp` change only when that function moves out.
 
 ## Headers and includes
