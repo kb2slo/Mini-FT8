@@ -31,9 +31,9 @@ Update `ROADMAP.md` in the **same turn** as the work:
 - Next to build → **Now** (one theme)
 - Shipped → **Done**; drop the row from Now/Backlog
 
-Each row has a type: `fix` | `extract` | `feature` | `ci` | `docs`.
+Each row is an ID plus a name. Do not mix a feature change with an unrelated fix in the same commit.
 
-Do not expand `main.cpp` without extracting a tested function. Do not mix a `feature` change with an unrelated `fix`. Extract/style/radio/`ft8_lib` campaign: [RFC 0002](rfcs/0002-extract-and-boundaries.md).
+Do not expand `main.cpp` without extracting a tested function. Extract/style/radio/`ft8_lib` campaign: [RFC 0002](rfcs/0002-extract-and-boundaries.md).
 
 This fork ships on **`origin/main`** (`kb2slo/Mini-FT8`). Do **not** push or open PRs to `upstream` (`wcheng95/Mini-FT8`) unless the operator explicitly asks. Staying mergeable with upstream is not a goal.
 

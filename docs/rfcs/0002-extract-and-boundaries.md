@@ -2,7 +2,7 @@
 
 * **Status:** Accepted for execution
 * **Author:** Jeff Kalikstein, KB2SLO
-* **Covers:** I11 (style + dead code), B3 (host-linkable extracts), B9 (`ft8_lib`), radio contract (pre-I5)
+* **Covers:** extract / style / `ft8_lib` / radio contract (pre-I5). This RFC is Roadmap Now; §2 is Done-when. Was I11 / B3 / B9.
 * **Does not cover:** I3 companion, I6 multi-mode rename, I8/I9/I10 QMX product features
 
 ## 1. Why
@@ -13,7 +13,7 @@
 2. Upstream `ft8_lib` — ingest Karlis’s updates and send clean patches back.
 3. Other radios — QMX/QMX+ must not be assumed in the core, so a maintainer can add a radio without editing the slot loop.
 
-This RFC is the campaign plan. `docs/STYLE.md` is the short coding standard. Chat is intake; those files are truth.
+This RFC is the campaign plan and the Done-when. `docs/STYLE.md` is the short coding standard. `docs/ROADMAP.md` only points here while this is Now. Chat is intake; those files are truth.
 
 ## 2. Outcomes (done when)
 
@@ -80,19 +80,19 @@ Contributor test: a second radio can be added without touching `main.cpp`. We do
 
 Restyle and rename only the unit you are already changing.
 
-| Slice | What | Roadmap |
+| Slice | What | Status |
 |---|---|---|
-| A | This RFC + `STYLE.md` + agent workflow tenant | I11 start (docs) |
-| B | Widen radio ops/caps; move meter and QMX `if`s out of dispatcher/`main` | pre-I5 extract |
-| C | Pin `ft8_lib`, wrappers, documented bump path; goldens gate the pin | B9 |
-| D | Station parse/serialize + B5 `sscanf` fix; host round-trip | B3, B5 |
-| E | ADIF 10-min *logger* dedupe into `components/adif` (merge already shipped) | B3 remainder |
-| F | TA format (kill `tx_e2e` copy), decode sort, power hysteresis | B3 remainder |
-| G | Dead-code pass on each extracted unit | I11 ongoing |
+| A | This RFC + `STYLE.md` + agent workflow tenant | Done (D10) |
+| B | Widen radio ops/caps; move meter and QMX `if`s out of dispatcher/`main` | Later; needs ADV. Pre-I5. |
+| C | Pin `ft8_lib`, wrappers, documented bump path; goldens gate the pin | Next. Was B9. |
+| D | Station parse/serialize + `sscanf` date/time overlap; host round-trip | Later. Was B3/B5. |
+| E | ADIF 10-min *logger* dedupe into `components/adif` (merge already shipped) | Later. Was B3 remainder. |
+| F | TA format (kill `tx_e2e` copy), decode sort, power hysteresis | Later. Was B3 remainder. |
+| G | Dead-code pass on each extracted unit | Ongoing per extracted unit. |
 
-B7 (non-blocking FATFS) is sequenced after Station/QSO browse have a module to move, not before.
+One open slice at a time. **Next is C** (`ft8_lib`; no ADV required). Slice B waits on ADV. G is dead code on the unit you are already extracting, not a separate Now. B7 (non-blocking FATFS) is after Station/QSO browse have a module to move.
 
-I11 Done-when: `STYLE.md` matches this RFC; slices B–F have landed or are explicitly still Backlog with a Done-when; vendored trees untouched by format; host tests green.
+Campaign Done-when is §2.
 
 ## 9. What this is not
 
