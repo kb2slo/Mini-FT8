@@ -335,8 +335,18 @@ static esp_err_t kh1_on_audio_start(void) {
     return ESP_OK;
 }
 
+static const radio_control_capabilities_t k_capabilities = {
+    .has_wattmeter = false,
+    .has_swr = false,
+    .can_set_time = false,
+    .audio_is_uac = false,
+    .can_md8_tune = false,
+    .can_ps0 = false,
+};
+
 static const radio_control_ops_t k_ops = {
     .name = "kh1_cat",
+    .capabilities = &k_capabilities,
     .ready = kh1_ready,
     .on_audio_start = kh1_on_audio_start,
     .sync_frequency_mode = kh1_sync_frequency_mode,
@@ -345,6 +355,10 @@ static const radio_control_ops_t k_ops = {
     .end_tx = kh1_end_tx,
     .set_tune = kh1_set_tune,
     .set_time = nullptr,
+    .reset_tx_power_swr = nullptr,
+    .poll_tx_power_swr = nullptr,
+    .get_tx_power_swr = nullptr,
+    .begin_cpfsk_tx = nullptr,
 };
 
 const radio_control_ops_t* radio_control_kh1_get_ops(void) {

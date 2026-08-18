@@ -1650,8 +1650,8 @@ static void draw_tx_hud(bool force) {
   float power_w = -1.f;
   float swr = -1.f;
   if (!aborted) {
-    radio_control_poll_tx_meters();
-    (void)radio_control_get_tx_meters(&power_w, &swr);
+    radio_control_poll_tx_power_swr();
+    (void)radio_control_get_tx_power_swr(&power_w, &swr);
   }
   const int pc_key = (int)(power_w * 10.f + 0.5f);
   const int sw_key = (int)(swr * 100.f + 0.5f);
@@ -3855,17 +3855,17 @@ static void tx_start(int skip_tones) {
     }
   }
 
-  // QDX uses sample-counted UAC OUT. QMX and KH1 retain their existing
-  // per-symbol CAT paths.
-  if (g_tx_cat_ok && canonical_radio_type(g_radio) == RadioType::QDX) {
+  if (g_tx_cat_ok) {
     const int remaining_tones = g_protocol->total_symbols - g_tx_tone_idx;
-    if (remaining_tones <= 0 ||
-        !uac_tx_begin_cpfsk(static_cast<float>(g_tx_base_hz),
-                            g_tx_tones + g_tx_tone_idx,
-                            static_cast<size_t>(remaining_tones),
-                            g_protocol->tone_spacing,
-                            g_protocol->samples_per_symbol)) {
-      ESP_LOGW(TAG, "tx_start: QDX UAC OUT start failed");
+    const size_t n = remaining_tones > 0 ? (size_t)remaining_tones : 0;
+    const esp_err_t cpfsk = radio_control_begin_cpfsk_tx(
+        static_cast<float>(g_tx_base_hz),
+        n ? g_tx_tones + g_tx_tone_idx : nullptr,
+        n,
+        g_protocol->tone_spacing,
+        g_protocol->samples_per_symbol);
+    if (cpfsk != ESP_OK && cpfsk != ESP_ERR_NOT_SUPPORTED) {
+      ESP_LOGW(TAG, "tx_start: radio CPFSK TX start failed: %s", esp_err_to_name(cpfsk));
       radio_control_end_tx();
       g_tx_cat_ok = false;
       return;

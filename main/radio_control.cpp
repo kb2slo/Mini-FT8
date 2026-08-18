@@ -3,14 +3,12 @@
 #include "radio_control_backend.h"
 
 #include "esp_log.h"
-#include "stream_uac.h"
 
 static const char* TAG = "RADIO_CTRL";
 
 static radio_control_backend_t s_backend = RADIO_CONTROL_QMX;
-static bool s_meter_poll_disabled;
-static int s_meter_poll_misses;
-static constexpr int kMeterPollGiveUp = 4;
+
+static const radio_control_capabilities_t k_capabilities_none = {};
 
 static const radio_control_ops_t* current_ops(void) {
     switch (s_backend) {
@@ -19,9 +17,9 @@ static const radio_control_ops_t* current_ops(void) {
     case RADIO_CONTROL_QDX:
         return radio_control_qdx_get_ops();
     case RADIO_CONTROL_QMX:
-    default:
         return radio_control_qmx_get_ops();
     }
+    return radio_control_qmx_get_ops();
 }
 
 void radio_control_set_backend(radio_control_backend_t backend) {
@@ -42,9 +40,16 @@ const char* radio_control_backend_name(radio_control_backend_t backend) {
         return "kh1_cat";
     case RADIO_CONTROL_QDX:
         return "qdx";
-    default:
-        return "unknown";
     }
+    return "unknown";
+}
+
+const radio_control_capabilities_t* radio_control_get_capabilities(void) {
+    const radio_control_ops_t* ops = current_ops();
+    if (!ops || !ops->capabilities) {
+        return &k_capabilities_none;
+    }
+    return ops->capabilities;
 }
 
 bool radio_control_ready(void) {
@@ -66,7 +71,7 @@ esp_err_t radio_control_sync_frequency_mode(int freq_hz) {
 }
 
 esp_err_t radio_control_begin_tx(int freq_hz, int tx_base_hz) {
-    radio_control_reset_tx_meters();
+    radio_control_reset_tx_power_swr();
     const radio_control_ops_t* ops = current_ops();
     if (!ops || !ops->begin_tx) return ESP_ERR_INVALID_STATE;
     return ops->begin_tx(freq_hz, tx_base_hz);
@@ -96,68 +101,42 @@ esp_err_t radio_control_set_time(int hour, int minute, int second) {
     return ops->set_time(hour, minute, second);
 }
 
-void radio_control_reset_tx_meters(void) {
-    cat_cdc_reset_parsed_meters();
-    s_meter_poll_disabled = false;
-    s_meter_poll_misses = 0;
+esp_err_t radio_control_begin_cpfsk_tx(float base_hz,
+                                       const uint8_t* symbols,
+                                       size_t symbol_count,
+                                       float tone_spacing_hz,
+                                       uint32_t samples_per_symbol) {
+    const radio_control_ops_t* ops = current_ops();
+    if (!ops || !ops->begin_cpfsk_tx) return ESP_ERR_NOT_SUPPORTED;
+    return ops->begin_cpfsk_tx(base_hz, symbols, symbol_count, tone_spacing_hz,
+                               samples_per_symbol);
 }
 
-void radio_control_poll_tx_meters(void) {
-    if (s_meter_poll_disabled) {
-        return;
-    }
-    // Only QMX documents PC; (forward watts) and SW; (SWR). QDX PC; is a
-    // Kenwood power *setting*, not a wattmeter — never send it. KH1 has no
-    // equivalent. QMX PC/SW HUD path has been tested; QDX/KH1 have not.
-    if (s_backend != RADIO_CONTROL_QMX) {
-        s_meter_poll_disabled = true;
-        return;
-    }
-    if (!cat_cdc_ready()) {
-        s_meter_poll_misses++;
-        if (s_meter_poll_misses >= kMeterPollGiveUp) {
-            s_meter_poll_disabled = true;
-            ESP_LOGW(TAG, "TX meters: CAT not ready, giving up this TX");
-        }
-        return;
-    }
-
-    const esp_err_t err =
-        cat_cdc_send(reinterpret_cast<const uint8_t*>("PC;SW;"), 6, 10);
-    if (err != ESP_OK) {
-        s_meter_poll_disabled = true;
-        ESP_LOGW(TAG, "TX meters: CAT send failed (%s), giving up this TX",
-                 esp_err_to_name(err));
-        return;
-    }
-
-    int pc = -1;
-    int sw = -1;
-    if (cat_cdc_get_parsed_meters(&pc, &sw) && (pc >= 0 || sw >= 0)) {
-        s_meter_poll_misses = 0;
-        return;
-    }
-    s_meter_poll_misses++;
-    if (s_meter_poll_misses >= kMeterPollGiveUp) {
-        s_meter_poll_disabled = true;
-        ESP_LOGW(TAG, "TX meters: no PC/SW replies (old firmware?), hiding RF line");
-    }
+void radio_control_reset_tx_power_swr(void) {
+    const radio_control_ops_t* ops = current_ops();
+    if (!ops || !ops->reset_tx_power_swr) return;
+    ops->reset_tx_power_swr();
 }
 
-bool radio_control_get_tx_meters(float* power_w, float* swr) {
-    if (s_backend != RADIO_CONTROL_QMX) {
+static bool power_swr_supported(void) {
+    const radio_control_capabilities_t* capabilities = radio_control_get_capabilities();
+    return capabilities->has_wattmeter || capabilities->has_swr;
+}
+
+void radio_control_poll_tx_power_swr(void) {
+    if (!power_swr_supported()) {
+        return;
+    }
+    const radio_control_ops_t* ops = current_ops();
+    if (!ops || !ops->poll_tx_power_swr) return;
+    ops->poll_tx_power_swr();
+}
+
+bool radio_control_get_tx_power_swr(float* power_w, float* swr) {
+    if (!power_swr_supported()) {
         return false;
     }
-    int pc = -1;
-    int sw = -1;
-    if (!cat_cdc_get_parsed_meters(&pc, &sw)) {
-        return false;
-    }
-    if (power_w) {
-        *power_w = pc >= 0 ? pc / 10.0f : -1.f;
-    }
-    if (swr) {
-        *swr = sw >= 0 ? sw / 100.0f : -1.f;
-    }
-    return pc >= 0 || sw >= 0;
+    const radio_control_ops_t* ops = current_ops();
+    if (!ops || !ops->get_tx_power_swr) return false;
+    return ops->get_tx_power_swr(power_w, swr);
 }

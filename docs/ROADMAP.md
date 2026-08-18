@@ -10,7 +10,7 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 | ID | Item | Done when |
 |---|---|---|
-| RFC 0002 | Extract, style, and boundaries | Outcomes in [RFC 0002](rfcs/0002-extract-and-boundaries.md) §2. Follow that RFC’s execution order (one slice at a time). Was I11. |
+| RFC 0002 | Extract, style, and boundaries | Outcomes in [RFC 0002](rfcs/0002-extract-and-boundaries.md) §2. Open slice: **C** (`ft8_lib`). Slice B (radio ops/capabilities) is done. One slice at a time. Was I11. |
 
 ## Backlog
 

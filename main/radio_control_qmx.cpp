@@ -10,6 +10,10 @@
 
 static const char* TAG = "RADIO_QMX";
 
+static bool s_power_swr_poll_disabled;
+static int s_power_swr_poll_misses;
+static constexpr int kPowerSwrPollGiveUp = 4;
+
 static bool qmx_ready(void) {
     return cat_cdc_ready();
 }
@@ -42,7 +46,6 @@ static esp_err_t qmx_sync_frequency_mode(int freq_hz) {
 static esp_err_t qmx_begin_tx(int freq_hz, int tx_base_hz) {
     (void)freq_hz;
     (void)tx_base_hz;
-    cat_cdc_reset_parsed_meters();
 
     const char* md = "MD6;";
     esp_err_t err = qmx_send_cmd(md, 200);
@@ -121,8 +124,74 @@ static esp_err_t qmx_set_time(int hour, int minute, int second) {
     return err;
 }
 
+static void qmx_reset_tx_power_swr(void) {
+    cat_cdc_reset_parsed_meters();
+    s_power_swr_poll_disabled = false;
+    s_power_swr_poll_misses = 0;
+}
+
+static void qmx_poll_tx_power_swr(void) {
+    if (s_power_swr_poll_disabled) {
+        return;
+    }
+    if (!cat_cdc_ready()) {
+        s_power_swr_poll_misses++;
+        if (s_power_swr_poll_misses >= kPowerSwrPollGiveUp) {
+            s_power_swr_poll_disabled = true;
+            ESP_LOGW(TAG, "TX power/SWR: CAT not ready, giving up this TX");
+        }
+        return;
+    }
+
+    const esp_err_t err =
+        cat_cdc_send(reinterpret_cast<const uint8_t*>("PC;SW;"), 6, 10);
+    if (err != ESP_OK) {
+        s_power_swr_poll_disabled = true;
+        ESP_LOGW(TAG, "TX power/SWR: CAT send failed (%s), giving up this TX",
+                 esp_err_to_name(err));
+        return;
+    }
+
+    int pc = -1;
+    int sw = -1;
+    if (cat_cdc_get_parsed_meters(&pc, &sw) && (pc >= 0 || sw >= 0)) {
+        s_power_swr_poll_misses = 0;
+        return;
+    }
+    s_power_swr_poll_misses++;
+    if (s_power_swr_poll_misses >= kPowerSwrPollGiveUp) {
+        s_power_swr_poll_disabled = true;
+        ESP_LOGW(TAG, "TX power/SWR: no PC/SW replies (old firmware?), hiding RF line");
+    }
+}
+
+static bool qmx_get_tx_power_swr(float* power_w, float* swr) {
+    int pc = -1;
+    int sw = -1;
+    if (!cat_cdc_get_parsed_meters(&pc, &sw)) {
+        return false;
+    }
+    if (power_w) {
+        *power_w = pc >= 0 ? pc / 10.0f : -1.f;
+    }
+    if (swr) {
+        *swr = sw >= 0 ? sw / 100.0f : -1.f;
+    }
+    return pc >= 0 || sw >= 0;
+}
+
+static const radio_control_capabilities_t k_capabilities = {
+    .has_wattmeter = true,
+    .has_swr = true,
+    .can_set_time = true,
+    .audio_is_uac = true,
+    .can_md8_tune = true,
+    .can_ps0 = true,
+};
+
 static const radio_control_ops_t k_ops = {
     .name = "qmx",
+    .capabilities = &k_capabilities,
     .ready = qmx_ready,
     .on_audio_start = qmx_on_audio_start,
     .sync_frequency_mode = qmx_sync_frequency_mode,
@@ -131,6 +200,10 @@ static const radio_control_ops_t k_ops = {
     .end_tx = qmx_end_tx,
     .set_tune = qmx_set_tune,
     .set_time = qmx_set_time,
+    .reset_tx_power_swr = qmx_reset_tx_power_swr,
+    .poll_tx_power_swr = qmx_poll_tx_power_swr,
+    .get_tx_power_swr = qmx_get_tx_power_swr,
+    .begin_cpfsk_tx = nullptr,
 };
 
 const radio_control_ops_t* radio_control_qmx_get_ops(void) {

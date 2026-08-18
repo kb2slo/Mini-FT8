@@ -20,7 +20,7 @@ This RFC is the campaign plan and the Done-when. `docs/STYLE.md` is the short co
 1. **Written standard.** `docs/STYLE.md` is the coding rule for *our* C/C++. New and extracted code follows it. Vendored `M5*` / `ft8_lib` do not.
 2. **Module ratchet.** New behavior does not land as more `main.cpp`. It gets a named unit, a header that is the API, and a host test if it is parse / format / policy. `main.cpp` may only shrink.
 3. **Vendor boundary.** `ft8_lib` is a pinned upstream (SHA) plus Mini-FT8 wrappers. Protocol patches are rebaseable commits on our fork. Bump path is 3-way merge + `tx_e2e` golden RX/encode. Karlis’s files look like Karlis’s files.
-4. **Radio boundary.** Core talks `radio_control` **ops + capabilities**. QMX CAT, meters, `MD8`, `PS0;`, and UAC profile live in the QMX backend. `main.cpp` does not `if (QMX)`. QMX and QMX+ are one backend until CAT differs.
+4. **Radio boundary.** Core talks `radio_control` **ops + capabilities**. QMX CAT, TX power/SWR, `MD8`, `PS0;`, and UAC profile live in the QMX backend. `main.cpp` does not `if (QMX)`. QMX and QMX+ are one backend until CAT differs.
 5. **Host tests stay green.** Field-only paths (USB/CDC/CAT, UAC timing/DRAM, display/SPI, full-slot audio) are unchanged unless a dedicated follow-up says otherwise.
 
 ## 3. Non-goals
@@ -66,9 +66,9 @@ Keep and widen `radio_control_ops_t`. Do not replace it with a class hierarchy.
 
 **Capabilities** (flags/struct the core and HUD ask): `has_wattmeter`, `has_swr`, `can_set_time`, `audio_is_uac`, `can_md8_tune`, `can_ps0`, and the audio-source binding. No `if (backend == QMX)` in `main.cpp` or in the dispatcher.
 
-**One `.cpp` per radio.** New radio = fill ops + caps, register one table row. No edit to the slot loop.
+**One `.cpp` per radio.** New radio = fill ops + capabilities, register one table row. No edit to the slot loop.
 
-**Meters** move from the QMX `if` in `radio_control.cpp` onto ops/caps.
+**TX power/SWR** move from the QMX `if` in `radio_control.cpp` onto ops/capabilities.
 
 **QMX and QMX+** are one backend.
 
@@ -83,14 +83,14 @@ Restyle and rename only the unit you are already changing.
 | Slice | What | Status |
 |---|---|---|
 | A | This RFC + `STYLE.md` + agent workflow tenant | Done (D10) |
-| B | Widen radio ops/caps; move meter and QMX `if`s out of dispatcher/`main` | Later; needs ADV. Pre-I5. |
+| B | Widen radio ops/capabilities; move power/SWR and QMX `if`s out of dispatcher/`main` | Done. ADV + QMX+ on desk. Pre-I5. |
 | C | Pin `ft8_lib`, wrappers, documented bump path; goldens gate the pin | Next. Was B9. |
 | D | Station parse/serialize + `sscanf` date/time overlap; host round-trip | Later. Was B3/B5. |
 | E | ADIF 10-min *logger* dedupe into `components/adif` (merge already shipped) | Later. Was B3 remainder. |
 | F | TA format (kill `tx_e2e` copy), decode sort, power hysteresis | Later. Was B3 remainder. |
 | G | Dead-code pass on each extracted unit | Ongoing per extracted unit. |
 
-One open slice at a time. **Next is C** (`ft8_lib`; no ADV required). Slice B waits on ADV. G is dead code on the unit you are already extracting, not a separate Now. B7 (non-blocking FATFS) is after Station/QSO browse have a module to move.
+One open slice at a time. **Next is C** (`ft8_lib`; no ADV required). G is dead code on the unit you are already extracting, not a separate Now. B7 (non-blocking FATFS) is after Station/QSO browse have a module to move.
 
 Campaign Done-when is §2.
 
