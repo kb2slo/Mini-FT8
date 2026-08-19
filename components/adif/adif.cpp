@@ -1,6 +1,8 @@
 #include "adif.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -208,6 +210,22 @@ void append_unique(std::vector<AdifRecord>& out,
     }
 }
 
+void logger_dedupe_prune(AdifLoggerDedupe* io, std::int64_t now_ms) {
+    auto& recent = io->recent;
+    recent.erase(
+        std::remove_if(recent.begin(), recent.end(),
+                       [&](const AdifLoggerDedupeEntry& e) {
+                           return (now_ms - e.logged_ms) > kAdifLoggerDedupeWindowMs;
+                       }),
+        recent.end());
+    if (recent.size() > kAdifLoggerDedupeMaxEntries) {
+        recent.erase(
+            recent.begin(),
+            recent.begin() +
+                static_cast<std::ptrdiff_t>(recent.size() - kAdifLoggerDedupeMaxEntries));
+    }
+}
+
 }  // namespace
 
 bool adif_is_adi_filename(const std::string& name_or_path) {
@@ -288,4 +306,35 @@ AdifMergeStatus adif_merge_export(const std::string& archive,
     append_unique(merged, keys, incoming_recs);
     out = adif_format(merged);
     return AdifMergeStatus::OK;
+}
+
+bool adif_logger_dedupe_is_duplicate(AdifLoggerDedupe* io,
+                                     const std::string& call_norm,
+                                     std::int64_t now_ms) {
+    if (call_norm.empty()) {
+        return false;
+    }
+    logger_dedupe_prune(io, now_ms);
+    for (const AdifLoggerDedupeEntry& e : io->recent) {
+        if (e.call == call_norm) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void adif_logger_dedupe_remember(AdifLoggerDedupe* io,
+                                 const std::string& call_norm,
+                                 std::int64_t now_ms) {
+    if (call_norm.empty()) {
+        return;
+    }
+    logger_dedupe_prune(io, now_ms);
+    for (AdifLoggerDedupeEntry& e : io->recent) {
+        if (e.call == call_norm) {
+            e.logged_ms = now_ms;
+            return;
+        }
+    }
+    io->recent.push_back(AdifLoggerDedupeEntry{call_norm, now_ms});
 }

@@ -244,10 +244,41 @@ int main() {
     parsed = must_parse(out, "parse no-header");
     expect_true(parsed.size() == 2, "no-header two records");
 
+    {
+        AdifLoggerDedupe d;
+        expect_true(!adif_logger_dedupe_is_duplicate(&d, "", 0), "empty never dup");
+        adif_logger_dedupe_remember(&d, "", 0);
+        expect_true(d.recent.empty(), "empty remember is no-op");
+
+        adif_logger_dedupe_remember(&d, "K1ABC", 1000);
+        expect_true(adif_logger_dedupe_is_duplicate(&d, "K1ABC", 1000), "same instant");
+        expect_true(adif_logger_dedupe_is_duplicate(&d, "K1ABC", 1000 + kAdifLoggerDedupeWindowMs),
+                    "still dup at window edge");
+        expect_true(!adif_logger_dedupe_is_duplicate(&d, "K1ABC",
+                                                    1000 + kAdifLoggerDedupeWindowMs + 1),
+                    "expired after window");
+        expect_true(!adif_logger_dedupe_is_duplicate(&d, "W1AW", 1000), "other call");
+
+        adif_logger_dedupe_remember(&d, "N0CALL", 2000);
+        adif_logger_dedupe_remember(&d, "N0CALL", 2000 + kAdifLoggerDedupeWindowMs);
+        expect_true(adif_logger_dedupe_is_duplicate(&d, "N0CALL",
+                                                    2000 + kAdifLoggerDedupeWindowMs + 1),
+                    "remember refreshes window");
+
+        AdifLoggerDedupe cap;
+        for (std::size_t i = 0; i < kAdifLoggerDedupeMaxEntries + 1; ++i) {
+            adif_logger_dedupe_remember(&cap, "C" + std::to_string(i), 0);
+        }
+        expect_true(!adif_logger_dedupe_is_duplicate(&cap, "C0", 0), "oldest dropped at cap");
+        expect_true(adif_logger_dedupe_is_duplicate(
+                        &cap, "C" + std::to_string(kAdifLoggerDedupeMaxEntries), 0),
+                    "newest kept");
+    }
+
     if (g_fails != 0) {
         fprintf(stderr, "%d failure(s)\n", g_fails);
         return 1;
     }
-    printf("PASS: adif merge export\n");
+    printf("PASS: adif merge export and logger dedupe\n");
     return 0;
 }

@@ -60,6 +60,7 @@ extern "C" {
 #include "external_rtc.h"
 
 #include "storage_service.h"
+#include "adif.h"
 
 static const char* STATION_FILE = "Station.txt";
 
@@ -1202,51 +1203,7 @@ static void qso_draw_page() {
   }
 }
 
-static constexpr int64_t kAdifDedupeWindowMs = 10 * 60 * 1000LL;
-static constexpr size_t kAdifDedupeMaxEntries = 32;
-
-struct AdifDedupeEntry {
-  std::string call;
-  int64_t logged_ms = 0;
-};
-
-static std::vector<AdifDedupeEntry> s_adif_recent_logs;
-
-static void adif_dedupe_prune(int64_t now_ms) {
-  s_adif_recent_logs.erase(
-      std::remove_if(s_adif_recent_logs.begin(), s_adif_recent_logs.end(),
-                     [&](const AdifDedupeEntry& e) {
-                       return (now_ms - e.logged_ms) > kAdifDedupeWindowMs;
-                     }),
-      s_adif_recent_logs.end());
-  if (s_adif_recent_logs.size() > kAdifDedupeMaxEntries) {
-    s_adif_recent_logs.erase(
-        s_adif_recent_logs.begin(),
-        s_adif_recent_logs.begin() +
-            static_cast<std::ptrdiff_t>(s_adif_recent_logs.size() - kAdifDedupeMaxEntries));
-  }
-}
-
-static bool adif_dedupe_is_duplicate(const std::string& call_norm, int64_t now_ms) {
-  if (call_norm.empty()) return false;
-  adif_dedupe_prune(now_ms);
-  for (const auto& e : s_adif_recent_logs) {
-    if (e.call == call_norm) return true;
-  }
-  return false;
-}
-
-static void adif_dedupe_remember(const std::string& call_norm, int64_t now_ms) {
-  if (call_norm.empty()) return;
-  adif_dedupe_prune(now_ms);
-  for (auto& e : s_adif_recent_logs) {
-    if (e.call == call_norm) {
-      e.logged_ms = now_ms;
-      return;
-    }
-  }
-  s_adif_recent_logs.push_back(AdifDedupeEntry{call_norm, now_ms});
-}
+static AdifLoggerDedupe s_adif_logger_dedupe;
 
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd) {
   if (storage_writes_blocked()) {
@@ -1256,7 +1213,7 @@ static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid,
   }
   const int64_t now_ms = rtc_now_ms();
   const std::string call_norm = normalize_call_token(dxcall);
-  if (adif_dedupe_is_duplicate(call_norm, now_ms)) {
+  if (adif_logger_dedupe_is_duplicate(&s_adif_logger_dedupe, call_norm, now_ms)) {
     ESP_LOGI(TAG, "ADIF dedupe skip %s (within 10 min)", call_norm.c_str());
     return true;  // treat as success so autoseq does not retry-write
   }
@@ -1315,7 +1272,7 @@ static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid,
     debug_log_line(std::string("ADIF fail ") + path);
     return false;
   }
-  adif_dedupe_remember(call_norm, now_ms);
+  adif_logger_dedupe_remember(&s_adif_logger_dedupe, call_norm, now_ms);
   return true;
 }
 
@@ -3521,7 +3478,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
     char dxnorm[DEC_FIELD_MAX];
     dec_normalize_call(d->field2, dxnorm, DEC_FIELD_MAX);
     d->is_recent_qso = (dxnorm[0] != '\0') &&
-                       adif_dedupe_is_duplicate(std::string(dxnorm), now_ms);
+                       adif_logger_dedupe_is_duplicate(&s_adif_logger_dedupe, std::string(dxnorm), now_ms);
 
     log_rxtx_line('R', snr_q, (int)lrintf(freq_hz), std::string(final_text), -1);
 

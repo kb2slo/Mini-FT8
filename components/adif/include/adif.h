@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -28,3 +29,25 @@ std::string adif_format(const std::vector<AdifRecord>& records);
 AdifMergeStatus adif_merge_export(const std::string& archive,
                                   const std::string& incoming,
                                   std::string& out);
+
+// In-memory same-call window for the live logger. Not used by merge/export.
+// Callers pass a normalized call (uppercase, <> stripped). Empty call is ignored.
+static constexpr std::int64_t kAdifLoggerDedupeWindowMs = 10 * 60 * 1000LL;
+static constexpr std::size_t kAdifLoggerDedupeMaxEntries = 32;
+
+struct AdifLoggerDedupeEntry {
+    std::string call;
+    std::int64_t logged_ms = 0;
+};
+
+struct AdifLoggerDedupe {
+    std::vector<AdifLoggerDedupeEntry> recent;
+};
+
+bool adif_logger_dedupe_is_duplicate(AdifLoggerDedupe* io,
+                                     const std::string& call_norm,
+                                     std::int64_t now_ms);
+
+void adif_logger_dedupe_remember(AdifLoggerDedupe* io,
+                                 const std::string& call_norm,
+                                 std::int64_t now_ms);
