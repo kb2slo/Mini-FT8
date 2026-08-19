@@ -369,11 +369,8 @@ void core_fire_waterfall_row(int sym,
 // Commands
 // ---------------------------------------------------------------------------
 
-// Save deferral: every save_station_data call below would otherwise run
-// on a shallow caller task whose stack may not accommodate the 22-
-// fprintf chain in save_station_data plus filesystem internals. Set the
-// flag instead — the main UI loop on the deeper app_task_core0 stack
-// drains it within ~10 ms.
+// Save deferral: serialize Station.txt on the main task (deeper stack);
+// the worker does the FATFS write. Core commands only set this flag.
 extern volatile bool g_config_save_pending;
 
 // Helper: apply a string setter + request save + fire config event.

@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "station.cpp"
+    SRCS "station.cpp" "station_save_queue.cpp"
     INCLUDE_DIRS "include"
 )
 

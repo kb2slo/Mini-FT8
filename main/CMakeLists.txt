@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS "main.cpp"
          "copy_to_sd.cpp"
+         "station_save_worker.cpp"
          "autoseq.cpp"
          "audio_source.cpp"
          "core_api.cpp"

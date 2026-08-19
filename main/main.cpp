@@ -25,6 +25,7 @@ extern "C" {
 #include "esp_freertos_hooks.h"
 #include "autoseq.h"
 #include "station.h"
+#include "station_save_worker.h"
 #include "qso_browse.h"
 #include "copy_to_sd.h"
 #include "core_api.h"
@@ -2337,6 +2338,7 @@ static void low_batt_apply_halt() {
   g_qso_xmit = false;
   g_pending_tx_valid = false;
   if (storage_service_firmware_available()) {
+    station_save_worker_flush();
     (void)storage_service_flush_all();
   }
   redraw_countdown_now();
@@ -4285,6 +4287,7 @@ static void host_handle_line(const std::string& line_in) {
 
       // Wait until the second boundary, then set ESP RTC and sleep
       if (wait_ms > 0) vTaskDelay(pdMS_TO_TICKS(wait_ms));
+      station_save_worker_flush();
       struct timeval tv = { .tv_sec = sleep_epoch, .tv_usec = 0 };
       settimeofday(&tv, NULL);
     }
@@ -4627,12 +4630,7 @@ void save_station_data() {
   }
   StationSettings s;
   station_fill_from_globals(&s);
-  if (!storage_file_write_atomic(STATION_FILE, station_serialize(s))) {
-    ESP_LOGE(TAG, "Failed to write %s", STATION_FILE);
-    debug_log_line("Station write failed");
-    return;
-  }
-  core_fire_config_changed();
+  station_save_worker_submit(station_serialize(s));
 }
 
 static void enter_mode(UIMode new_mode) {
@@ -4772,6 +4770,7 @@ static void enter_msc_mode(const char* reason) {
   audio_source_stop();
   vTaskDelay(pdMS_TO_TICKS(200));
 
+  station_save_worker_flush();
   (void)storage_service_flush_all();
 
   if (uac_ensure_host_uninstalled() != ESP_OK) {
@@ -4852,6 +4851,7 @@ static void app_task_core0(void* /*param*/) {
              esp_err_to_name(storage_err));
     debug_log_line("Storage init fail");
   }
+  station_save_worker_init();
 
   if (storage_service_firmware_available()) {
     storage_sync_station_from_sd();

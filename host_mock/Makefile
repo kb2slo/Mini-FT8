@@ -34,9 +34,11 @@ DECODE_SORT_TARGET = host_test_decode_sort
 POWER_TARGET = host_test_power_hysteresis
 QSO_BROWSE_TARGET = host_test_qso_browse
 COPY_BLOCK_TARGET = host_test_copy_block
+STATION_SAVE_TARGET = host_test_station_save_queue
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
-     $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET)
+     $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
+     $(STATION_SAVE_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -81,6 +83,12 @@ COPY_BLOCK_OBJ = test_copy_block.o
 $(COPY_BLOCK_TARGET): $(COPY_BLOCK_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+STATION_SAVE_OBJ = station_save_queue.o test_station_save_queue.o
+station_save_queue.o: ../components/station/station_save_queue.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(STATION_SAVE_TARGET): $(STATION_SAVE_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
@@ -90,7 +98,9 @@ $(COPY_BLOCK_TARGET): $(COPY_BLOCK_OBJ)
 clean:
 	rm -f $(OBJ) $(UNIQUE_OBJ) $(CANCEL_OBJ) $(ADIF_OBJ) $(STATION_OBJ) \
 	      $(DECODE_SORT_OBJ) $(POWER_OBJ) $(QSO_BROWSE_OBJ) $(COPY_BLOCK_OBJ) \
+	      $(STATION_SAVE_OBJ) \
 	      $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
-	      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET)
+	      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
+	      $(STATION_SAVE_TARGET)
 
 .PHONY: all clean
