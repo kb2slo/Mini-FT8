@@ -10,6 +10,7 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 | ID | Item | Done when |
 |---|---|---|
+| B7 | Main loop never blocks on FATFS | QSO browse/copy and Station save on a worker or time-sliced reads. Slot/TX keep running. **Partial:** QSO `.adi` page read is time-sliced (16 lines/tick). Field: beacon TX while on Q. Copy and Station save still block. |
 | RFC 0002 | Extract, style, and boundaries | Outcomes in [RFC 0002](rfcs/0002-extract-and-boundaries.md) §2. No open extract slice. Slices A–B and D–H done. Slice C (`ft8_lib` pin) parked. Was I11. |
 
 ## Backlog
@@ -17,7 +18,6 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 | ID | Item | Why / constraint |
 |---|---|---|
 | B4 | SD `Station.txt` clobbers flash | `storage_sync_station_from_sd()` on boot. **Partial:** skip import when internal `Station.txt` already exists. Still no timestamp/opt-in if flash is empty and SD is stale. Rides RFC 0002 slice D (Station extract). |
-| B7 | Main loop never blocks on FATFS | QSO browse/copy and Station save on a worker or time-sliced reads. Slot/TX keep running. **Partial:** QSO browse parse/format is `components/qso_browse` (RFC 0002 H). List/read and Station save still block the loop. |
 | B8 | `DECODE_HEAP` every decode | `ESP_LOGW` enter/exit; UART time on a tight loop. Demote or gate. |
 | B10 | See callsigns while TX HUD would cover the R list | Queue a QSO when the HUD would otherwise eat the decode list. **UX deferred until this is Now:** repeated `R` toggle vs dedicated `H` (HUD) vs always-visible list + banner. Abort must stay visible. Same unique-callsign tap rules as D8. Field-only display; not CI. Distinct from CQ-only filter (I1). Was I14. |
 | B11 | QMX+ AUX GPS into ADV Grove | Route QMX+ GPS NMEA **out AUX** over a 2.5mm-to-Grove cable into Cardputer PORTA; USB-C stays QMX UAC+CAT. Explore pinout/levels/baud, fix firmware if PORTA GPS does not lock with QMX+ selected, document the operator path (G-screen, STATUS `G`, `GNSS_LoRa` off so PORTA is used). Distinct from a GPS puck on Grove and from the LoRa-1262 GNSS cap. Field-only; ADV + QMX+. Do not mix into RFC 0002. |

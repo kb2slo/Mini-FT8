@@ -715,6 +715,7 @@ static void qso_load_file_list();
 static void qso_load_fetch_file_list();
 static void delete_load_file_list();
 static void qso_load_entries(const std::string& path);
+static void qso_load_entries_tick();
 static void qso_draw_page();
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter = -1);
@@ -1038,33 +1039,72 @@ static void qso_rebuild_entry_lines() {
   qso_browse_format_entry_lines(g_q_entries, g_q_page_view, &g_q_lines);
 }
 
+static constexpr int kQsoBrowseLinesPerTick = 16;
+static StorageStream* s_qso_load_stream = nullptr;
+static QsoBrowsePager s_qso_load_pager;
+static std::vector<QsoBrowseBand> s_qso_load_bands;
+static bool s_qso_load_active = false;
+
+static void qso_load_entries_cancel() {
+  if (s_qso_load_stream) {
+    storage_stream_close(s_qso_load_stream);
+    s_qso_load_stream = nullptr;
+  }
+  s_qso_load_active = false;
+}
+
 static void qso_load_entries(const std::string& path) {
+  qso_load_entries_cancel();
   g_q_entries.clear();
   g_q_lines.clear();
   g_q_entries_have_next_page = false;
-  StorageStream* stream = storage_stream_open(path, StorageOpenMode::READ);
-  if (!stream) {
+  s_qso_load_stream = storage_stream_open(path, StorageOpenMode::READ);
+  if (!s_qso_load_stream) {
     g_q_lines.push_back("Open fail");
     return;
   }
-  QsoBrowsePager pager;
-  qso_browse_pager_reset(&pager, std::max(0, q_page) * 6, 6);
-  std::vector<QsoBrowseBand> bands;
-  bands.reserve(g_bands.size());
+  qso_browse_pager_reset(&s_qso_load_pager, std::max(0, q_page) * 6, 6);
+  s_qso_load_bands.clear();
+  s_qso_load_bands.reserve(g_bands.size());
   for (const auto& b : g_bands) {
-    bands.push_back({b.name, b.freq});
+    s_qso_load_bands.push_back({b.name, b.freq});
+  }
+  g_q_lines.push_back("Loading...");
+  s_qso_load_active = true;
+}
+
+static void qso_load_entries_tick() {
+  if (!s_qso_load_active || !s_qso_load_stream) {
+    return;
   }
   char line[512];
-  while (storage_stream_read_line(stream, line, sizeof(line))) {
-    if (!qso_browse_pager_feed(&pager, std::string(line), bands.data(),
-                              static_cast<int>(bands.size()))) {
+  int n = 0;
+  bool more = true;
+  while (n < kQsoBrowseLinesPerTick) {
+    if (!storage_stream_read_line(s_qso_load_stream, line, sizeof(line))) {
+      more = false;
+      break;
+    }
+    ++n;
+    if (!qso_browse_pager_feed(&s_qso_load_pager, std::string(line),
+                               s_qso_load_bands.data(),
+                               static_cast<int>(s_qso_load_bands.size()))) {
+      more = false;
       break;
     }
   }
-  storage_stream_close(stream);
-  g_q_entries = std::move(pager.entries);
-  g_q_entries_have_next_page = pager.has_next;
+  if (more) {
+    return;
+  }
+  storage_stream_close(s_qso_load_stream);
+  s_qso_load_stream = nullptr;
+  s_qso_load_active = false;
+  g_q_entries = std::move(s_qso_load_pager.entries);
+  g_q_entries_have_next_page = s_qso_load_pager.has_next;
   qso_rebuild_entry_lines();
+  if (ui_mode == UIMode::QSO && g_q_show_entries) {
+    qso_draw_page();
+  }
 }
 
 static void qso_draw_page() {
@@ -4667,6 +4707,9 @@ void save_station_data() {
 
 static void enter_mode(UIMode new_mode) {
   // No special handling needed when leaving TX mode - autoseq manages queue internally
+  if (ui_mode == UIMode::QSO && new_mode != UIMode::QSO) {
+    qso_load_entries_cancel();
+  }
   if (ui_mode == UIMode::STATUS && new_mode != UIMode::STATUS) {
     if (board_power_halted()) {
       g_status_beacon_temp = BeaconMode::OFF;
@@ -5106,6 +5149,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     check_slot_boundary();  // TX trigger at slot boundary (matching reference architecture)
     tx_tick();              // Process TX state machine (single-threaded, non-blocking)
     tx_abort_hud_tick();
+    qso_load_entries_tick();
 
     // Drain deferred config saves requested by core commands.
     if (g_config_save_pending && storage_service_firmware_available() &&
@@ -5540,7 +5584,16 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               }
             }
           } else {
-            if (c == ',') {  // left: default view (time / band / call)
+            if (c == '`') {
+              // back to file list
+              qso_load_entries_cancel();
+              g_q_show_entries = false;
+              q_page = 0;
+              qso_load_file_list();
+              qso_draw_page();
+            } else if (s_qso_load_active) {
+              // Keep slot/TX ticking; ignore view/page keys until this page is in.
+            } else if (c == ',') {  // left: default view (time / band / call)
               if (g_q_page_view != QsoBrowsePageView::Default) {
                 g_q_page_view = QsoBrowsePageView::Default;
                 qso_rebuild_entry_lines();
@@ -5556,12 +5609,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               if (q_page > 0) { q_page--; qso_load_entries(g_q_current_file); qso_draw_page(); }
             } else if (c == '.') {
               if (g_q_entries_have_next_page) { q_page++; qso_load_entries(g_q_current_file); qso_draw_page(); }
-            } else if (c == '`') {
-              // back to file list
-              g_q_show_entries = false;
-              q_page = 0;
-              qso_load_file_list();
-              qso_draw_page();
             }
           }
           break;
