@@ -4,4 +4,5 @@ host_test
 host_test_unique_callsign
 host_test_beacon_cancel
 host_test_adif_merge
+host_test_station
 

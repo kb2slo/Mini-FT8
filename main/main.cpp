@@ -24,6 +24,7 @@ extern "C" {
 #include "esp_heap_caps.h"
 #include "esp_freertos_hooks.h"
 #include "autoseq.h"
+#include "station.h"
 #include "core_api.h"
 #include "core_api_internal.h"
 #include <M5Cardputer.h>
@@ -640,7 +641,6 @@ static std::string g_ignore_prefix_text;
 std::vector<std::string> g_ignore_prefixes;     // visible to core_api.cpp
 static bool g_rxtx_log = true;
 static RadioType canonical_radio_type(RadioType r);
-static RadioType parse_radio_config_value(const char* raw);
 static bool is_kh1_radio(RadioType r);
 static bool radio_type_uses_display_only(RadioType r);
 static RadioProfileBinding get_radio_profile_binding(RadioType r);
@@ -1803,34 +1803,6 @@ static RadioType radio_type_from_saved_int(int value) {
     default:
       return RadioType::QMX;
   }
-}
-
-static RadioType parse_radio_config_value(const char* raw) {
-  if (!raw) return RadioType::QMX;
-
-  char* end = nullptr;
-  long as_int = strtol(raw, &end, 10);
-  if (end != raw) {
-    return radio_type_from_saved_int((int)as_int);
-  }
-
-  std::string token;
-  for (const char* p = raw; *p; ++p) {
-    unsigned char ch = (unsigned char)*p;
-    if (ch == '\r' || ch == '\n' || ch == ' ' || ch == '\t') continue;
-    token.push_back((char)std::toupper(ch));
-  }
-
-  if (token == "KH1" || token == "KH1-USBC" || token == "KH1_USBC" || token == "KH1USB") {
-    return RadioType::KH1_USBC;
-  }
-  if (token == "KH1-MIC" || token == "KH1_MIC" || token == "KH1MIC") {
-    return RadioType::KH1_MIC;
-  }
-  if (token == "QDX") {
-    return RadioType::QDX;
-  }
-  return RadioType::QMX;
 }
 
 static RadioProfileBinding get_radio_profile_binding(RadioType r) {
@@ -4688,26 +4660,134 @@ static void host_process_bytes(const uint8_t* buf, size_t len) {
   }
 }
 
+static std::string station_read_stream_text(StorageStream* stream) {
+  std::string text;
+  char line[256];
+  while (storage_stream_read_line(stream, line, sizeof(line))) {
+    text.append(line);
+  }
+  return text;
+}
+
+static void station_copy_bands_from_runtime(StationSettings* s, bool ft4_keys) {
+  const int n = (int)g_bands.size();
+  for (int i = 0; i < kStationBandCount; ++i) {
+    if (i >= n) {
+      break;
+    }
+    if (ft4_keys) {
+      s->ft4_band_freq[i] = g_bands[(size_t)i].freq;
+      s->ft4_band_freq_set[i] = true;
+    } else {
+      s->band_freq[i] = g_bands[(size_t)i].freq;
+      s->band_freq_set[i] = true;
+    }
+  }
+}
+
+static void station_fill_from_globals(StationSettings* s) {
+  station_settings_init(s);
+#if ENABLE_FT4
+  const bool ft4_keys = (g_protocol == &kProtocolFT4);
+  s->serialize_ft4_band_keys = ft4_keys;
+  s->protocol_ft4 = g_protocol_pending_ft4;
+#else
+  const bool ft4_keys = false;
+  s->serialize_ft4_band_keys = false;
+  s->protocol_ft4 = false;
+#endif
+  station_copy_bands_from_runtime(s, ft4_keys);
+  s->offset_hz = g_offset_hz;
+  s->band_sel = g_band_sel;
+  s->date = g_date;
+  s->time = g_time;
+  s->cq_type = (int)g_cq_type;
+  s->cq_freetext = g_cq_freetext;
+  s->skip_tx1 = g_skip_tx1;
+  s->free_text = g_free_text;
+  s->call = g_call;
+  s->grid = g_grid_saved_manual;
+  s->offset_src = (int)g_offset_src;
+  s->radio = (int)canonical_radio_type(g_radio);
+  s->gps_baud = g_gps_baud;
+  s->gnss_lora = g_gnss_lora_enabled;
+  s->comment1 = g_comment1;
+  s->ignore_prefixes = g_ignore_prefix_text;
+  s->rxtx_log = g_rxtx_log;
+  s->active_bands = g_active_band_text;
+  s->rtc_sleep_epoch = (std::int64_t)g_rtc_sleep_epoch;
+  s->rtc_comp = g_rtc_comp;
+  s->autoseq_max_retry = g_autoseq_max_retry;
+}
+
+static void station_apply_to_globals(const StationSettings& s) {
+#if ENABLE_FT4
+  const bool use_ft4_bands = s.protocol_ft4;
+  if (use_ft4_bands) {
+    g_protocol = &kProtocolFT4;
+    g_bands = {
+      {"160m", 1843.0f}, {"80m",  3575.0f}, {"60m",  5357.0f}, {"40m",  7047.5f},
+      {"30m", 10140.0f}, {"20m", 14080.0f}, {"17m", 18104.0f}, {"15m", 21140.0f},
+      {"12m", 24919.0f}, {"10m", 28180.0f}, {"6m",  50318.0f}, {"2m", 144170.0f},
+    };
+    ESP_LOGI(TAG, "Station.txt: protocol_mode=FT4 — reset bands to FT4 defaults");
+  }
+#else
+  const bool use_ft4_bands = false;
+#endif
+  const bool* freq_set = use_ft4_bands ? s.ft4_band_freq_set : s.band_freq_set;
+  const float* freqs = use_ft4_bands ? s.ft4_band_freq : s.band_freq;
+  for (int i = 0; i < kStationBandCount; ++i) {
+    if (freq_set[i] && i < (int)g_bands.size()) {
+      g_bands[(size_t)i].freq = freqs[i];
+    }
+  }
+  g_offset_hz = s.offset_hz;
+  if (s.band_sel >= 0 && s.band_sel < (int)g_bands.size()) {
+    g_band_sel = s.band_sel;
+  }
+  g_date = s.date;
+  g_time = s.time;
+  g_cq_type = (CqType)s.cq_type;
+  g_cq_freetext = s.cq_freetext;
+  g_skip_tx1 = s.skip_tx1;
+  autoseq_set_skip_tx1(g_skip_tx1);
+  g_free_text = s.free_text;
+  g_call = s.call;
+  if (!s.grid.empty()) {
+    g_grid = s.grid;
+    g_grid_saved_manual = g_grid;
+    g_grid_from_gps = false;
+    g_grid_gps_display8.clear();
+  }
+  g_offset_src = (OffsetSrc)s.offset_src;
+  g_radio = radio_type_from_saved_int(s.radio);
+  g_gps_baud = normalize_gps_baud_value(s.gps_baud);
+  g_gnss_lora_enabled = s.gnss_lora;
+  g_comment1 = s.comment1;
+  g_ignore_prefix_text = clamp_ignore_prefix_text(s.ignore_prefixes);
+  g_rxtx_log = s.rxtx_log;
+  g_active_band_text = s.active_bands;
+  g_rtc_sleep_epoch = (time_t)s.rtc_sleep_epoch;
+  g_rtc_comp = clamp_rtc_comp_value(s.rtc_comp);
+  g_autoseq_max_retry = s.autoseq_max_retry;
+}
+
 static RadioType load_station_radio_type_only() {
   StorageStream* stream = storage_stream_open(STATION_FILE, StorageOpenMode::READ);
   if (!stream) return canonical_radio_type(g_radio);
 
-  char line[128];
-  RadioType radio = canonical_radio_type(g_radio);
-  while (storage_stream_read_line(stream, line, sizeof(line))) {
-    if (strncmp(line, "radio=", 6) == 0) {
-      radio = parse_radio_config_value(line + 6);
-      break;
-    }
-  }
+  StationSettings s;
+  station_settings_init(&s);
+  s.radio = (int)canonical_radio_type(g_radio);
+  station_parse(station_read_stream_text(stream), &s);
   storage_stream_close(stream);
-  return canonical_radio_type(radio);
+  return canonical_radio_type(radio_type_from_saved_int(s.radio));
 }
 
 static void load_station_data() {
   storage_sync_station_from_sd();
 
-  // Load-time defaults for runtime settings.
   g_rtc_comp = kRtcCompFixed;
   g_autoseq_max_retry = AUTOSEQ_MAX_RETRY;
   g_gps_baud = 115200;
@@ -4716,139 +4796,26 @@ static void load_station_data() {
   g_grid_from_gps = false;
   g_grid_gps_display8.clear();
 
-  {
-    StorageStream* stream = storage_stream_open(STATION_FILE, StorageOpenMode::READ);
-    if (!stream) {
-      autoseq_set_max_retry(g_autoseq_max_retry);
-      return;
-    }
-
-#if ENABLE_FT4
-    // Pass 1: detect protocol_mode so we can set correct band defaults before
-    // the full parse overwrites them.  Band entries are written before
-    // protocol_mode in Station.txt, so a single-pass parse would load FT8
-    // frequencies and never correct them when switching to FT4.
-    {
-      char line1[128];
-      while (storage_stream_read_line(stream, line1, sizeof(line1))) {
-        if (strncmp(line1, "protocol_mode=", 14) == 0) {
-          char mode[8] = {};
-          sscanf(line1 + 14, "%7s", mode);
-          if (strcmp(mode, "FT4") == 0) {
-            g_protocol = &kProtocolFT4;
-            // Reset band frequencies to FT4 defaults.  The full parse below
-            // will overwrite individual entries if the user has saved custom
-            // FT4 frequencies (band0=…, band1=…, …).
-            g_bands = {
-              {"160m", 1843.0f}, {"80m",  3575.0f}, {"60m",  5357.0f}, {"40m",  7047.5f},
-              {"30m", 10140.0f}, {"20m", 14080.0f}, {"17m", 18104.0f}, {"15m", 21140.0f},
-              {"12m", 24919.0f}, {"10m", 28180.0f}, {"6m",  50318.0f}, {"2m", 144170.0f},
-            };
-            ESP_LOGI(TAG, "Station.txt: protocol_mode=FT4 — reset bands to FT4 defaults");
-          }
-          break;
-        }
-      }
-      storage_stream_seek(stream, 0, SEEK_SET);
-    }
-#endif  // ENABLE_FT4
-
-    // Pass 2 (or only pass when ENABLE_FT4=0): full field parse.
-    char line[128];
-    while (storage_stream_read_line(stream, line, sizeof(line))) {
-      int idx = -1;
-      int val = 0;
-      float fval = 0.0f;
-#if ENABLE_FT4
-      // Per-protocol band keys: FT4 uses "ft4_band%d=", FT8 uses "band%d=".
-      // This prevents FT4 frequencies (e.g. 14080) from overwriting FT8
-      // defaults (e.g. 14074) when switching protocol and rebooting.
-      const bool is_ft4_boot = (g_protocol == &kProtocolFT4);
-      const int band_parse_ok = is_ft4_boot
-          ? sscanf(line, "ft4_band%d=%f", &idx, &fval)
-          : sscanf(line, "band%d=%f",     &idx, &fval);
-      if (band_parse_ok == 2) {
-#else
-      if (sscanf(line, "band%d=%f", &idx, &fval) == 2) {
-#endif
-      if (idx >= 0 && idx < (int)g_bands.size()) {
-        g_bands[idx].freq = fval;
-      }
-    } else if (sscanf(line, "beacon=%d", &val) == 1) {
-      // beacon persists OFF only; ignore saved value
-    } else if (sscanf(line, "offset=%d", &val) == 1) {
-      g_offset_hz = val;
-    } else if (sscanf(line, "band_sel=%d", &val) == 1) {
-      if (val >= 0 && val < (int)g_bands.size()) g_band_sel = val;
-    } else if (sscanf(line, "date=%63s", line) == 1) {
-      g_date = line;
-    } else if (sscanf(line, "time=%63s", line) == 1) {
-      g_time = normalize_time_hms(line);
-    } else if (sscanf(line, "cq_type=%d", &val) == 1) {
-      if (val >= 0 && val <= 5) g_cq_type = (CqType)val;
-    } else if (sscanf(line, "offset_src=%d", &val) == 1) {
-      if (val >= 0 && val <= 2) g_offset_src = (OffsetSrc)val;
-    } else if (strncmp(line, "radio=", 6) == 0) {
-      g_radio = parse_radio_config_value(line + 6);
-    } else if (sscanf(line, "gps_baud=%d", &val) == 1) {
-      g_gps_baud = normalize_gps_baud_value(val);
-    } else if (sscanf(line, "gnss_lora=%d", &val) == 1) {
-      g_gnss_lora_enabled = (val != 0);
-    } else if (sscanf(line, "gps_source=%d", &val) == 1) {
-      if (val == 2) g_gnss_lora_enabled = true;
-    } else if (strncmp(line, "cq_ft=", 6) == 0) {
-      g_cq_freetext = trim_upper_copy(line + 6);
-    } else if (strncmp(line, "free_text=", 10) == 0) {
-      g_free_text = trim_upper_copy(line + 10);
-    } else if (strncmp(line, "call=", 5) == 0) {
-      g_call = trim_upper_copy(line + 5);
-    } else if (strncmp(line, "grid=", 5) == 0) {
-      const std::string norm_grid = normalize_grid_maidenhead(line + 5);
-      if (!norm_grid.empty()) {
-        g_grid = norm_grid;
-        g_grid_saved_manual = g_grid;
-        g_grid_from_gps = false;
-        g_grid_gps_display8.clear();
-      }
-    } else if (strncmp(line, "comment1=", 9) == 0) {
-      g_comment1 = trim_copy(line + 9);
-    } else if (strncmp(line, "ignore_prefixes=", 16) == 0) {
-      g_ignore_prefix_text = clamp_ignore_prefix_text(trim_upper_copy(line + 16));
-    } else if (sscanf(line, "rxtx_log=%d", &val) == 1) {
-      g_rxtx_log = (val != 0);
-    } else if (sscanf(line, "skiptx1=%d", &val) == 1) {
-      g_skip_tx1 = (val != 0); autoseq_set_skip_tx1(g_skip_tx1);
-    } else if (sscanf(line, "active_band=%d", &val) == 1) { // legacy single value
-      g_active_band_text = std::to_string(val);
-    } else if (strncmp(line, "active_bands=", 13) == 0) {
-      g_active_band_text = trim_upper_copy(line + 13);
-    } else if (sscanf(line, "autoseq_max_retry=%d", &val) == 1) {
-      if (val >= 0) g_autoseq_max_retry = val;
-    } else if (strncmp(line, "protocol_mode=", 14) == 0) {
-      // Already handled in pass 1 above (g_protocol + band defaults set there).
-      // Nothing to do here in pass 2.
-      (void)0;
-    } else if (sscanf(line, "rtc_comp=%d", &val) == 1) {
-      g_rtc_comp = clamp_rtc_comp_value(val);
-    } else {
-      long long epoch_tmp = 0;
-      if (sscanf(line, "rtc_sleep_epoch=%lld", &epoch_tmp) == 1) {
-        g_rtc_sleep_epoch = (time_t)epoch_tmp;
-      }
-    }
-    }
-    storage_stream_close(stream);
+  StorageStream* stream = storage_stream_open(STATION_FILE, StorageOpenMode::READ);
+  if (!stream) {
+    autoseq_set_max_retry(g_autoseq_max_retry);
+    return;
   }
+
+  StationSettings s;
+  station_fill_from_globals(&s);
+  station_parse(station_read_stream_text(stream), &s);
+  storage_stream_close(stream);
+  station_apply_to_globals(s);
+
   autoseq_set_max_retry(g_autoseq_max_retry);
-  // Prefer an external DS3231 when present, then ESP RTC/deep-sleep
-  // compensation, then the saved Station.txt strings.
   if (!rtc_init_from_ds3231() && !rtc_init_from_esp_rtc()) {
     ESP_LOGI(TAG, "No valid DS3231 or ESP RTC time; using saved time strings");
     rtc_set_from_strings_source(RtcTimeSource::SAVED);
   }
   rebuild_active_bands();
   rebuild_ignore_prefixes();
-  g_beacon = BeaconMode::OFF; // force off on load
+  g_beacon = BeaconMode::OFF;
 #if ENABLE_FT4
   g_protocol_pending_ft4 = (g_protocol == &kProtocolFT4);
 #endif
@@ -4869,57 +4836,13 @@ void save_station_data() {
     debug_log_line("Station skip: storage busy");
     return;
   }
-  std::ostringstream out;
-#if ENABLE_FT4
-  // Per-protocol band keys keep FT8 and FT4 frequencies independent so that
-  // switching protocol (reboot-to-apply) doesn't cross-contaminate band lists.
-  const char* band_prefix = (g_protocol == &kProtocolFT4) ? "ft4_band" : "band";
-#else
-  const char* band_prefix = "band";
-#endif
-  for (size_t i = 0; i < g_bands.size(); ++i) {
-    char fbuf[16];
-    float f = g_bands[i].freq;
-    if (f == (int)f) snprintf(fbuf, sizeof(fbuf), "%d", (int)f);
-    else             snprintf(fbuf, sizeof(fbuf), "%.1f", f);
-    out << band_prefix << (unsigned)i << "=" << fbuf << "\n";
-  }
-  // Beacon is not persisted (stays OFF on reload)
-  out << "offset=" << g_offset_hz << "\n";
-  out << "band_sel=" << g_band_sel << "\n";
-  out << "date=" << g_date << "\n";
-  out << "time=" << g_time << "\n";
-  out << "cq_type=" << (int)g_cq_type << "\n";
-  out << "cq_ft=" << g_cq_freetext << "\n";
-  out << "skiptx1=" << (g_skip_tx1 ? 1 : 0) << "\n";
-  out << "free_text=" << g_free_text << "\n";
-  out << "call=" << g_call << "\n";
-  out << "grid=" << g_grid_saved_manual << "\n";
-  out << "offset_src=" << (int)g_offset_src << "\n";
-  out << "radio=" << (int)canonical_radio_type(g_radio) << "\n";
-  out << "gps_baud=" << normalize_gps_baud_value(g_gps_baud) << "\n";
-  out << "gnss_lora=" << (g_gnss_lora_enabled ? 1 : 0) << "\n";
-  out << "comment1=" << g_comment1 << "\n";
-  out << "ignore_prefixes=" << g_ignore_prefix_text << "\n";
-  out << "rxtx_log=" << (g_rxtx_log ? 1 : 0) << "\n";
-  out << "active_bands=" << g_active_band_text << "\n";
-  out << "rtc_sleep_epoch=" << (long long)g_rtc_sleep_epoch << "\n";
-  out << "rtc_comp=" << g_rtc_comp << "\n";
-  out << "autoseq_max_retry=" << g_autoseq_max_retry << "\n";
-#if ENABLE_FT4
-  // Save the pending protocol mode (may differ from g_protocol if user toggled
-  // Mode in the menu without rebooting yet).
-  if (g_protocol_pending_ft4) {
-    out << "protocol_mode=FT4\n";
-  }
-#endif
-  if (!storage_file_write_atomic(STATION_FILE, out.str())) {
+  StationSettings s;
+  station_fill_from_globals(&s);
+  if (!storage_file_write_atomic(STATION_FILE, station_serialize(s))) {
     ESP_LOGE(TAG, "Failed to write %s", STATION_FILE);
     debug_log_line("Station write failed");
     return;
   }
-  // Every config mutation in the Cardputer UI funnels through here, so this
-  // is the canonical place to notify core_api consumers.
   core_fire_config_changed();
 }
 

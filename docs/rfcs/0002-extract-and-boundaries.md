@@ -84,13 +84,13 @@ Restyle and rename only the unit you are already changing.
 |---|---|---|
 | A | This RFC + `STYLE.md` + agent workflow tenant | Done (D10) |
 | B | Widen radio ops/capabilities; move power/SWR and QMX `if`s out of dispatcher/`main` | Done. ADV + QMX+ on desk. Pre-I5. |
-| C | Pin `ft8_lib`, wrappers, documented bump path; goldens gate the pin | Next. Was B9. |
-| D | Station parse/serialize + `sscanf` date/time overlap; host round-trip | Later. Was B3/B5. |
-| E | ADIF 10-min *logger* dedupe into `components/adif` (merge already shipped) | Later. Was B3 remainder. |
+| C | Pin `ft8_lib`, wrappers, documented bump path; goldens gate the pin | Parked. Was B9. Resume after later slices as needed. |
+| D | Station parse/serialize + `sscanf` date/time overlap; host round-trip | Done. `components/station`; `host_test_station`. Field: load/save/reboot on ADV. Was B3/B5. |
+| E | ADIF 10-min *logger* dedupe into `components/adif` (merge already shipped) | Next. Was B3 remainder. |
 | F | TA format (kill `tx_e2e` copy), decode sort, power hysteresis | Later. Was B3 remainder. |
 | G | Dead-code pass on each extracted unit | Ongoing per extracted unit. |
 
-One open slice at a time. **Next is C** (`ft8_lib`; no ADV required). G is dead code on the unit you are already extracting, not a separate Now. B7 (non-blocking FATFS) is after Station/QSO browse have a module to move.
+One open slice at a time. **Next is E** (ADIF logger dedupe). C (`ft8_lib`) is parked, not dropped. G is dead code on the unit you are already extracting, not a separate Now. B7 (non-blocking FATFS) is after Station/QSO browse have a module to move.
 
 Campaign Done-when is §2.
 
