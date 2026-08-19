@@ -32,7 +32,7 @@ Not scheduled. Move to Backlog with a Done-when before implementing. Large produ
 |---|---|---|
 | I1 | CQ-only R filter | Community ask; sort/filter only, after decode-sort extract (RFC 0002 slice F). |
 | I2 | Accidental `C` (USB Drive) guard | Easy to enter MSC; confirm or require long-press. |
-| I3 | Companion app | Phone/desktop beside the Cardputer: logs, spotting, maybe config. Started as BLE RFC: `docs/rfcs/0001-ble-companion.md` on branch `rfc/0001-ble-companion`. Transport (BLE vs USB vs Wi‑Fi) is still open; do not grow `main.cpp` into an app server. Ties to I4 (`core_api` / native client). |
+| I3 | Companion app | Phone/desktop beside the Cardputer: logs, spotting, maybe config. BLE RFC: [0001](rfcs/0001-ble-companion.md). **RAM is the gate:** DIRAM remain is the QMX heap, not a BLE allowance; Phase 1 follows the RFC §4 measurement loop (link-time DIRAM + field largest DMA block). Transport (BLE vs USB vs Wi‑Fi) is still open if NimBLE does not fit. Do not grow `main.cpp` into an app server. Ties to I4 (`core_api` / native client). |
 | I4 | `NATIVE_CLIENT_ARCHITECTURE.md` | Referenced by `core_api.cpp`; missing. Write when `core_api` is more than a facade over `main.cpp` globals. Needed for I3. |
 | I5 | More radios (FTX-1, FT-817, …) | Field + CAT; not host-CI. After radio_control is less tangled with `main`. |
 | I6 | Multi-mode product (working name `miniFTx` or similar) | Stop treating FT8 as the product. FT4 should be first-class (already compile/runtime, not a second-class `ENABLE_FT4` carve-out). JS8Call next as a real mode (timing, alphabet, autoseq — not a skin). Prefer a name that is not FT-only; exact name is an RFC, not a drive-by rename of repo/binaries. Depends on RFC 0002 extracts and a mode-agnostic slot/audio core. |
