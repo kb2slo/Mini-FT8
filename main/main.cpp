@@ -56,6 +56,8 @@ extern "C" {
 #include "dds_q15.h"
 #include "radio_control.h"
 #include "radio_control_backend.h"
+#include "radio_ta_format.h"
+#include "decode_sort.h"
 #include "gps.h"
 #include "external_rtc.h"
 
@@ -3274,24 +3276,12 @@ static void dec_normalize_call(const char* src, char* out, int out_sz) {
   out[len] = '\0';
 }
 
-// Sort: to_me, then fresh CQ (strongest first), then other fresh, then recent QSOs.
-static int dec_sort_group(const DecodeMsg* d) {
-  if (d->is_to_me) return 0;
-  if (d->is_recent_qso) return 3;
-  if (d->is_cq) return 1;
-  return 2;
-}
-
 static int dec_sort_cmp(const void* a, const void* b) {
   const DecodeMsg* da = (const DecodeMsg*)a;
   const DecodeMsg* db = (const DecodeMsg*)b;
-  int ga = dec_sort_group(da);
-  int gb = dec_sort_group(db);
-  if (ga != gb) return ga - gb;
-  if (ga == 1 && da->snr != db->snr) {
-    return db->snr - da->snr;
-  }
-  return 0;
+  const DecodeSortEntry ea = {da->is_to_me, da->is_recent_qso, da->is_cq, da->snr};
+  const DecodeSortEntry eb = {db->is_to_me, db->is_recent_qso, db->is_cq, db->snr};
+  return decode_sort_cmp(&ea, &eb);
 }
 
 void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool update_ui) {
@@ -3705,9 +3695,9 @@ static bool schedule_manual_pending_tx(const AutoseqTxEntry& pending) {
 
 // Helper to send TA command (deduplicated)
 static void tx_send_ta(float tone_hz) {
-  int ta_int = (int)lrintf(tone_hz);
-  float frac = tone_hz - (float)ta_int;
-  int ta_frac = (int)lrintf(frac * 100.0f);
+  int ta_int = 0;
+  int ta_frac = 0;
+  radio_ta_parts(tone_hz, &ta_int, &ta_frac);
   if (ta_int == g_tx_last_ta_int && ta_frac == g_tx_last_ta_frac) return;
   if (radio_control_set_tone_hz(tone_hz) == ESP_OK) {
     g_tx_last_ta_int = ta_int;

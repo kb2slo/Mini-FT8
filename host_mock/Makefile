@@ -7,7 +7,8 @@ CFLAGS   = -DHOST_MOCK -g -Wall
 INCLUDES = -I. -I../main -I../components/ui/include \
            -I../components/ft8_lib -I../components/ft8_lib/ft8 \
            -I../components/adif/include \
-           -I../components/station/include
+           -I../components/station/include \
+           -I../components/board_cardputer_adv/include
 
 CORE_SRC   = ../main/autoseq.cpp
 MOCK_SRC   = host_main.cpp host_mocks.cpp json_parser.cpp
@@ -28,8 +29,11 @@ UNIQUE_TARGET = host_test_unique_callsign
 CANCEL_TARGET = host_test_beacon_cancel
 ADIF_TARGET = host_test_adif_merge
 STATION_TARGET = host_test_station
+DECODE_SORT_TARGET = host_test_decode_sort
+POWER_TARGET = host_test_power_hysteresis
 
-all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET)
+all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
+     $(DECODE_SORT_TARGET) $(POWER_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -54,6 +58,16 @@ station.o: ../components/station/station.cpp
 $(STATION_TARGET): $(STATION_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+DECODE_SORT_OBJ = test_decode_sort.o
+$(DECODE_SORT_TARGET): $(DECODE_SORT_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+POWER_OBJ = power_hysteresis.o test_power_hysteresis.o
+power_hysteresis.o: ../components/board_cardputer_adv/power_hysteresis.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(POWER_TARGET): $(POWER_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
@@ -62,6 +76,8 @@ $(STATION_TARGET): $(STATION_OBJ)
 
 clean:
 	rm -f $(OBJ) $(UNIQUE_OBJ) $(CANCEL_OBJ) $(ADIF_OBJ) $(STATION_OBJ) \
-	      $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET)
+	      $(DECODE_SORT_OBJ) $(POWER_OBJ) \
+	      $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
+	      $(DECODE_SORT_TARGET) $(POWER_TARGET)
 
 .PHONY: all clean

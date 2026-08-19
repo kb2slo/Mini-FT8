@@ -10,7 +10,7 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 | ID | Item | Done when |
 |---|---|---|
-| RFC 0002 | Extract, style, and boundaries | Outcomes in [RFC 0002](rfcs/0002-extract-and-boundaries.md) §2. Open slice: **F** (TA format, decode sort, power hysteresis). Slice E (ADIF logger dedupe) is done. Slice C (`ft8_lib` pin) parked. One slice at a time. Was I11. |
+| RFC 0002 | Extract, style, and boundaries | Outcomes in [RFC 0002](rfcs/0002-extract-and-boundaries.md) §2. Open slice: **G** (dead code on extracted units). Slice F (TA format, decode sort, power hysteresis) is done. Slice C (`ft8_lib` pin) parked. One slice at a time. Was I11. |
 
 ## Backlog
 
@@ -68,8 +68,8 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 
 | Harness | Covers | Command |
 |---|---|---|
-| `host_mock/` | `autoseq.cpp`; JSON QSO / FD / beacon / reincarnation; unique R-tap callsign; ADIF merge and logger 10-min window; Station parse | `cd host_mock && make && ./host_test test_qso.json` / `./host_test_unique_callsign` / `./host_test_adif_merge` / `./host_test_station` |
+| `host_mock/` | `autoseq.cpp`; JSON QSO / FD / beacon / reincarnation; unique R-tap callsign; ADIF merge and logger 10-min window; Station parse; decode sort; battery hold hysteresis | `cd host_mock && make && ./host_test test_qso.json` / `./host_test_unique_callsign` / `./host_test_adif_merge` / `./host_test_station` / `./host_test_decode_sort` / `./host_test_power_hysteresis` |
 | `tests/tx_e2e/` | Encode, TA format, KH1 map, golden WAV RX | `cmake -S tests/tx_e2e -B tests/tx_e2e/build && cmake --build tests/tx_e2e/build && ctest --test-dir tests/tx_e2e/build --output-on-failure` |
 | `idf.py build` | `main/` `-Werror`; merged bin | ESP-IDF 5.5.1, target `esp32s3` |
 
-`core_api` still `extern`s `main.cpp` globals. TA format in `tx_e2e` is a copy, not the firmware function.
+`core_api` still `extern`s `main.cpp` globals. TA format is `radio_ta_format()` in firmware and `tx_e2e`.

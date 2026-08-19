@@ -1,6 +1,6 @@
 // test_ta_format.cpp
 // ──────────────────────────────────────────────────────────────────────────────
-// Validates the TA command string formatting logic used by qmx_set_tone_hz()
+// Validates radio_ta_format() / radio_ta_parts() used by qmx_set_tone_hz()
 // and tx_send_ta() in the firmware.
 //
 // The firmware formats QMX audio-frequency commands as:
@@ -27,22 +27,8 @@
 #include <cstring>
 #include <cstdlib>
 
-// Reimplementation of firmware's qmx_set_tone_hz formatting logic — both the
-// old (buggy) and new (fixed) versions — so this test is self-contained.
+#include "radio_ta_format.h"
 
-// Fixed version (uses floorf)
-static void format_ta_fixed(float tone_hz, char* out, int out_len) {
-    int   ta_int  = (int)floorf(tone_hz);
-    if (ta_int < 0) ta_int = 0;
-    if (ta_int > 9999) ta_int = 9999;
-    float frac    = tone_hz - (float)ta_int;
-    int   ta_frac = (int)lrintf(frac * 100.0f);
-    if (ta_frac < 0) ta_frac = 0;
-    if (ta_frac > 99) ta_frac = 99;
-    snprintf(out, out_len, "TA%04d.%02d;", ta_int, ta_frac);
-}
-
-// Old (buggy) version (uses lrintf) — kept so we can demonstrate the failure
 static void format_ta_buggy(float tone_hz, char* out, int out_len) {
     int   ta_int  = (int)lrintf(tone_hz);
     float frac    = tone_hz - (float)ta_int;
@@ -98,14 +84,14 @@ int main()
     printf("\n");
 
     // ── Part 2: Validate fixed formatting ────────────────────────────────
-    printf("Part 2: fixed floorf() formatting\n");
+    printf("Part 2: firmware radio_ta_format()\n");
     for (int s = 0; s < N_SETS; s++) {
         const ToneSet& ts = SETS[s];
         bool set_ok = true;
         for (int t = 0; t < ts.n_tones; t++) {
             float hz = ts.base_hz + t * ts.spacing_hz;
             char cmd[32];
-            format_ta_fixed(hz, cmd, sizeof(cmd));
+            radio_ta_format(hz, cmd, sizeof(cmd));
 
             // Parse ta_int and ta_frac back out of the formatted string
             int  parsed_int, parsed_frac;

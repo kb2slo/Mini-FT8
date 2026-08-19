@@ -1,4 +1,5 @@
 #include "board_power.h"
+#include "power_hysteresis.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -44,25 +45,6 @@ static constexpr int kSenseMinMv = 2800;
 static constexpr int kAdcAvgSamples = 8;
 static constexpr int kEmaNum = 3;
 static constexpr int kEmaDen = 4;
-
-static bool hold_hysteresis(bool current, int ema, int enter_mv, int exit_mv, int64_t* low_since_us)
-{
-    const int64_t now = esp_timer_get_time();
-    if (ema <= enter_mv) {
-        if (*low_since_us == 0) {
-            *low_since_us = now;
-        }
-        if ((now - *low_since_us) >= kHoldUs) {
-            return true;
-        }
-        return current;
-    }
-    *low_since_us = 0;
-    if (ema >= exit_mv) {
-        return false;
-    }
-    return current;
-}
 
 static int voltage_to_percent(int mv)
 {
@@ -175,8 +157,11 @@ esp_err_t board_power_read(board_power_status_t* out_status)
 
         const bool was_tx = g_tx_halted;
         const bool was_wr = g_writes_blocked;
-        g_tx_halted = hold_hysteresis(g_tx_halted, g_ema_mv, kTxEnterMv, kTxExitMv, &g_tx_low_since_us);
-        g_writes_blocked = hold_hysteresis(g_writes_blocked, g_ema_mv, kWriteEnterMv, kWriteExitMv, &g_write_low_since_us);
+        const int64_t now_us = esp_timer_get_time();
+        g_tx_halted = power_hold_hysteresis(g_tx_halted, g_ema_mv, kTxEnterMv, kTxExitMv,
+                                           now_us, kHoldUs, &g_tx_low_since_us);
+        g_writes_blocked = power_hold_hysteresis(g_writes_blocked, g_ema_mv, kWriteEnterMv,
+                                                kWriteExitMv, now_us, kHoldUs, &g_write_low_since_us);
         if (g_tx_halted && !was_tx) {
             ESP_LOGW(TAG, "battery TX halt enter ema=%d mV", g_ema_mv);
         } else if (!g_tx_halted && was_tx) {

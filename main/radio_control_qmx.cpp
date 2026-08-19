@@ -1,6 +1,6 @@
 #include "radio_control_backend.h"
+#include "radio_ta_format.h"
 
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -60,27 +60,8 @@ static esp_err_t qmx_begin_tx(int freq_hz, int tx_base_hz) {
 }
 
 static esp_err_t qmx_set_tone_hz(float tone_hz) {
-    // Three correctness fixes for the QMX TA command, all producing invalid
-    // commands the radio silently rejects:
-    //   1. Use floorf (not lrintf) for ta_int so frac is always in [0.0, 1.0).
-    //      lrintf rounds to nearest; 1520.83 -> ta_int=1521, frac=-0.17, which
-    //      formats as "TA1521.-17;" — invalid.
-    //   2. Clamp ta_frac to 99. lrintf(0.995 * 100) rounds up to 100 which
-    //      overflows %02d producing "TA1234.100;" — invalid. FT4's 20.8333 Hz
-    //      tone spacing makes this triggerable in normal operation.
-    //   3. Clamp ta_int to [0, 9999], the QMX TA command's documented range.
-    //      Defensive against any upstream bug producing an out-of-range tone,
-    //      and gives the compiler a tight upper bound so %04d is provably
-    //      4 chars and a 16-byte buffer suffices ("TA9999.99;\0" = 11 bytes).
-    int ta_int = (int)floorf(tone_hz);
-    if (ta_int < 0) ta_int = 0;
-    if (ta_int > 9999) ta_int = 9999;
-    float frac = tone_hz - (float)ta_int;     // always in [0.0, 1.0)
-    int ta_frac = (int)lrintf(frac * 100.0f); // 0..100 before clamp
-    if (ta_frac > 99) ta_frac = 99;           // clamp: %02d is 2 digits max
-
     char ta[32];
-    snprintf(ta, sizeof(ta), "TA%04d.%02d;", ta_int, ta_frac);
+    radio_ta_format(tone_hz, ta, sizeof(ta));
     return qmx_send_cmd(ta, 10);
 }
 

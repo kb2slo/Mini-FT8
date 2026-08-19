@@ -1,6 +1,7 @@
 #include "tx_state_machine.h"
 #include "../../components/ft8_lib/ft8/message.h"
 #include "../../components/ft8_lib/ft8/encode.h"
+#include "radio_ta_format.h"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -56,10 +57,9 @@ std::vector<CatEvent> run_tx(const TxConfig& cfg, int64_t loop_delay_ms) {
     // will dedup this on its first fire.
     int last_ta_int = -1, last_ta_frac = -1;
     auto record_ta = [&](float hz) {
-        // Use floorf to match firmware's tx_send_ta() logic — always round DOWN
-        // so frac is always in [0, 1), making ta_frac always 0..100.
-        int ta_int  = (int)floorf(hz);
-        int ta_frac = (int)lrintf((hz - (float)ta_int) * 100.0f);
+        int ta_int = 0;
+        int ta_frac = 0;
+        radio_ta_parts(hz, &ta_int, &ta_frac);
         if (ta_int != last_ta_int || ta_frac != last_ta_frac) {
             last_ta_int  = ta_int;
             last_ta_frac = ta_frac;
