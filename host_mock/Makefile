@@ -8,7 +8,8 @@ INCLUDES = -I. -I../main -I../components/ui/include \
            -I../components/ft8_lib -I../components/ft8_lib/ft8 \
            -I../components/adif/include \
            -I../components/station/include \
-           -I../components/board_cardputer_adv/include
+           -I../components/board_cardputer_adv/include \
+           -I../components/qso_browse/include
 
 CORE_SRC   = ../main/autoseq.cpp
 MOCK_SRC   = host_main.cpp host_mocks.cpp json_parser.cpp
@@ -31,9 +32,10 @@ ADIF_TARGET = host_test_adif_merge
 STATION_TARGET = host_test_station
 DECODE_SORT_TARGET = host_test_decode_sort
 POWER_TARGET = host_test_power_hysteresis
+QSO_BROWSE_TARGET = host_test_qso_browse
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
-     $(DECODE_SORT_TARGET) $(POWER_TARGET)
+     $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -68,6 +70,12 @@ power_hysteresis.o: ../components/board_cardputer_adv/power_hysteresis.cpp
 $(POWER_TARGET): $(POWER_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+QSO_BROWSE_OBJ = qso_browse.o test_qso_browse.o
+qso_browse.o: ../components/qso_browse/qso_browse.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(QSO_BROWSE_TARGET): $(QSO_BROWSE_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
@@ -76,8 +84,8 @@ $(POWER_TARGET): $(POWER_OBJ)
 
 clean:
 	rm -f $(OBJ) $(UNIQUE_OBJ) $(CANCEL_OBJ) $(ADIF_OBJ) $(STATION_OBJ) \
-	      $(DECODE_SORT_OBJ) $(POWER_OBJ) \
+	      $(DECODE_SORT_OBJ) $(POWER_OBJ) $(QSO_BROWSE_OBJ) \
 	      $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
-	      $(DECODE_SORT_TARGET) $(POWER_TARGET)
+	      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET)
 
 .PHONY: all clean

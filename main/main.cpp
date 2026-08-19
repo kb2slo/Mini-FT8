@@ -25,6 +25,7 @@ extern "C" {
 #include "esp_freertos_hooks.h"
 #include "autoseq.h"
 #include "station.h"
+#include "qso_browse.h"
 #include "core_api.h"
 #include "core_api_internal.h"
 #include <M5Cardputer.h>
@@ -557,17 +558,7 @@ static bool is_startup_direct_mode_key(char c) {
 
 static std::vector<std::string> g_q_lines;
 static std::vector<std::string> g_q_files;
-enum class QPageView { Default, Alternate };
-struct QsoLogEntry {
-  std::string time_on;
-  std::string band;
-  std::string call;
-  bool has_rst_rcvd = false;
-  int rst_rcvd = 0;
-  bool has_rst_sent = false;
-  int rst_sent = 0;
-};
-static QPageView g_q_page_view = QPageView::Default;
+static QsoBrowsePageView g_q_page_view = QsoBrowsePageView::Default;
 static std::vector<QsoLogEntry> g_q_entries;
 static bool g_q_entries_have_next_page = false;
 static bool g_q_show_entries = false;
@@ -904,21 +895,6 @@ static bool log_gps_grid_line(const std::string& grid8) {
   return ok;
 }
 
-static bool is_daily_qso_log_file(const char* name) {
-  if (!name) return false;
-  if (strlen(name) != 12) return false;  // YYYYMMDD.adi (or legacy .txt)
-  for (int i = 0; i < 8; ++i) {
-    if (!std::isdigit(static_cast<unsigned char>(name[i]))) return false;
-  }
-  if (name[8] != '.') return false;
-  const char a = static_cast<char>(std::tolower(static_cast<unsigned char>(name[9])));
-  const char b = static_cast<char>(std::tolower(static_cast<unsigned char>(name[10])));
-  const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(name[11])));
-  // Prefer .adi; keep recognizing legacy YYYYMMDD.txt QSO logs.
-  return (a == 'a' && b == 'd' && c == 'i') ||
-         (a == 't' && b == 'x' && c == 't');
-}
-
 static const char* storage_owner_label(StorageOwner owner) {
   switch (owner) {
     case StorageOwner::UNAVAILABLE: return "unavailable";
@@ -1015,24 +991,13 @@ static void qso_load_file_list() {
     g_q_lines.push_back(reason);
     return;
   }
-  for (const auto& name : files) {
-    if (is_daily_qso_log_file(name.c_str())) {
-      g_q_files.push_back(name);
-    }
-  }
-  std::sort(g_q_files.begin(), g_q_files.end(), std::greater<std::string>());
+  qso_browse_select_daily_files(files, &g_q_files);
   const StorageOwner owner = storage_service_owner();
   ESP_LOGI(TAG, "QSO file list: owner=%s files=%u daily=%u",
            storage_owner_label(owner),
            static_cast<unsigned>(files.size()),
            static_cast<unsigned>(g_q_files.size()));
-  if (g_q_files.empty()) {
-    g_q_lines.push_back("No YYYYMMDD.adi");
-    return;
-  }
-  for (size_t i = 0; i < g_q_files.size(); ++i) {
-    g_q_lines.push_back(g_q_files[i]);
-  }
+  qso_browse_fill_file_lines(g_q_files, &g_q_lines);
 }
 
 static void load_storage_regular_files(std::vector<std::string>& files) {
@@ -1069,59 +1034,8 @@ static void qso_load_fetch_file_list() {
   }
 }
 
-static std::string qso_trim_head(const std::string& in, size_t max_len) {
-  if (in.size() <= max_len) return in;
-  if (max_len == 0) return "";
-  if (max_len == 1) return ">";
-  return in.substr(0, max_len - 1) + ">";
-}
-
-static bool qso_parse_rst(const std::string& raw, int& out) {
-  if (raw.empty()) return false;
-  char* end = nullptr;
-  long v = std::strtol(raw.c_str(), &end, 10);
-  if (end == raw.c_str() || !end || *end != '\0') return false;
-  if (v < -99) v = -99;
-  if (v > 99) v = 99;
-  out = static_cast<int>(v);
-  return true;
-}
-
-static std::string qso_format_signed3(bool has_value, int value) {
-  if (!has_value) return "-??";
-  char out[4];
-  std::snprintf(out, sizeof(out), "%+03d", value);
-  return out;
-}
-
-static std::string qso_format_sent4(bool has_value, int value) {
-  if (!has_value) return "S-??";
-  char out[5];
-  std::snprintf(out, sizeof(out), "S%+03d", value);
-  return out;
-}
-
 static void qso_rebuild_entry_lines() {
-  g_q_lines.clear();
-  for (const auto& e : g_q_entries) {
-    std::string call_field = qso_trim_head(e.call, 11);
-    if (call_field.size() < 11) {
-      call_field.append(11 - call_field.size(), ' ');
-    }
-
-    if (g_q_page_view == QPageView::Alternate) {
-      const std::string rcvd = qso_format_signed3(e.has_rst_rcvd, e.rst_rcvd);
-      const std::string sent = qso_format_sent4(e.has_rst_sent, e.rst_sent);
-      g_q_lines.push_back(call_field + rcvd + " " + sent);
-    } else {
-      const std::string band_disp = qso_trim_head(e.band, 6);
-      g_q_lines.push_back(e.time_on + " " + band_disp + " " + call_field);
-    }
-  }
-
-  if (g_q_lines.empty()) {
-    g_q_lines.push_back("No QSOs");
-  }
+  qso_browse_format_entry_lines(g_q_entries, g_q_page_view, &g_q_lines);
 }
 
 static void qso_load_entries(const std::string& path) {
@@ -1133,65 +1047,23 @@ static void qso_load_entries(const std::string& path) {
     g_q_lines.push_back("Open fail");
     return;
   }
-  const int first_qso = std::max(0, q_page) * 6;
-  int qso_index = 0;
-  int page_count = 0;
+  QsoBrowsePager pager;
+  qso_browse_pager_reset(&pager, std::max(0, q_page) * 6, 6);
+  std::vector<QsoBrowseBand> bands;
+  bands.reserve(g_bands.size());
+  for (const auto& b : g_bands) {
+    bands.push_back({b.name, b.freq});
+  }
   char line[512];
   while (storage_stream_read_line(stream, line, sizeof(line))) {
-    std::string s(line);
-    std::string s_lower = s;
-    std::transform(s_lower.begin(), s_lower.end(), s_lower.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    if (s_lower.find("<call:") == std::string::npos) continue;
-    if (qso_index++ < first_qso) continue;
-    if (page_count >= 6) {
-      g_q_entries_have_next_page = true;
+    if (!qso_browse_pager_feed(&pager, std::string(line), bands.data(),
+                              static_cast<int>(bands.size()))) {
       break;
     }
-    auto get_field = [&](const std::string& tag)->std::string {
-      size_t p = s_lower.find("<" + tag);
-      if (p == std::string::npos) return "";
-      size_t gt = s.find('>', p);
-      if (gt == std::string::npos) return "";
-      size_t end_space = s.find(' ', gt + 1);
-      size_t end_tag = s.find('<', gt + 1);
-      size_t end = s.size();
-      if (end_space != std::string::npos && end_space < end) end = end_space;
-      if (end_tag != std::string::npos && end_tag < end) end = end_tag;
-      return s.substr(gt + 1, end - gt - 1);
-    };
-    std::string call = get_field("call:");
-    std::string time_on = get_field("time_on:");
-    std::string freq = get_field("freq:");
-    std::string rst_rcvd_raw = get_field("rst_rcvd:");
-    std::string rst_sent_raw = get_field("rst_sent:");
-    std::string band = freq;
-    if (!freq.empty()) {
-      // crude map: take MHz and map to band name from our band list
-      double mhz = atof(freq.c_str());
-      for (const auto& b : g_bands) {
-        double bm = b.freq * 0.001;
-        if (fabs(bm - mhz) < 0.1) { band = b.name; break; }
-      }
-    }
-    if (time_on.size() >= 4) {
-      time_on = time_on.substr(0,4);
-      time_on.insert(2, ":");
-    }
-    if (time_on.size() != 5) time_on = "??:??";
-    if (call.empty()) call = "?";
-    if (band.empty()) band = freq.empty() ? "?" : freq;
-
-    QsoLogEntry e;
-    e.time_on = time_on;
-    e.band = band;
-    e.call = call;
-    e.has_rst_rcvd = qso_parse_rst(rst_rcvd_raw, e.rst_rcvd);
-    e.has_rst_sent = qso_parse_rst(rst_sent_raw, e.rst_sent);
-    g_q_entries.push_back(e);
-    page_count++;
   }
   storage_stream_close(stream);
+  g_q_entries = std::move(pager.entries);
+  g_q_entries_have_next_page = pager.has_next;
   qso_rebuild_entry_lines();
 }
 
@@ -5658,7 +5530,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               if (idx >= 0 && idx < (int)g_q_files.size()) {
                 const std::string selected_file = g_q_files[idx];
                 if (selected_file != g_q_current_file) {
-                  g_q_page_view = QPageView::Default;
+                  g_q_page_view = QsoBrowsePageView::Default;
                 }
                 g_q_current_file = selected_file;
                 g_q_show_entries = true;
@@ -5669,14 +5541,14 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
             }
           } else {
             if (c == ',') {  // left: default view (time / band / call)
-              if (g_q_page_view != QPageView::Default) {
-                g_q_page_view = QPageView::Default;
+              if (g_q_page_view != QsoBrowsePageView::Default) {
+                g_q_page_view = QsoBrowsePageView::Default;
                 qso_rebuild_entry_lines();
                 qso_draw_page();
               }
             } else if (c == '/') {  // right: alternate view (call / R-SNR / S-SNR)
-              if (g_q_page_view != QPageView::Alternate) {
-                g_q_page_view = QPageView::Alternate;
+              if (g_q_page_view != QsoBrowsePageView::Alternate) {
+                g_q_page_view = QsoBrowsePageView::Alternate;
                 qso_rebuild_entry_lines();
                 qso_draw_page();
               }
