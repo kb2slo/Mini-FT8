@@ -66,6 +66,8 @@ jobs:
           ./host_test_beacon_cancel || failed=1
           echo "===== host_test_adif_merge ====="
           ./host_test_adif_merge || failed=1
+          echo "===== host_test_copy_block ====="
+          ./host_test_copy_block || failed=1
           exit "$failed"
 
       - name: TX e2e (CTest)

@@ -23,6 +23,7 @@ enum class StorageOpenMode : uint8_t {
 enum class StorageCopyStatus : uint8_t {
     OK,
     STORAGE_BUSY,
+    RADIO_BUSY,
     SD_MOUNT_FAILED,
     LIST_FAILED,
     COPY_FAILED,

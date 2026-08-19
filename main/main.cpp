@@ -26,6 +26,7 @@ extern "C" {
 #include "autoseq.h"
 #include "station.h"
 #include "qso_browse.h"
+#include "copy_to_sd.h"
 #include "core_api.h"
 #include "core_api_internal.h"
 #include <M5Cardputer.h>
@@ -80,7 +81,6 @@ const ProtocolConfig* g_protocol = &kProtocolFT8;
 #endif
 
 int64_t rtc_now_ms();
-using CopyLogsResult = StorageCopyResult;
 
 static void debug_log_line(const std::string& msg);
 //exported symbol (linkable from other .cpp)
@@ -132,7 +132,6 @@ static bool storage_is_active_log_name(const std::string& name_or_path) {
 }
 
 // .adi files are union-merged onto the SD archive; other files overwrite.
-static CopyLogsResult copy_logs_to_sd_overwrite();
 
 // 128 entries × 16 bytes = 2 KB of BSS. 256 was the original size but
 // well over typical working set (FT8 rarely sees >50 unique hashed
@@ -352,7 +351,6 @@ static bool rewrite_dxpedition_for_mycall(const std::string& raw_text,
 }
 
 static const char* TAG = "FT8";
-static const char* STORAGE_COPY_TAG = "STORAGE_COPY";
 enum class UIMode { RX, TX, BAND, MENU, MSC, DEBUG, STATUS, QSO, GPS, PERF };
 enum class RtcTimeSource : uint8_t {
   SAVED = 0,
@@ -682,9 +680,6 @@ static std::string menu_long_buf;
 static std::string menu_long_backup;
 static int menu_flash_idx = -1;          // absolute index to flash highlight
 static int64_t menu_flash_deadline = 0;  // ms timestamp when flash ends
-static std::string menu_copy_feedback_text;
-static int64_t menu_copy_feedback_deadline = 0;
-static constexpr int64_t kMenuCopyFeedbackMs = 1800;
 static int rx_flash_idx = -1;
 static int64_t rx_flash_deadline = 0;
 bool g_streaming = false;
@@ -917,65 +912,6 @@ static const char* qso_storage_list_failure_text(StorageOwner owner) {
       return "List failed";
   }
   return "List failed";
-}
-
-static CopyLogsResult copy_logs_busy_result() {
-  CopyLogsResult result{};
-  result.err = ESP_ERR_INVALID_STATE;
-  result.status = StorageCopyStatus::STORAGE_BUSY;
-  result.missed_count = 1;
-  result.missed_files.push_back("<storage busy>");
-  return result;
-}
-
-static CopyLogsResult copy_logs_to_sd_overwrite() {
-  if (storage_writes_blocked()) {
-    ESP_LOGW(STORAGE_COPY_TAG, "copy skipped: low battery halt");
-    return copy_logs_busy_result();
-  }
-  const std::string qso_name = today_qso_file_name();
-  const std::string rt_name = today_rt_file_name();
-  const StorageOwner owner = storage_service_owner();
-  const size_t open_streams = storage_service_open_stream_count();
-  const bool usb_drive = storage_service_usb_drive_enabled();
-  const bool tx_active = g_tx_active;
-  const bool decode_active = g_decode_in_progress;
-  const bool audio_streaming = audio_source_is_streaming();
-  const bool host_binary_active = host_bin_active;
-  const bool ui_msc = ui_mode == UIMode::MSC;
-
-  ESP_LOGI(STORAGE_COPY_TAG,
-           "request owner=%s open_streams=%u tx=%d decode=%d audio=%d host_bin=%d ui_msc=%d usb_drive=%d qso=%s rt=%s",
-           storage_owner_label(owner),
-           static_cast<unsigned>(open_streams),
-           tx_active,
-           decode_active,
-           audio_streaming,
-           host_binary_active,
-           ui_msc,
-           usb_drive,
-           qso_name.c_str(),
-           rt_name.c_str());
-
-  if (tx_active || decode_active || audio_streaming || host_binary_active ||
-      ui_msc || usb_drive || owner != StorageOwner::FIRMWARE || open_streams != 0) {
-    ESP_LOGW(STORAGE_COPY_TAG,
-             "copy blocked: owner=%s open_streams=%u tx=%d decode=%d audio=%d host_bin=%d ui_msc=%d usb_drive=%d",
-             storage_owner_label(owner),
-             static_cast<unsigned>(open_streams),
-             tx_active,
-             decode_active,
-             audio_streaming,
-             host_binary_active,
-             ui_msc,
-             usb_drive);
-    return copy_logs_busy_result();
-  }
-
-  const CopyLogsResult result = storage_copy_all_to_sd(qso_name, rt_name);
-  // SD access temporarily claims GPIO5 (LoRa-1262 CS); restore prior pin policy.
-  restore_debug_uart_pins_after_sd();
-  return result;
 }
 
 static void qso_load_file_list() {
@@ -3790,10 +3726,6 @@ static void draw_menu_view() {
       return;
     }
   int64_t now = rtc_now_ms();
-  if (menu_copy_feedback_deadline > 0 && now >= menu_copy_feedback_deadline) {
-    menu_copy_feedback_deadline = 0;
-    menu_copy_feedback_text.clear();
-  }
 
   std::vector<std::string> lines;
   lines.reserve(12);
@@ -3840,11 +3772,7 @@ static void draw_menu_view() {
   lines.push_back(std::string("SkipTX1:") + (g_skip_tx1 ? "ON" : "OFF"));
   lines.push_back(std::string("ActiveBand:") + head_trim(g_active_band_text, 16));
   lines.push_back(std::string("GNSS_LoRa:") + (g_gnss_lora_enabled ? "ON" : "OFF"));
-  if (menu_copy_feedback_deadline > 0 && !menu_copy_feedback_text.empty()) {
-    lines.push_back(menu_copy_feedback_text);
-  } else {
-    lines.push_back("Copy Files to SD");
-  }
+  lines.push_back(copy_to_sd_menu_item(now));
   if (menu_edit_idx == 17) {
     lines.push_back(std::string("Max Retry:") + menu_edit_buf);
   } else {
@@ -3854,6 +3782,8 @@ static void draw_menu_view() {
   int highlight_abs = -1;
   if (menu_edit_idx >= 0) {
     highlight_abs = menu_edit_idx;
+  } else if (const int copy_hl = copy_to_sd_flash_abs(now); copy_hl >= 0) {
+    highlight_abs = copy_hl;
   } else if (menu_flash_idx >= 0 && now < menu_flash_deadline) {
     highlight_abs = menu_flash_idx;
   } else {
@@ -5158,6 +5088,18 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       save_station_data();
     }
 
+    if (copy_to_sd_dialog_active()) {
+      if (copy_to_sd_tick(rtc_now_ms())) {
+        restore_debug_uart_pins_after_sd();
+        if (ui_mode == UIMode::MENU) {
+          draw_menu_view();
+        }
+      }
+      last_key = c;
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
     // Global TX cancel (Esc/` in RX/TX/Status when not editing)
     if (c == '`' &&
         (ui_mode == UIMode::RX || ui_mode == UIMode::TX || ui_mode == UIMode::STATUS) &&
@@ -5901,41 +5843,20 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 apply_radio_profile_binding();
                 draw_menu_view();
               } else if (c == '5') {
-                CopyLogsResult copy_res = copy_logs_to_sd_overwrite();
-                menu_flash_idx = 16; // abs index of page 2 line 5
-                menu_flash_deadline = rtc_now_ms() + 500;
-                if (copy_res.status == StorageCopyStatus::SD_MOUNT_FAILED) {
-                  menu_copy_feedback_text = "SD mount fail";
-                } else if (copy_res.status == StorageCopyStatus::STORAGE_BUSY) {
-                  menu_copy_feedback_text = "Storage busy";
-                } else if (copy_res.status == StorageCopyStatus::LIST_FAILED) {
-                  menu_copy_feedback_text = "List failed";
-                } else if (copy_res.missed_count <= 0) {
-                  menu_copy_feedback_text = "Copied OK";
-                } else if (copy_res.missed_count == 1 && !copy_res.missed_files.empty()) {
-                  menu_copy_feedback_text =
-                      std::string("Fail ") + head_trim(storage_basename(copy_res.missed_files.front()), 14);
-                } else {
-                  menu_copy_feedback_text =
-                      std::string("Missed ") + std::to_string(copy_res.missed_count) + ", see log";
+                CopyBlockInputs in;
+                in.writes_blocked = storage_writes_blocked();
+                in.tx_active = g_tx_active;
+                in.decode_active = g_decode_in_progress;
+                in.audio_streaming = audio_source_is_streaming();
+                in.host_bin_active = host_bin_active;
+                in.ui_msc = (ui_mode == UIMode::MSC);
+                in.usb_drive = storage_service_usb_drive_enabled();
+                in.firmware_owns = (storage_service_owner() == StorageOwner::FIRMWARE);
+                in.open_streams = storage_service_open_stream_count();
+                if (copy_to_sd_press(in, today_qso_file_name(), today_rt_file_name(),
+                                     rtc_now_ms()) == CopyToSdPress::RedrawMenu) {
+                  draw_menu_view();
                 }
-                if (menu_copy_feedback_text.size() > 19) {
-                  menu_copy_feedback_text.resize(19);
-                }
-                menu_copy_feedback_deadline = rtc_now_ms() + kMenuCopyFeedbackMs;
-
-                char log_msg[64];
-                snprintf(log_msg, sizeof(log_msg), "Copy SD C%d M%d",
-                         copy_res.copied_count, copy_res.missed_count);
-                debug_log_line(log_msg);
-                if (copy_res.err == ESP_OK) {
-                  debug_log_line("Copied storage files to SD");
-                } else if (!copy_res.missed_files.empty()) {
-                  debug_log_line(std::string("Copy fail: ") +
-                                 head_trim(storage_basename(copy_res.missed_files.front()), 16));
-                }
-
-                draw_menu_view();
               } else if (c == '6') {
                 menu_edit_idx = 17; // Max Retry line
                 menu_edit_buf = std::to_string(g_autoseq_max_retry);

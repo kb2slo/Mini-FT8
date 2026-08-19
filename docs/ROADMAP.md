@@ -10,7 +10,7 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 | ID | Item | Done when |
 |---|---|---|
-| B7 | Main loop never blocks on FATFS | QSO browse/copy and Station save on a worker or time-sliced reads. Slot/TX keep running. **Partial:** QSO `.adi` page read is time-sliced (16 lines/tick). Field: beacon TX while on Q. Copy and Station save still block. |
+| B7 | Main loop never blocks on FATFS | QSO browse/copy and Station save on a worker or time-sliced reads. Slot/TX keep running. **Partial:** QSO `.adi` page read is time-sliced (16 lines/tick). Copy Files to SD runs on a worker with a wait dialog; TX/decode/UAC fail as **Radio busy** (no retry). Station save still blocks. Field: beacon TX while on Q. |
 | RFC 0002 | Extract, style, and boundaries | Outcomes in [RFC 0002](rfcs/0002-extract-and-boundaries.md) §2. No open extract slice. Slices A–B and D–H done. Slice C (`ft8_lib` pin) parked. Was I11. |
 
 ## Backlog
@@ -68,7 +68,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 
 | Harness | Covers | Command |
 |---|---|---|
-| `host_mock/` | `autoseq.cpp`; JSON QSO / FD / beacon / reincarnation; unique R-tap callsign; ADIF merge and logger 10-min window; Station parse; decode sort; battery hold hysteresis; QSO browse | `cd host_mock && make && ./host_test test_qso.json` / `./host_test_unique_callsign` / `./host_test_adif_merge` / `./host_test_station` / `./host_test_decode_sort` / `./host_test_power_hysteresis` / `./host_test_qso_browse` |
+| `host_mock/` | `autoseq.cpp`; JSON QSO / FD / beacon / reincarnation; unique R-tap callsign; ADIF merge and logger 10-min window; Station parse; decode sort; battery hold hysteresis; QSO browse; copy-to-SD busy reason | `cd host_mock && make && ./host_test test_qso.json` / `./host_test_unique_callsign` / `./host_test_adif_merge` / `./host_test_station` / `./host_test_decode_sort` / `./host_test_power_hysteresis` / `./host_test_qso_browse` / `./host_test_copy_block` |
 | `tests/tx_e2e/` | Encode, TA format, KH1 map, golden WAV RX | `cmake -S tests/tx_e2e -B tests/tx_e2e/build && cmake --build tests/tx_e2e/build && ctest --test-dir tests/tx_e2e/build --output-on-failure` |
 | `idf.py build` | `main/` `-Werror`; merged bin | ESP-IDF 5.5.1, target `esp32s3` |
 

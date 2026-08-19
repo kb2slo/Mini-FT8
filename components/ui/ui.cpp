@@ -628,6 +628,54 @@ void ui_draw_list(const std::vector<std::string>& lines, int page, int highlight
     M5.Display.endWrite();
 }
 
+void ui_draw_busy_dialog(const char* title, int bar_permille, bool paint_chrome) {
+    const char* label = (title != nullptr) ? title : "";
+    const int box_x = 8;
+    const int box_y = UI_START_Y + 10;
+    const int box_w = SCREEN_W - 16;
+    const int box_h = 72;
+    const uint16_t box_bg = rgb565(30, 30, 60);
+    const uint16_t bar_fg = rgb565(0, 200, 200);
+    const int bar_x = box_x + 10;
+    const int bar_y = box_y + 42;
+    const int bar_w = box_w - 20;
+    const int bar_h = 14;
+    const int inner_x = bar_x + 2;
+    const int inner_y = bar_y + 2;
+    const int inner_w = bar_w - 4;
+    const int inner_h = bar_h - 4;
+    if (bar_permille < 0) {
+        bar_permille = 0;
+    }
+    if (bar_permille > 1000) {
+        bar_permille = 1000;
+    }
+    const int fill_w = (inner_w * bar_permille) / 1000;
+
+    DispGuard guard;
+    M5.Display.startWrite();
+    if (paint_chrome) {
+        M5.Display.fillRect(0, UI_START_Y, SCREEN_W, SCREEN_H - UI_START_Y, TFT_BLACK);
+        M5.Display.fillRect(box_x, box_y, box_w, box_h, box_bg);
+        M5.Display.drawRect(box_x, box_y, box_w, box_h, TFT_WHITE);
+        M5.Display.setTextSize(2);
+        M5.Display.setTextColor(TFT_WHITE, box_bg);
+        M5.Display.setCursor(box_x + 10, box_y + 10);
+        M5.Display.printf("%s", label);
+        M5.Display.drawRect(bar_x, bar_y, bar_w, bar_h, TFT_WHITE);
+        g_visible_rows[0] = label;
+        g_visible_rows[1] = "working";
+        for (int i = 2; i < RX_LINES; ++i) {
+            g_visible_rows[i].clear();
+        }
+    }
+    M5.Display.fillRect(inner_x, inner_y, inner_w, inner_h, TFT_BLACK);
+    if (fill_w > 0) {
+        M5.Display.fillRect(inner_x, inner_y, fill_w, inner_h, bar_fg);
+    }
+    M5.Display.endWrite();
+}
+
 void ui_draw_debug(const std::vector<std::string>& lines, int page) {
     const int line_h = 19;
     const int start_y = UI_START_Y;

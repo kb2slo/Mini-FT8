@@ -8,4 +8,5 @@ host_test_station
 host_test_decode_sort
 host_test_power_hysteresis
 host_test_qso_browse
+host_test_copy_block
 
