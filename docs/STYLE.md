@@ -1,6 +1,6 @@
 # Coding style
 
-Small written preferences for *our* C/C++. Do not apply to vendored `M5*` / `ft8_lib`. Campaign plan: [RFC 0002](rfcs/0002-extract-and-boundaries.md). Broader hygiene is I11.
+Small written preferences for *our* C/C++. Do not apply to vendored `M5*` / `ft8_lib`. Campaign plan: [RFC 0002](rfcs/0002-extract-and-boundaries.md) (Done). Radio-profile remainder is Backlog B14.
 
 Baseline is ESP-IDF’s guide where it matches this tree. We do not adopt Google function naming or a full LLVM restyle.
 
