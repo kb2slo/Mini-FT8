@@ -190,7 +190,7 @@ void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg)
                 slot_blocks++;
                 int64_t now_idx = rtc_now_ms() / slot_ms;
                 if (now_idx != slot_idx) {
-                    ESP_LOGI(tag, "Slot boundary %lld->%lld blocks=%d wf=%d",
+                    ESP_LOGD(tag, "Slot boundary %lld->%lld blocks=%d wf=%d",
                              (long long)slot_idx, (long long)now_idx,
                              slot_blocks, mon.wf.num_blocks);
                     if (slot_idx > g_decode_applied_slot_idx) {
@@ -204,10 +204,10 @@ void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg)
                     next_wake = xTaskGetTickCount();
                 } else if (slot_blocks >= g_protocol->total_symbols &&
                            mon.wf.num_blocks >= g_protocol->total_symbols) {
-                    ESP_LOGI(tag, "Triggering decode at slot %lld blocks=%d wf=%d",
+                    ESP_LOGD(tag, "Triggering decode at slot %lld blocks=%d wf=%d",
                              (long long)slot_idx, slot_blocks, mon.wf.num_blocks);
                     if (g_tx_active || g_was_txing) {
-                        ESP_LOGI(tag, "Skipping decode on TX slot %lld",
+                        ESP_LOGD(tag, "Skipping decode on TX slot %lld",
                                  (long long)slot_idx);
                         if (slot_idx > g_decode_applied_slot_idx) {
                             g_decode_applied_slot_idx = slot_idx;
@@ -217,7 +217,7 @@ void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg)
                         g_decode_in_progress = true;
                         decode_monitor_results(&mon, &mon_cfg, false);
                     } else {
-                        ESP_LOGI(tag, "Decode paused; skipping");
+                        ESP_LOGD(tag, "Decode paused; skipping");
                         if (slot_idx > g_decode_applied_slot_idx) {
                             g_decode_applied_slot_idx = slot_idx;
                         }

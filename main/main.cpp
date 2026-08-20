@@ -3119,7 +3119,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   size_t heap_entry = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   size_t heap_entry_largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   UBaseType_t stack_hw_entry = uxTaskGetStackHighWaterMark(NULL);
-  ESP_LOGW(TAG, "DECODE_HEAP ENTER: free=%u largest=%u alltime_min=%u stack_hw=%u",
+  ESP_LOGD(TAG, "DECODE_HEAP ENTER: free=%u largest=%u alltime_min=%u stack_hw=%u",
            (unsigned)heap_entry, (unsigned)heap_entry_largest,
            (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
            (unsigned)stack_hw_entry);
@@ -3130,7 +3130,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   const int max_cand = 50;
   static ftx_candidate_t candidates[max_cand];
   int num_candidates = ftx_find_candidates(&mon->wf, max_cand, candidates, 5);
-  ESP_LOGI(TAG, "Candidates found: %d", num_candidates);
+  ESP_LOGD(TAG, "Candidates found: %d", num_candidates);
 
   // ---- slot index + once-per-slot hashtable maintenance ----
   int64_t slot_idx = (g_decode_slot_idx >= 0) ? g_decode_slot_idx : rtc_now_ms() / g_protocol->slot_time_ms;
@@ -3177,7 +3177,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   int num_decoded = 0;
 
   if (num_candidates <= 0) {
-    ESP_LOGW(TAG, "No candidates found; keeping RX list");
+    ESP_LOGD(TAG, "No candidates found; keeping RX list");
     // No candidates means we processed the slot's audio but found nothing —
     // still counts as "applied" for the TX-trigger guard.
     if (g_decode_slot_idx > g_decode_applied_slot_idx) {
@@ -3276,7 +3276,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
       continue;
     }
 
-    ESP_LOGI(TAG, "Decoded[%d] t=%.2fs f=%.1fHz snr=%d : %s",
+    ESP_LOGD(TAG, "Decoded[%d] t=%.2fs f=%.1fHz snr=%d : %s",
              s_dec_count, time_s, freq_hz, snr_q, final_text);
 
     // Fill static entry
@@ -3305,7 +3305,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
     s_dec_count++;
   }
 
-  ESP_LOGI(TAG, "Decoded %d unique messages", s_dec_count);
+  ESP_LOGD(TAG, "Decoded %d unique messages", s_dec_count);
 
   // ---- Auto sync soft RTC from decode timing ----
   if (s_dec_count > 3) {
@@ -3384,7 +3384,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
       core_fire_rx_changed();
     }
   } else {
-    ESP_LOGI(TAG, "No messages decoded; keeping RX list");
+    ESP_LOGD(TAG, "No messages decoded; keeping RX list");
   }
 
   // ---- heap instrumentation (exit) ----
@@ -3392,7 +3392,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
     size_t heap_exit = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     size_t heap_exit_largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     UBaseType_t stack_hw_exit = uxTaskGetStackHighWaterMark(NULL);
-    ESP_LOGW(TAG, "DECODE_HEAP EXIT: free=%u largest=%u alltime_min=%u stack_hw=%u (delta_free=%d)",
+    ESP_LOGD(TAG, "DECODE_HEAP EXIT: free=%u largest=%u alltime_min=%u stack_hw=%u (delta_free=%d)",
              (unsigned)heap_exit, (unsigned)heap_exit_largest,
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
              (unsigned)stack_hw_exit,

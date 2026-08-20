@@ -16,8 +16,8 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 | ID | Item | Why / constraint |
 |---|---|---|
+| B13 | Log verbosity | First after RFC 0002. Expand MENU `RxTxLog` ON/OFF into Off / ADI (QSOs) / full RX. Default ADI so a busy band does not FATFS-append an RT line per unique decode. Off: no ADI, no RT. ADI: existing QSO `.adi` only. Full RX: current RT append (RX+TX+GPS grid) plus ADI. UART decode chatter is not this item (B8). Host: Station round-trip of the three-way. Field: MENU + reboot. Was I17. |
 | B4 | SD `Station.txt` clobbers flash | `storage_sync_station_from_sd()` on boot. **Partial:** skip import when internal `Station.txt` already exists. Still no timestamp/opt-in if flash is empty and SD is stale. Rides RFC 0002 slice D (Station extract). |
-| B8 | `DECODE_HEAP` every decode | `ESP_LOGW` enter/exit; UART time on a tight loop. Demote or gate. |
 | B10 | See callsigns while TX HUD would cover the R list | Queue a QSO when the HUD would otherwise eat the decode list. **UX deferred until this is Now:** repeated `R` toggle vs dedicated `H` (HUD) vs always-visible list + banner. Abort must stay visible. Same unique-callsign tap rules as D8. Field-only display; not CI. Distinct from CQ-only filter (I1). Was I14. |
 | B11 | QMX+ AUX GPS into ADV Grove | Route QMX+ GPS NMEA **out AUX** over a 2.5mm-to-Grove cable into Cardputer PORTA; USB-C stays QMX UAC+CAT. Explore pinout/levels/baud, fix firmware if PORTA GPS does not lock with QMX+ selected, document the operator path (G-screen, STATUS `G`, `GNSS_LoRa` off so PORTA is used). Distinct from a GPS puck on Grove and from the LoRa-1262 GNSS cap. Field-only; ADV + QMX+. Do not mix into RFC 0002. |
 | B12 | Keep-launcher QSO logging | QSO logging failed after first test of the keep-launcher script. Circle back to revisit. |
@@ -42,7 +42,6 @@ Not scheduled. Move to Backlog with a Done-when before implementing. Large produ
 | I13 | Learn from best-in-class OSS during extracts | When doing RFC 0002 work (radio table, `ft8_lib` vendor boundary, Station, …), look at how strong public projects handle that seam. Lessons go into STYLE or the RFC, not a second plan. Not a rewrite. Distinct from mining Mini-FT8 forks (I12). |
 | I15 | Make clock-out-of-sync obvious | Two layers. **Fine:** WSJT-X-style DT (seconds vs the slot) on decodes, or a slot-summary, so a systematic ~1s offset is obvious. **Gross:** cue when the clock is so far off that FT8 cannot decode (empty slots with RF/audio otherwise OK), or the date/time is obviously wrong (STATUS vs GPS/UTC). Empty-band, unplugged radio, and UAC failure look like “no decodes” — do not treat silence as proof of clock. **UX deferred until sequenced.** Do not auto-nudge the clock. Distinct from sleep-RTC compensation (`RTC_COMPENSATION.md`). After decode-list extract (RFC 0002 slice F); do not grow `main.cpp` for a layout experiment. Field-only. |
 | I16 | Optional TX meter poll off | QMX HUD `PC;SW;` ~1/s during TX shares CDC with `TA`. Keep `has_wattmeter` / `has_swr`; operator can disable poll to test CAT load (late `TA`, USB glitches). Field-only. Station/HUD setting; do not mix into RFC 0002 slice B. Distinct from I8 (SWR sweep). |
-| I17 | Log verbosity | Off / ADI (QSOs) / full RX. |
 
 Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, full-slot audio.
 
@@ -63,6 +62,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | D11 | Push back before tools | Agents cite Now/RFC/STYLE before any implementation search or edit |
 | D12 | Hash-first firmware filenames | `b5a9479`; CI stages hash-first merged image plus `minift8-dev.bin`. Was I7. |
 | B7 | Main loop never blocks on FATFS | QSO `.adi` page read time-sliced (16 lines/tick). Copy to SD, Station.txt, and directory list (Q + DEBUG delete) on a prio-3 worker. Host: `host_test_file_list`. Field: beacon TX while entering Q. |
+| B8 | Decode-path UART | `DECODE_HEAP` enter/exit, per-slot candidate/decode lines, and audio-pipeline slot/decode triggers demoted to `ESP_LOGD`. Field `sdkconfig` maximum is INFO so they compile out. Rare Info stays (`SYNC`, IgnoreList, Recent QSO, DXpedition). |
 
 ## Test map
 
