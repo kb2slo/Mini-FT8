@@ -8,10 +8,7 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 ## Now
 
-
-| ID       | Item                           | Done when                                                                                                                           |
-| -------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| B13 | Log verbosity | MENU `RxTxLog` ON/OFF becomes Off / ADI (QSOs) / full RX. Default ADI. Off: no ADI, no RT. ADI: existing QSO `.adi` only. Full RX: current RT append plus ADI. UART decode chatter is not this item (B8). Host: Station round-trip of the three-way. Field: MENU + reboot. Was I17. |
+_(none — pick from Backlog)_
 
 
 
@@ -21,7 +18,7 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 | ID  | Item                                              | Why / constraint                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | --- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B14 | Radio profile table out of `main` | RFC 0002 §7 contributor test: add a radio without editing `main.cpp`. Lift `RadioType` MENU + `get_radio_profile_binding()` and KH1 UART/GPS exclusivity out of `main`. Consult `audio_is_uac`. Prep for I5. Do not mix into B13. |
+| B14 | Radio profile table out of `main` | RFC 0002 §7 contributor test: add a radio without editing `main.cpp`. Lift `RadioType` MENU + `get_radio_profile_binding()` and KH1 UART/GPS exclusivity out of `main`. Consult `audio_is_uac`. Prep for I5. |
 | B4  | SD `Station.txt` clobbers flash                   | `storage_sync_station_from_sd()` on boot. **Partial:** skip import when internal `Station.txt` already exists. Still no timestamp/opt-in if flash is empty and SD is stale. Rides RFC 0002 slice D (Station extract).                                                                                                                                                                                                                     |
 | B10 | See callsigns while TX HUD would cover the R list | Queue a QSO when the HUD would otherwise eat the decode list. **UX deferred until this is Now:** repeated `R` toggle vs dedicated `H` (HUD) vs always-visible list + banner. Abort must stay visible. Same unique-callsign tap rules as D8. Field-only display; not CI. Distinct from CQ-only filter (I1). Was I14.                                                                                                                       |
 | B11 | QMX+ AUX GPS into ADV Grove                       | Route QMX+ GPS NMEA **out AUX** over a 2.5mm-to-Grove cable into Cardputer PORTA; USB-C stays QMX UAC+CAT. Explore pinout/levels/baud, fix firmware if PORTA GPS does not lock with QMX+ selected, document the operator path (G-screen, STATUS `G`, `GNSS_LoRa` off so PORTA is used). Distinct from a GPS puck on Grove and from the LoRa-1262 GNSS cap. Field-only; ADV + QMX+. Do not mix into RFC 0002.                              |
