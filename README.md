@@ -27,6 +27,14 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
 
 ## CI firmware builds
 
+To build from source, clone with the `ft8_lib` submodule. GitHub’s default clone leaves `components/ft8_lib/vendor` empty, and host `tx_e2e` / `idf.py build` will fail.
+
+```
+git clone --recurse-submodules https://github.com/kb2slo/Mini-FT8.git
+```
+
+Existing trees: `git submodule update --init`.
+
 Pushes and pull requests run GitHub Actions (ESP-IDF **v5.5.1**, target **esp32s3**). When firmware sources change, the job uploads a flashable merged image as artifact **MiniFT8-Cardputer-ADV** (hash-first `.bin` inside the zip). Docs-only commits (roadmap, README, and similar) skip the IDF build and do not refresh the rolling image.
 
 - Each merge to `main` that changes the firmware updates a prerelease at tag [`dev`](https://github.com/kb2slo/Mini-FT8/releases/tag/dev) with `minift8-dev.bin`. Flash at `0x0`.

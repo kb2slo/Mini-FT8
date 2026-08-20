@@ -37,6 +37,16 @@ Do not expand `main.cpp` without extracting a tested function. Extract/style/rad
 
 This fork ships on **`origin/main`** (`kb2slo/Mini-FT8`). Do **not** push or open PRs to `upstream` (`wcheng95/Mini-FT8`) unless the operator explicitly asks. Staying mergeable with upstream is not a goal.
 
+### Clone (submodules)
+
+`ft8_lib` is the git submodule `components/ft8_lib/vendor`. Host `tx_e2e` and `idf.py build` need it. GitHub’s default clone does not fetch it.
+
+```bash
+git clone --recurse-submodules https://github.com/kb2slo/Mini-FT8.git
+```
+
+Existing trees: `git submodule update --init`. Pin and bump path: [RFC 0002](rfcs/0002-extract-and-boundaries.md) §6.
+
 ### Chat gates
 
 The operator reviews in chat, then green-lights each step. A good previous turn is not permission to skip a gate.
@@ -81,7 +91,7 @@ Then draft a Backlog row in chat. Do not commit it yet. Do not merge, bump the s
 
 ### Local IDF build / flash
 
-Clone with submodules (`git clone --recurse-submodules`; existing trees: `git submodule update --init`). The FT8 codec pin is `components/ft8_lib/vendor` ([RFC 0002](rfcs/0002-extract-and-boundaries.md) §6).
+Clone with submodules first (see **Clone (submodules)** above).
 
 After `source` of the idf5.5 venv and `esp-idf/export.sh`. Radio unplugged from Cardputer USB-C. Leave Launcher **USB** (MSC) first so `/dev/cu.usbmodem*` exists.
 
