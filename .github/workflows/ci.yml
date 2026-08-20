@@ -70,6 +70,8 @@ jobs:
           ./host_test_copy_block || failed=1
           echo "===== host_test_station_save_queue ====="
           ./host_test_station_save_queue || failed=1
+          echo "===== host_test_file_list ====="
+          ./host_test_file_list || failed=1
           exit "$failed"
 
       - name: TX e2e (CTest)

@@ -9,7 +9,8 @@ INCLUDES = -I. -I../main -I../components/ui/include \
            -I../components/adif/include \
            -I../components/station/include \
            -I../components/board_cardputer_adv/include \
-           -I../components/qso_browse/include
+           -I../components/qso_browse/include \
+           -I../components/file_list/include
 
 CORE_SRC   = ../main/autoseq.cpp
 MOCK_SRC   = host_main.cpp host_mocks.cpp json_parser.cpp
@@ -35,10 +36,11 @@ POWER_TARGET = host_test_power_hysteresis
 QSO_BROWSE_TARGET = host_test_qso_browse
 COPY_BLOCK_TARGET = host_test_copy_block
 STATION_SAVE_TARGET = host_test_station_save_queue
+FILE_LIST_TARGET = host_test_file_list
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
-     $(STATION_SAVE_TARGET)
+     $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -89,6 +91,14 @@ station_save_queue.o: ../components/station/station_save_queue.cpp
 $(STATION_SAVE_TARGET): $(STATION_SAVE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+FILE_LIST_OBJ = qso_browse.o file_list.o file_list_queue.o test_file_list.o
+file_list.o: ../components/file_list/file_list.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+file_list_queue.o: ../components/file_list/file_list_queue.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(FILE_LIST_TARGET): $(FILE_LIST_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
@@ -98,9 +108,9 @@ $(STATION_SAVE_TARGET): $(STATION_SAVE_OBJ)
 clean:
 	rm -f $(OBJ) $(UNIQUE_OBJ) $(CANCEL_OBJ) $(ADIF_OBJ) $(STATION_OBJ) \
 	      $(DECODE_SORT_OBJ) $(POWER_OBJ) $(QSO_BROWSE_OBJ) $(COPY_BLOCK_OBJ) \
-	      $(STATION_SAVE_OBJ) \
+	      $(STATION_SAVE_OBJ) $(FILE_LIST_OBJ) \
 	      $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
 	      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
-	      $(STATION_SAVE_TARGET)
+	      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET)
 
 .PHONY: all clean

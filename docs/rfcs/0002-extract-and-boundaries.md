@@ -89,7 +89,7 @@ Restyle and rename only the unit you are already changing.
 | E | ADIF 10-min *logger* dedupe into `components/adif` (merge already shipped) | Done. Host: window, refresh, cap. Merge still ignores the window. Was B3 remainder. |
 | F | TA format (kill `tx_e2e` copy), decode sort, power hysteresis | Done. Shared `radio_ta_format`; host decode sort and battery hold. Field: QSO on ADV+QMX+. Was B3 remainder. |
 | G | Dead-code pass on each extracted unit | Done. D–F APIs all live; unused `#include <cstring>` dropped from Station. |
-| H | QSO browse parse/format (daily `.adi` filter, record page, list lines) | Done. `components/qso_browse`; `host_test_qso_browse`. Field: Q screen on ADV. FATFS still in `main`. Unblocks B7. |
+| H | QSO browse parse/format (daily `.adi` filter, record page, list lines) | Done. `components/qso_browse`; `host_test_qso_browse`. Field: Q screen on ADV. Directory list FATFS is a worker (B7). Record page read is time-sliced in `main`. Unblocked B7. |
 
 One open slice at a time. **No open extract.** C (`ft8_lib`) is parked, not dropped. Campaign §2.3 (vendor pin) waits on C. B7 (non-blocking FATFS) can use the QSO browse module.
 

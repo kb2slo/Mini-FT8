@@ -26,6 +26,8 @@ extern "C" {
 #include "autoseq.h"
 #include "station.h"
 #include "station_save_worker.h"
+#include "file_list.h"
+#include "file_list_worker.h"
 #include "qso_browse.h"
 #include "copy_to_sd.h"
 #include "core_api.h"
@@ -561,10 +563,12 @@ static QsoBrowsePageView g_q_page_view = QsoBrowsePageView::Default;
 static std::vector<QsoLogEntry> g_q_entries;
 static bool g_q_entries_have_next_page = false;
 static bool g_q_show_entries = false;
+static uint32_t s_q_list_gen = 0;
 static int q_page = 0;
 static std::string g_q_current_file;
 static std::vector<std::string> g_d_lines;
 static std::vector<std::string> g_d_files;
+static uint32_t s_d_list_gen = 0;
 static int d_page = 0;
 static std::string host_input;
 static const char* HOST_PROMPT = "MINIFT8> ";
@@ -706,12 +710,11 @@ static int64_t s_last_tx_slot_idx = -1000;  // Track last TX slot for retry sche
 [[maybe_unused]] static int g_sync_delta_ms = 0;
 static void enqueue_beacon_cq();
 static void arm_from_autoseq_or_beacon();
-static void load_storage_regular_files(std::vector<std::string>& files);
 static void qso_load_file_list();
-static void qso_load_fetch_file_list();
 static void delete_load_file_list();
 static void qso_load_entries(const std::string& path);
 static void qso_load_entries_tick();
+static void file_list_tick();
 static void qso_draw_page();
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter = -1);
@@ -902,74 +905,20 @@ static const char* storage_owner_label(StorageOwner owner) {
   return "unknown";
 }
 
-static const char* qso_storage_list_failure_text(StorageOwner owner) {
-  switch (owner) {
-    case StorageOwner::USB_HOST:
-    case StorageOwner::TRANSITION:
-      return "Storage busy";
-    case StorageOwner::UNAVAILABLE:
-      return "Storage unavailable";
-    case StorageOwner::FIRMWARE:
-      return "List failed";
-  }
-  return "List failed";
-}
-
 static void qso_load_file_list() {
   g_q_files.clear();
   g_q_entries.clear();
   g_q_lines.clear();
   g_q_entries_have_next_page = false;
-  std::vector<std::string> files;
-  if (!storage_file_list(files)) {
-    const StorageOwner owner = storage_service_owner();
-    const char* reason = qso_storage_list_failure_text(owner);
-    ESP_LOGW(TAG, "QSO file list failed: owner=%s reason=%s",
-             storage_owner_label(owner), reason);
-    g_q_lines.push_back(reason);
-    return;
-  }
-  qso_browse_select_daily_files(files, &g_q_files);
-  const StorageOwner owner = storage_service_owner();
-  ESP_LOGI(TAG, "QSO file list: owner=%s files=%u daily=%u",
-           storage_owner_label(owner),
-           static_cast<unsigned>(files.size()),
-           static_cast<unsigned>(g_q_files.size()));
-  qso_browse_fill_file_lines(g_q_files, &g_q_lines);
-}
-
-static void load_storage_regular_files(std::vector<std::string>& files) {
-  if (!storage_file_list(files)) files.clear();
-  std::sort(files.begin(), files.end(), std::greater<std::string>());
+  g_q_lines.push_back("Loading...");
+  s_q_list_gen = file_list_worker_submit(FileListKind::QsoDaily);
 }
 
 static void delete_load_file_list() {
   g_d_files.clear();
   g_d_lines.clear();
-  load_storage_regular_files(g_d_files);
-  g_d_files.erase(std::remove(g_d_files.begin(), g_d_files.end(), "Station.txt"), g_d_files.end());
-  if (g_d_files.empty()) {
-    g_d_lines.push_back("No storage files");
-    return;
-  }
-  for (size_t i = 0; i < g_d_files.size(); ++i) {
-    g_d_lines.push_back(std::string("DEL ") + g_d_files[i]);
-  }
-}
-
-static void qso_load_fetch_file_list() {
-  g_q_files.clear();
-  g_q_entries.clear();
-  g_q_lines.clear();
-  g_q_entries_have_next_page = false;
-  load_storage_regular_files(g_q_files);
-  if (g_q_files.empty()) {
-    g_q_lines.push_back("No storage files");
-    return;
-  }
-  for (size_t i = 0; i < g_q_files.size(); ++i) {
-    g_q_lines.push_back(g_q_files[i]);
-  }
+  g_d_lines.push_back("Loading...");
+  s_d_list_gen = file_list_worker_submit(FileListKind::Delete);
 }
 
 static void qso_rebuild_entry_lines() {
@@ -1051,6 +1000,36 @@ static void qso_draw_page() {
   } else {
     // File list view: keep numbered selection rows.
     ui_draw_list(g_q_lines, q_page, -1);
+  }
+}
+
+static void file_list_tick() {
+  FileListDone done;
+  while (file_list_worker_take(&done)) {
+    switch (done.kind) {
+      case FileListKind::QsoDaily:
+        if (done.gen != s_q_list_gen) {
+          break;
+        }
+        file_list_apply(FileListKind::QsoDaily, done.fail, done.names, &g_q_files, &g_q_lines);
+        if (ui_mode == UIMode::QSO && !g_q_show_entries) {
+          qso_draw_page();
+        }
+        break;
+      case FileListKind::Delete:
+        if (done.gen != s_d_list_gen) {
+          break;
+        }
+        file_list_apply(FileListKind::Delete, done.fail, done.names, &g_d_files, &g_d_lines);
+        if (ui_mode == UIMode::DEBUG) {
+          if (!g_d_lines.empty()) {
+            const int max_page = ((int)g_d_lines.size() - 1) / 6;
+            if (d_page > max_page) d_page = max_page;
+          }
+          ui_draw_list(g_d_lines, d_page, -1);
+        }
+        break;
+    }
   }
 }
 
@@ -2339,6 +2318,7 @@ static void low_batt_apply_halt() {
   g_pending_tx_valid = false;
   if (storage_service_firmware_available()) {
     station_save_worker_flush();
+    file_list_worker_flush();
     (void)storage_service_flush_all();
   }
   redraw_countdown_now();
@@ -4288,6 +4268,7 @@ static void host_handle_line(const std::string& line_in) {
       // Wait until the second boundary, then set ESP RTC and sleep
       if (wait_ms > 0) vTaskDelay(pdMS_TO_TICKS(wait_ms));
       station_save_worker_flush();
+      file_list_worker_flush();
       struct timeval tv = { .tv_sec = sleep_epoch, .tv_usec = 0 };
       settimeofday(&tv, NULL);
     }
@@ -4771,6 +4752,7 @@ static void enter_msc_mode(const char* reason) {
   vTaskDelay(pdMS_TO_TICKS(200));
 
   station_save_worker_flush();
+  file_list_worker_flush();
   (void)storage_service_flush_all();
 
   if (uac_ensure_host_uninstalled() != ESP_OK) {
@@ -4852,6 +4834,7 @@ static void app_task_core0(void* /*param*/) {
     debug_log_line("Storage init fail");
   }
   station_save_worker_init();
+  file_list_worker_init();
 
   if (storage_service_firmware_available()) {
     storage_sync_station_from_sd();
@@ -5080,6 +5063,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     tx_tick();              // Process TX state machine (single-threaded, non-blocking)
     tx_abort_hud_tick();
     qso_load_entries_tick();
+    file_list_tick();
 
     // Drain deferred config saves requested by core commands.
     if (g_config_save_pending && storage_service_firmware_available() &&
