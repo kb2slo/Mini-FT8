@@ -64,6 +64,21 @@ The grooming *workflow* is still TBD. Until then:
 - If that commit is older than about **1–2 days**, remind the operator once that it is time to groom Now / Backlog / Ideas / Done (promote, drop shipped Now rows, sequence or park ideas).
 - Do not repeat the reminder in later turns of the same session, and do not interrupt an in-progress coding task.
 
+### Upstream pin watch (session start)
+
+Once per session start, same rules as grooming (once, do not interrupt coding). Network fail → skip.
+
+`ft8_lib` only ([RFC 0002](rfcs/0002-extract-and-boundaries.md) §6). Do not watch `wcheng95/ft8_lib` or Mini-FT8 `upstream`. GitHub **Sync fork** on `kb2slo/ft8_lib` is off (parent is Wei, not Karlis).
+
+```bash
+git ls-remote https://github.com/kgoba/ft8_lib.git refs/heads/master
+git -C components/ft8_lib/vendor merge-base --is-ancestor <kgoba-sha> HEAD
+```
+
+If the submodule is missing, skip. If Karlis’s SHA **is** an ancestor of the pin, we already have him. If it is **not**, he moved.
+
+Then draft a Backlog row in chat. Do not commit it yet. Do not merge, bump the submodule, or open a kgoba PR in that turn. Done-when: written take (sync now / wait / drop). Sync uses RFC 0002 §6 and is a separate Now. Goldens gate the pin. If a row for that SHA already exists, remind; do not duplicate.
+
 ### Local IDF build / flash
 
 Clone with submodules (`git clone --recurse-submodules`; existing trees: `git submodule update --init`). The FT8 codec pin is `components/ft8_lib/vendor` ([RFC 0002](rfcs/0002-extract-and-boundaries.md) §6).
