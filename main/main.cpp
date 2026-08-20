@@ -61,6 +61,7 @@ extern "C" {
 #include "dds_q15.h"
 #include "radio_control.h"
 #include "radio_control_backend.h"
+#include "radio_profile.h"
 #include "radio_ta_format.h"
 #include "decode_sort.h"
 #include "gps.h"
@@ -609,10 +610,6 @@ static int clamp_rtc_comp_value(int value) {
 }
 
 // CqType, OffsetSrc, RadioType now defined in station_types.h
-struct RadioProfileBinding {
-  audio_source_backend_t audio_backend;
-  radio_control_backend_t radio_backend;
-};
 CqType g_cq_type = CqType::CQ;                // visible to core_api.cpp
 std::string g_cq_freetext = "FreeText";       // visible to core_api.cpp
 bool g_skip_tx1 = false;                      // visible to core_api.cpp
@@ -629,7 +626,7 @@ int g_time_osr = 2;
 int g_freq_osr = 1;
 OffsetSrc g_offset_src = OffsetSrc::RANDOM;  // visible to core_api.cpp
 RadioType g_radio = RadioType::QMX;          // visible to core_api.cpp
-static bool g_kh1_connected = false;
+static bool g_manual_cat_connected = false;
 static int g_gps_baud = 115200;
 static bool g_gnss_lora_enabled = false;
 static constexpr size_t kIgnorePrefixTextMaxLen = 64;
@@ -637,10 +634,7 @@ std::string g_comment1 = "MiniFT8 /Radio";      // visible to core_api.cpp
 static std::string g_ignore_prefix_text;
 std::vector<std::string> g_ignore_prefixes;     // visible to core_api.cpp
 static bool g_rxtx_log = true;
-static RadioType canonical_radio_type(RadioType r);
-static bool is_kh1_radio(RadioType r);
 static bool radio_type_uses_display_only(RadioType r);
-static RadioProfileBinding get_radio_profile_binding(RadioType r);
 void apply_radio_profile_binding();   // visible to core_api.cpp
 static void gps_runtime_tick();
 static std::string expand_comment_macros(const std::string& src);
@@ -1556,17 +1550,6 @@ static const char* offset_name(OffsetSrc o) {
   return "Random";
 }
 
-static RadioType canonical_radio_type(RadioType r) {
-  if (r == RadioType::QDX ||
-      r == RadioType::KH1_USBC || r == RadioType::KH1_MIC) return r;
-  return RadioType::QMX;
-}
-
-static bool is_kh1_radio(RadioType r) {
-  r = canonical_radio_type(r);
-  return r == RadioType::KH1_USBC || r == RadioType::KH1_MIC;
-}
-
 static bool radio_type_uses_display_only(RadioType r) {
   // Always use display-only board init (upstream design): audio input is owned
   // exclusively by the selected backend (UAC for QMX/KH1-USBC, native I2S mic
@@ -1578,90 +1561,42 @@ static bool radio_type_uses_display_only(RadioType r) {
   return true;
 }
 
-static RadioType radio_type_from_saved_int(int value) {
-  switch (value) {
-    case (int)RadioType::KH1_USBC:
-      return RadioType::KH1_USBC;
-    case (int)RadioType::KH1_MIC:
-      return RadioType::KH1_MIC;
-    case (int)RadioType::QDX:
-      return RadioType::QDX;
-    case (int)RadioType::QMX:
-    default:
-      return RadioType::QMX;
-  }
-}
-
-static RadioProfileBinding get_radio_profile_binding(RadioType r) {
-  switch (canonical_radio_type(r)) {
-    case RadioType::KH1_USBC:
-      return {AUDIO_SOURCE_USB_UAC_GENERIC, RADIO_CONTROL_KH1_CAT};
-    case RadioType::KH1_MIC:
-      return {AUDIO_SOURCE_KH1_MIC, RADIO_CONTROL_KH1_CAT};
-    case RadioType::QDX:
-      return {AUDIO_SOURCE_QMX_UAC, RADIO_CONTROL_QDX};
-    case RadioType::QMX:
-    default:
-      return {AUDIO_SOURCE_QMX_UAC, RADIO_CONTROL_QMX};
-  }
-}
-
-static const char* radio_name(RadioType r) {
-  switch (canonical_radio_type(r)) {
-    case RadioType::QMX: return "QMX";
-    case RadioType::QDX: return "QDX";
-    case RadioType::KH1_USBC: return "KH1-USBC";
-    case RadioType::KH1_MIC: return "KH1-MIC";
-    default: break;
-  }
-  return "None";
-}
-
 void apply_radio_profile_binding() {
   audio_source_backend_t prev_audio = audio_source_get_backend();
-  g_radio = canonical_radio_type(g_radio);
+  g_radio = radio_profile_canonical(g_radio);
   g_gps_baud = normalize_gps_baud_value(g_gps_baud);
-  auto start_gps = [&]() {
-    gps_start(gps_pins_for_current_source());
-  };
-  if (is_kh1_radio(g_radio)) {
-    // KH1 CAT and PORTA GPS both use UART1 on G1/G2. GNSS LoRa uses UART2
-    // on G15/G13, so it can keep running while KH1 is connected.
-    if (g_kh1_connected) {
-      if (g_gnss_lora_enabled) {
-        start_gps();
-      } else {
-        gps_stop();
-      }
-      radio_control_kh1_set_enabled(true);
-    } else {
-      radio_control_kh1_set_enabled(false);
-      start_gps();
-    }
+  const RadioProfile& profile = radio_profile_get(g_radio);
+
+  // STATUS-2 CAT latch for radios with needs_manual_connect. Leaving those
+  // radios must drop it, or the next pick looks already linked.
+  if (profile.needs_manual_connect) {
+    radio_control_kh1_set_enabled(g_manual_cat_connected);
   } else {
-    // Leaving KH1 releases UART1 back to PORTA GPS.
-    g_kh1_connected = false;
+    g_manual_cat_connected = false;
     radio_control_kh1_set_enabled(false);
-    start_gps();
   }
-  RadioProfileBinding binding = get_radio_profile_binding(g_radio);
-  audio_source_set_backend(binding.audio_backend);
-  radio_control_set_backend(binding.radio_backend);
-  if (audio_source_is_streaming() && prev_audio != binding.audio_backend) {
+  if (radio_profile_porta_gps_should_run(g_radio, g_manual_cat_connected, g_gnss_lora_enabled)) {
+    gps_start(gps_pins_for_current_source());
+  } else {
+    gps_stop();
+  }
+  audio_source_set_backend(profile.audio_backend);
+  radio_control_set_backend(profile.radio_backend);
+  if (audio_source_is_streaming() && prev_audio != profile.audio_backend) {
     ESP_LOGW(TAG, "Audio backend changed while streaming; stop/start audio to apply (%s -> %s)",
              audio_source_backend_name(prev_audio),
-             audio_source_backend_name(binding.audio_backend));
+             audio_source_backend_name(profile.audio_backend));
   }
   ESP_LOGI(TAG, "Profile bind radio=%s audio=%s control=%s",
-           radio_name(g_radio),
-           audio_source_backend_name(binding.audio_backend),
-           radio_control_backend_name(binding.radio_backend));
+           profile.name,
+           audio_source_backend_name(profile.audio_backend),
+           radio_control_backend_name(profile.radio_backend));
 }
 
 static bool notify_radio_control_audio_start_if_allowed(const char* reason) {
-  if (is_kh1_radio(g_radio) && !g_kh1_connected) {
-    ESP_LOGI(TAG, "Skip CAT audio start for %s: KH1 CAT/TX not connected",
-             radio_name(g_radio));
+  if (radio_profile_needs_manual_connect(g_radio) && !g_manual_cat_connected) {
+    ESP_LOGI(TAG, "Skip CAT audio start for %s: not connected",
+             radio_profile_name(g_radio));
     return false;
   }
 
@@ -1669,7 +1604,7 @@ static bool notify_radio_control_audio_start_if_allowed(const char* reason) {
   const bool ok = (rc == ESP_OK);
   ESP_LOGI(TAG, "CAT audio start %s radio=%s reason=%s rc=%d",
            ok ? "ok" : "failed",
-           radio_name(g_radio),
+           radio_profile_name(g_radio),
            reason ? reason : "",
            (int)rc);
   debug_log_line(ok ? "CAT audio ok" : "CAT audio fail");
@@ -1681,7 +1616,7 @@ static bool start_rx_audio_for_current_radio(const char* reason, bool notify_cat
 
   if (audio_source_is_streaming()) {
     ESP_LOGI(TAG, "RX audio already streaming radio=%s reason=%s",
-             radio_name(g_radio),
+             radio_profile_name(g_radio),
              reason ? reason : "");
     if (notify_cat_if_allowed) {
       notify_radio_control_audio_start_if_allowed(reason);
@@ -1689,7 +1624,7 @@ static bool start_rx_audio_for_current_radio(const char* reason, bool notify_cat
     return true;
   }
 
-  const char* mode = radio_name(g_radio);
+  const char* mode = radio_profile_name(g_radio);
   const char* backend = audio_source_backend_name(audio_source_get_backend());
   ESP_LOGI(TAG, "RX audio start radio=%s backend=%s reason=%s",
            mode,
@@ -1698,7 +1633,7 @@ static bool start_rx_audio_for_current_radio(const char* reason, bool notify_cat
   debug_log_line(std::string("Audio start ") + mode);
   debug_log_line(std::string("Audio bind ") + backend);
 
-  const bool is_uac_backend = (std::strstr(backend, "uac") != nullptr);
+  const bool is_uac_backend = radio_profile_audio_is_uac(g_radio);
   if (is_uac_backend) log_mem_caps("UAC_BEFORE_START");
   if (!audio_source_start()) {
     if (is_uac_backend) log_mem_caps("UAC_AFTER_START");
@@ -1728,7 +1663,7 @@ static bool handle_kh1_diag_key(char c) {
     return false;
   }
 
-  if (!is_kh1_radio(g_radio) || !radio_control_kh1_is_enabled() || !radio_control_ready()) {
+  if (!radio_profile_shares_porta_uart(g_radio) || !radio_control_kh1_is_enabled() || !radio_control_ready()) {
     ESP_LOGW(TAG, "KH1 CAT diagnostic %c skipped: not ready", key);
     debug_log_line("KH1 CAT not ready");
     return true;
@@ -1835,7 +1770,7 @@ static void gps_runtime_tick() {
   static bool s_gps_grid_logged = false;
   static int s_last_time_sync_hour_key = -1;
 
-  if (is_kh1_radio(g_radio) && g_kh1_connected && !g_gnss_lora_enabled) return;
+  if (!radio_profile_porta_gps_should_run(g_radio, g_manual_cat_connected, g_gnss_lora_enabled)) return;
 
   gps_tick();
 
@@ -1939,7 +1874,7 @@ static std::string expand_comment_macros(const std::string& src) {
       pos += to.size();
     }
   };
-  repl(out, "/Radio", radio_name(g_radio));
+  repl(out, "/Radio", radio_profile_name(g_radio));
 
   const std::string grid_macro =
       (g_time_synced_from_gps && g_grid_from_gps && g_grid_gps_display8.size() == 8)
@@ -2296,8 +2231,8 @@ static void enter_charge_mode() {
   ui_draw_waterfall();
   redraw_countdown_now();
   if (was_streaming) {
-    const bool kh1_usbc = (canonical_radio_type(g_radio) == RadioType::KH1_USBC);
-    start_rx_audio_for_current_radio("charge mode exit", !kh1_usbc);
+    const bool defer_cat = radio_profile_defer_cat_on_audio_start(g_radio);
+    start_rx_audio_for_current_radio("charge mode exit", !defer_cat);
     g_decode_enabled = true;
   }
   draw_menu_view();
@@ -3734,7 +3669,7 @@ static void draw_menu_view() {
   } else {
     lines.push_back(std::string("Fixed:") + std::to_string(g_offset_hz));
   }
-  lines.push_back(std::string("Radio:") + radio_name(g_radio));
+  lines.push_back(std::string("Radio:") + radio_profile_name(g_radio));
   lines.push_back(std::string("IgnoreList:") + head_trim(g_ignore_prefix_text, 10));
   lines.push_back(std::string("C:") + head_trim(expand_comment1(), 16));
 #if ENABLE_FT4
@@ -3794,14 +3729,14 @@ static void draw_menu_view() {
 
 static std::string status_sync_line() {
   const bool streaming = audio_source_is_streaming();
-  const RadioType radio = canonical_radio_type(g_radio);
-  if (is_kh1_radio(radio)) {
-    const char* name = radio_name(radio);
-    if (!g_kh1_connected) {
+  const RadioType radio = radio_profile_canonical(g_radio);
+  if (radio_profile_needs_manual_connect(radio)) {
+    const char* name = radio_profile_name(radio);
+    if (!g_manual_cat_connected) {
       return std::string("Connect ") + name;
     }
     const bool cat_ready = radio_control_ready();
-    if (radio == RadioType::KH1_USBC && !streaming) {
+    if (radio_profile_defer_cat_on_audio_start(radio) && !streaming) {
       const std::string rx_status = audio_source_get_status_string();
       if (rx_status == "No 48k UAC mic format") {
         return head_trim(rx_status, 19);
@@ -3811,8 +3746,8 @@ static std::string status_sync_line() {
     if (cat_ready && !streaming) return std::string("Sync ") + name + "(TX)";
     return std::string("Connect ") + name;
   }
-  if (streaming) return std::string("Sync to ") + radio_name(radio);
-  return std::string("Connect to ") + radio_name(radio);
+  if (streaming) return std::string("Sync to ") + radio_profile_name(radio);
+  return std::string("Connect to ") + radio_profile_name(radio);
 }
 
 static std::string s_last_gps_lines[6];
@@ -4481,7 +4416,7 @@ static void station_fill_from_globals(StationSettings* s) {
   s->call = g_call;
   s->grid = g_grid_saved_manual;
   s->offset_src = (int)g_offset_src;
-  s->radio = (int)canonical_radio_type(g_radio);
+  s->radio = (int)radio_profile_canonical(g_radio);
   s->gps_baud = g_gps_baud;
   s->gnss_lora = g_gnss_lora_enabled;
   s->comment1 = g_comment1;
@@ -4534,7 +4469,7 @@ static void station_apply_to_globals(const StationSettings& s) {
     g_grid_gps_display8.clear();
   }
   g_offset_src = (OffsetSrc)s.offset_src;
-  g_radio = radio_type_from_saved_int(s.radio);
+  g_radio = radio_profile_from_saved_int(s.radio);
   g_gps_baud = normalize_gps_baud_value(s.gps_baud);
   g_gnss_lora_enabled = s.gnss_lora;
   g_comment1 = s.comment1;
@@ -4548,14 +4483,14 @@ static void station_apply_to_globals(const StationSettings& s) {
 
 static RadioType load_station_radio_type_only() {
   StorageStream* stream = storage_stream_open(STATION_FILE, StorageOpenMode::READ);
-  if (!stream) return canonical_radio_type(g_radio);
+  if (!stream) return radio_profile_canonical(g_radio);
 
   StationSettings s;
   station_settings_init(&s);
-  s.radio = (int)canonical_radio_type(g_radio);
+  s.radio = (int)radio_profile_canonical(g_radio);
   station_parse(station_read_stream_text(stream), &s);
   storage_stream_close(stream);
-  return canonical_radio_type(radio_type_from_saved_int(s.radio));
+  return radio_profile_canonical(radio_profile_from_saved_int(s.radio));
 }
 
 static void load_station_data() {
@@ -4803,14 +4738,14 @@ static void begin_usb_host_mode() {
     status_edit_idx = 1;
     draw_status_view();
   }
-  if (is_kh1_radio(g_radio) && !g_kh1_connected) {
-    g_kh1_connected = true;
+  if (radio_profile_needs_manual_connect(g_radio) && !g_manual_cat_connected) {
+    g_manual_cat_connected = true;
     apply_radio_profile_binding();
   }
-  const bool kh1_usbc = (canonical_radio_type(g_radio) == RadioType::KH1_USBC);
+  const bool defer_cat = radio_profile_defer_cat_on_audio_start(g_radio);
   if (!audio_source_is_streaming()) {
-    start_rx_audio_for_current_radio("status key 2", !kh1_usbc);
-  } else if (!kh1_usbc) {
+    start_rx_audio_for_current_radio("status key 2", !defer_cat);
+  } else if (!defer_cat) {
     notify_radio_control_audio_start_if_allowed("status key 2");
   }
   int freq_hz = (int)(g_bands[g_band_sel].freq * 1000.0f);
@@ -5157,11 +5092,11 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
   static int last_status_sync_sig = -1; // -1 forces a redraw on first entry
   static std::string last_status_sync_text;
   int cur_status_sync_sig = audio_source_is_streaming() ? 1 : 0;
-  cur_status_sync_sig |= ((int)canonical_radio_type(g_radio) << 4);
-  if (is_kh1_radio(g_radio)) {
+  cur_status_sync_sig |= ((int)radio_profile_canonical(g_radio) << 4);
+  if (radio_profile_needs_manual_connect(g_radio)) {
     cur_status_sync_sig |= 2;
-    if (g_kh1_connected) cur_status_sync_sig |= 8;
-    if (g_kh1_connected && radio_control_ready()) cur_status_sync_sig |= 4;
+    if (g_manual_cat_connected) cur_status_sync_sig |= 8;
+    if (g_manual_cat_connected && radio_control_ready()) cur_status_sync_sig |= 4;
   }
   std::string cur_status_sync_text;
   if (ui_mode == UIMode::STATUS) {
@@ -5749,33 +5684,19 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                   menu_edit_buf = std::to_string(g_offset_hz);
                   draw_menu_view();
                 } else if (c == '3') {
-                  RadioType old_radio = canonical_radio_type(g_radio);
-                  audio_source_backend_t old_audio = get_radio_profile_binding(old_radio).audio_backend;
+                  RadioType old_radio = radio_profile_canonical(g_radio);
+                  audio_source_backend_t old_audio = radio_profile_get(old_radio).audio_backend;
                   bool was_streaming = audio_source_is_streaming();
-                  switch (canonical_radio_type(g_radio)) {
-                    case RadioType::QMX:
-                      g_radio = RadioType::QDX;
-                      break;
-                    case RadioType::QDX:
-                      g_radio = RadioType::KH1_USBC;
-                      break;
-                    case RadioType::KH1_USBC:
-                      g_radio = RadioType::KH1_MIC;
-                      break;
-                    case RadioType::KH1_MIC:
-                    default:
-                      g_radio = RadioType::QMX;
-                      break;
-                  }
-                  RadioType new_radio = canonical_radio_type(g_radio);
-                  audio_source_backend_t new_audio = get_radio_profile_binding(new_radio).audio_backend;
+                  g_radio = radio_profile_next(g_radio);
+                  RadioType new_radio = radio_profile_canonical(g_radio);
+                  audio_source_backend_t new_audio = radio_profile_get(new_radio).audio_backend;
                   if (was_streaming && old_audio != new_audio) {
                     ESP_LOGI(TAG, "Stopping audio for radio change %s/%s -> %s/%s",
-                             radio_name(old_radio),
+                             radio_profile_name(old_radio),
                              audio_source_backend_name(old_audio),
-                             radio_name(new_radio),
+                             radio_profile_name(new_radio),
                              audio_source_backend_name(new_audio));
-                    debug_log_line(std::string("Audio stop ") + radio_name(old_radio));
+                    debug_log_line(std::string("Audio stop ") + radio_profile_name(old_radio));
                     audio_source_stop();
                   }
                   apply_radio_profile_binding();

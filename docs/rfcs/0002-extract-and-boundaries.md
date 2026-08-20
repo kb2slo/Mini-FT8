@@ -2,7 +2,7 @@
 
 * **Status:** Done
 * **Author:** Jeff Kalikstein, KB2SLO
-* **Covers:** extract / style / `ft8_lib` / radio contract (pre-I5). Roadmap Done. §2 was Done-when. Remainder of §7 contributor test is Backlog B14. Was I11 / B3 / B9.
+* **Covers:** extract / style / `ft8_lib` / radio contract (pre-I5). Roadmap Done. §2 was Done-when. Remainder of §7 contributor test is Now B14. Was I11 / B3 / B9.
 * **Does not cover:** I3 companion, I6 multi-mode rename, I8/I9/I10 QMX product features
 
 ## 1. Why
@@ -96,9 +96,9 @@ Restyle and rename only the unit you are already changing.
 | G | Dead-code pass on each extracted unit | Done. D–F APIs all live; unused `#include <cstring>` dropped from Station. |
 | H | QSO browse parse/format (daily `.adi` filter, record page, list lines) | Done. `components/qso_browse`; `host_test_qso_browse`. Field: Q screen on ADV. Directory list FATFS is a worker (B7). Record page read is time-sliced in `main`. Unblocked B7. |
 
-One open slice at a time. **No open extract.** C (`ft8_lib` pin) is done. Campaign §2 is met. Remainder of §7 (add a radio without editing `main.cpp`) is Backlog B14.
+One open slice at a time. **No open extract.** C (`ft8_lib` pin) is done. Campaign §2 is met. Remainder of §7 (add a radio without editing `main.cpp`) is Now B14.
 
-Campaign Done-when is §2. This RFC is Roadmap Done.
+Campaign Done-when is §2. This RFC is Roadmap Done. Remainder of §7 is Now B14.
 
 ## 9. What this is not
 

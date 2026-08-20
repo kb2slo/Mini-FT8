@@ -11,4 +11,5 @@ host_test_qso_browse
 host_test_copy_block
 host_test_station_save_queue
 host_test_file_list
+host_test_radio_profile
 
