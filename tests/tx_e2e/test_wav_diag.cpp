@@ -21,8 +21,8 @@
 #include <algorithm>
 #include <string>
 #include "decode_helper.h"
-#include "../../components/ft8_lib/ft8/decode.h"
-#include "../../components/ft8_lib/ft8/constants.h"
+#include "../../components/ft8_lib/vendor/ft8/decode.h"
+#include "../../components/ft8_lib/vendor/ft8/constants.h"
 #include "../../components/ft8_lib/common/monitor.h"
 
 // MONITOR_NFFT_MAX is the hard static-buffer limit in monitor.c

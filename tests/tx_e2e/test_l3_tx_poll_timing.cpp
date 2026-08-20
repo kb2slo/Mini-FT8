@@ -43,8 +43,8 @@
 #include "decode_helper.h"
 #include "synth.h"
 #include "timing_sim.h"
-#include "../../components/ft8_lib/ft8/encode.h"
-#include "../../components/ft8_lib/ft8/constants.h"
+#include "../../components/ft8_lib/vendor/ft8/encode.h"
+#include "../../components/ft8_lib/vendor/ft8/constants.h"
 
 // ── Phase-continuous FSK with per-symbol sample counts ───────────────────────
 // (kept here for backward compat with existing jitter-stats printing code)

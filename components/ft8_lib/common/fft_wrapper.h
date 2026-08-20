@@ -1,8 +1,7 @@
 #ifndef _INCLUDE_FFT_WRAPPER_H_
 #define _INCLUDE_FFT_WRAPPER_H_
 
-// Use relative path so Arduino finds it without extra include path
-#include "../fft/kiss_fftr.h"
+#include "fft/kiss_fftr.h"
 
 #ifdef __cplusplus
 extern "C" {

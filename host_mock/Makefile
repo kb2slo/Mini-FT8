@@ -5,7 +5,8 @@ CFLAGS   = -DHOST_MOCK -g -Wall
 
 # host_mock first so mock esp_log.h shadows the real one
 INCLUDES = -I. -I../main -I../components/ui/include \
-           -I../components/ft8_lib -I../components/ft8_lib/ft8 \
+           -I../components/ft8_lib -I../components/ft8_lib/vendor \
+           -I../components/ft8_lib/vendor/ft8 \
            -I../components/adif/include \
            -I../components/station/include \
            -I../components/board_cardputer_adv/include \
@@ -15,9 +16,8 @@ INCLUDES = -I. -I../main -I../components/ui/include \
 CORE_SRC   = ../main/autoseq.cpp
 MOCK_SRC   = host_main.cpp host_mocks.cpp json_parser.cpp
 # FT8 encode sources (uncomment to link real encoder):
-# FT8_SRC  = ../components/ft8_lib/ft8/encode.c ../components/ft8_lib/ft8/message.c \
-#            ../components/ft8_lib/ft8/crc.c ../components/ft8_lib/ft8/pack.c \
-#            ../components/ft8_lib/ft8/text.c
+# FT8_SRC  = ../components/ft8_lib/vendor/ft8/encode.c ../components/ft8_lib/vendor/ft8/message.c \
+#            ../components/ft8_lib/vendor/ft8/crc.c ../components/ft8_lib/vendor/ft8/text.c
 
 ALL_CXX_SRC = $(CORE_SRC) $(MOCK_SRC)
 ALL_C_SRC   = $(FT8_SRC)

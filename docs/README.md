@@ -66,6 +66,8 @@ The grooming *workflow* is still TBD. Until then:
 
 ### Local IDF build / flash
 
+Clone with submodules (`git clone --recurse-submodules`; existing trees: `git submodule update --init`). The FT8 codec pin is `components/ft8_lib/vendor` ([RFC 0002](rfcs/0002-extract-and-boundaries.md) §6).
+
 After `source` of the idf5.5 venv and `esp-idf/export.sh`. Radio unplugged from Cardputer USB-C. Leave Launcher **USB** (MSC) first so `/dev/cu.usbmodem*` exists.
 
 **Keep Launcher** (daily iterate once Mini-FT8 has been installed from Launcher once):

@@ -1,20 +1,22 @@
+# IDF wrapper around the pinned ft8_lib fork (vendor/).
+# Compile our monitor (static BSS arenas) and fft_wrapper; do not compile
+# vendor/common/monitor.c (malloc). Protocol sources come from the pin.
 idf_component_register(SRCS
-    ft8/decode.c
-    ft8/message.c
-    ft8/text.c
-    ft8/encode.c
-    ft8/constants.c
-    ft8/crc.c
-    ft8/ldpc.c
-    fft/kiss_fft.c
-    fft/kiss_fftr.c
+    vendor/ft8/decode.c
+    vendor/ft8/message.c
+    vendor/ft8/text.c
+    vendor/ft8/encode.c
+    vendor/ft8/constants.c
+    vendor/ft8/crc.c
+    vendor/ft8/ldpc.c
+    vendor/fft/kiss_fft.c
+    vendor/fft/kiss_fftr.c
     common/monitor.c
     common/fft_wrapper.c
-    # add any other ft8_lib sources you need
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "." "vendor"
 )
 
-# Relax warnings that trigger -Werror in IDF
+# Relax warnings that trigger -Werror in IDF. Vendor tree is not ours to restyle.
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-unused-const-variable
     -Wno-format

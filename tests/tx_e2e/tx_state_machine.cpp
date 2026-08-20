@@ -1,6 +1,6 @@
 #include "tx_state_machine.h"
-#include "../../components/ft8_lib/ft8/message.h"
-#include "../../components/ft8_lib/ft8/encode.h"
+#include "../../components/ft8_lib/vendor/ft8/message.h"
+#include "../../components/ft8_lib/vendor/ft8/encode.h"
 #include "radio_ta_format.h"
 #include <cmath>
 #include <cstdio>

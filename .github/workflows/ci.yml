@@ -50,6 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - name: Autoseq host_mock
         working-directory: host_mock
@@ -93,6 +95,8 @@ jobs:
       MINIFT8_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: true
 
       - name: Build with ESP-IDF 5.5.1
         uses: espressif/esp-idf-ci-action@v1

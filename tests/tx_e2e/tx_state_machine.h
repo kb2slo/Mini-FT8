@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string>
 #include <vector>
-#include "../../components/ft8_lib/ft8/constants.h"
+#include "../../components/ft8_lib/vendor/ft8/constants.h"
 
 #ifdef __cplusplus
 extern "C" {

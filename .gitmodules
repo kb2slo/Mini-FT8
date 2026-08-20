@@ -1,0 +1,3 @@
+[submodule "components/ft8_lib/vendor"]
+	path = components/ft8_lib/vendor
+	url = https://github.com/kb2slo/ft8_lib.git

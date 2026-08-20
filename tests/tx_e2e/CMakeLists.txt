@@ -20,25 +20,28 @@ endif()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wno-unused-parameter -Wno-format")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-unused-parameter")
 
-# List of ft8_lib source files (non-IDF compatible version)
+# Protocol/FFT from the pinned fork; monitor and fft_wrapper stay Mini-FT8.
+set(FT8_LIB_DIR ${CMAKE_SOURCE_DIR}/../../components/ft8_lib)
 set(FT8_LIB_SOURCES
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/ft8/decode.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/ft8/message.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/ft8/text.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/ft8/encode.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/ft8/constants.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/ft8/crc.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/ft8/ldpc.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/fft/kiss_fft.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/fft/kiss_fftr.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/common/monitor.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/common/fft_wrapper.c
-    ${CMAKE_SOURCE_DIR}/../../components/ft8_lib/common/stpcpy_compat.c
+    ${FT8_LIB_DIR}/vendor/ft8/decode.c
+    ${FT8_LIB_DIR}/vendor/ft8/message.c
+    ${FT8_LIB_DIR}/vendor/ft8/text.c
+    ${FT8_LIB_DIR}/vendor/ft8/encode.c
+    ${FT8_LIB_DIR}/vendor/ft8/constants.c
+    ${FT8_LIB_DIR}/vendor/ft8/crc.c
+    ${FT8_LIB_DIR}/vendor/ft8/ldpc.c
+    ${FT8_LIB_DIR}/vendor/fft/kiss_fft.c
+    ${FT8_LIB_DIR}/vendor/fft/kiss_fftr.c
+    ${FT8_LIB_DIR}/common/monitor.c
+    ${FT8_LIB_DIR}/common/fft_wrapper.c
 )
+if(WIN32)
+    list(APPEND FT8_LIB_SOURCES ${FT8_LIB_DIR}/common/stpcpy_compat.c)
+endif()
 
 # Create ft8_lib static library
 add_library(ft8_lib STATIC ${FT8_LIB_SOURCES})
-target_include_directories(ft8_lib PUBLIC ${CMAKE_SOURCE_DIR}/../../components/ft8_lib)
+target_include_directories(ft8_lib PUBLIC ${FT8_LIB_DIR} ${FT8_LIB_DIR}/vendor)
 target_compile_options(ft8_lib PRIVATE
     -Wno-unused-const-variable
     -Wno-format

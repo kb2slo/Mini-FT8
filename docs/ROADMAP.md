@@ -10,7 +10,7 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 | ID | Item | Done when |
 |---|---|---|
-| RFC 0002 | Extract, style, and boundaries | Outcomes in [RFC 0002](rfcs/0002-extract-and-boundaries.md) §2. No open extract slice. Slices A–B and D–H done. Slice C (`ft8_lib` pin) parked. Was I11. |
+| RFC 0002 | Extract, style, and boundaries | Outcomes in [RFC 0002](rfcs/0002-extract-and-boundaries.md) §2. Slices A–H done (C pin `kb2slo/ft8_lib`). Campaign §2 met. Was I11. |
 
 ## Backlog
 

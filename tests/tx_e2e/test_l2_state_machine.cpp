@@ -3,7 +3,7 @@
 #include <cmath>
 #include "tx_state_machine.h"
 #include "decode_helper.h"
-#include "../../components/ft8_lib/ft8/constants.h"
+#include "../../components/ft8_lib/vendor/ft8/constants.h"
 
 // Directory where failure WAVs are written (relative to CWD when running tests)
 #ifndef FAIL_WAV_DIR

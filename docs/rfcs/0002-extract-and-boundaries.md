@@ -49,12 +49,17 @@ See [STYLE.md](../STYLE.md) (structure section). Summary:
 
 Third-party source we did not write:
 
-- Pin a SHA (submodule or our GitHub fork of `kgoba/ft8_lib`).
-- Mini-FT8 wrappers only: `fft_wrapper`, buffers, IDF CMake, ESP static-FFT.
-- Protocol patches (FD / nonstd / Dxpedition) live as rebaseable commits on the fork, each small enough to open upstream or drop.
+- Pin is the git submodule `components/ft8_lib/vendor` → [kb2slo/ft8_lib](https://github.com/kb2slo/ft8_lib) (fork of [wcheng95/ft8_lib](https://github.com/wcheng95/ft8_lib) / [kgoba/ft8_lib](https://github.com/kgoba/ft8_lib)). Clone Mini-FT8 with `--recurse-submodules`.
+- Mini-FT8 wrappers only, in `components/ft8_lib/` (not in the submodule): `common/fft_wrapper`, `common/monitor` (static BSS arenas), IDF `CMakeLists.txt`, `common/stpcpy_compat` (Windows host only). Do not compile `vendor/common/monitor.c`.
+- Protocol patches live as rebaseable commits on `kb2slo/ft8_lib`: Wei’s Field Day (`d8a41e6`, `bb3d94d`, also [kgoba#54](https://github.com/kgoba/ft8_lib/pull/54)) and DXpedition type 0.1 (`5d095f4`). Nonstd is already upstream (`9fec6ca`). Do not push DXpedition onto Wei’s `master` or onto #54.
 - Contribute back only Karlis-shaped fixes (correctness, protocol). Never “make it compile on ESP32-S3.”
 - Do not clang-format or re-indent that tree.
-- **Bump:** fetch, 3-way merge, `tx_e2e` golden RX/encode green, then move the pin. Goldens fail → no bump.
+- **Bump:**
+  1. `git -C components/ft8_lib/vendor fetch origin`
+  2. `git -C components/ft8_lib/vendor fetch https://github.com/kgoba/ft8_lib.git master`
+  3. 3-way merge kgoba into the fork (`git -C components/ft8_lib/vendor merge FETCH_HEAD`). Keep protocol commits rebaseable; do not fold in ESP glue.
+  4. Push the fork, then move the submodule pin (`git add components/ft8_lib/vendor`).
+  5. `tx_e2e` golden RX/encode must be green before the pin moves. Goldens fail → no bump.
 
 M5 stays “do not format, do not fork unless we must.” It is not in this campaign’s bump path.
 
@@ -84,14 +89,14 @@ Restyle and rename only the unit you are already changing.
 |---|---|---|
 | A | This RFC + `STYLE.md` + agent workflow tenant | Done (D10) |
 | B | Widen radio ops/capabilities; move power/SWR and QMX `if`s out of dispatcher/`main` | Done. ADV + QMX+ on desk. Pre-I5. |
-| C | Pin `ft8_lib`, wrappers, documented bump path; goldens gate the pin | Parked. Was B9. Resume after later slices as needed. |
+| C | Pin `ft8_lib`, wrappers, documented bump path; goldens gate the pin | Done. Submodule `components/ft8_lib/vendor` → `kb2slo/ft8_lib` @ `f211146`. Host goldens + `idf.py build` green. Field: QSO on ADV+QMX. Was B9. |
 | D | Station parse/serialize + `sscanf` date/time overlap; host round-trip | Done. `components/station`; `host_test_station`. Field: load/save/reboot on ADV. Was B3/B5. |
 | E | ADIF 10-min *logger* dedupe into `components/adif` (merge already shipped) | Done. Host: window, refresh, cap. Merge still ignores the window. Was B3 remainder. |
 | F | TA format (kill `tx_e2e` copy), decode sort, power hysteresis | Done. Shared `radio_ta_format`; host decode sort and battery hold. Field: QSO on ADV+QMX+. Was B3 remainder. |
 | G | Dead-code pass on each extracted unit | Done. D–F APIs all live; unused `#include <cstring>` dropped from Station. |
 | H | QSO browse parse/format (daily `.adi` filter, record page, list lines) | Done. `components/qso_browse`; `host_test_qso_browse`. Field: Q screen on ADV. Directory list FATFS is a worker (B7). Record page read is time-sliced in `main`. Unblocked B7. |
 
-One open slice at a time. **No open extract.** C (`ft8_lib`) is parked, not dropped. Campaign §2.3 (vendor pin) waits on C. B7 (non-blocking FATFS) can use the QSO browse module.
+One open slice at a time. **No open extract.** C (`ft8_lib` pin) is done. Campaign §2 is met.
 
 Campaign Done-when is §2.
 

@@ -8,9 +8,8 @@ extern "C"
 
 #include <stddef.h>
 
-// Use relative paths so it works in Arduino sketch without extra include path
-#include "../ft8/decode.h"
-#include "../common/fft_wrapper.h"
+#include "ft8/decode.h"
+#include "fft_wrapper.h"
 
 /// Configuration options for FT4/FT8 monitor
 typedef struct

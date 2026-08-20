@@ -6,7 +6,7 @@
 #include <string>
 #include "decode_helper.h"
 #include "synth.h"
-#include "../../components/ft8_lib/ft8/encode.h"
+#include "../../components/ft8_lib/vendor/ft8/encode.h"
 
 
 // Test case structure

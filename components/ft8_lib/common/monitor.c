@@ -1,8 +1,8 @@
 #include "monitor.h"
-#include "../common/common.h"
+#include "common.h"
 
 #define LOG_LEVEL LOG_INFO
-#include "../ft8/debug.h"
+#include "ft8/debug.h"
 
 #include <stdlib.h>
 #include <string.h>

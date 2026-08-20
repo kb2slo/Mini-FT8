@@ -17,9 +17,9 @@
 #include <vector>
 #include "decode_helper.h"
 #include "synth.h"
-#include "../../components/ft8_lib/ft8/encode.h"
-#include "../../components/ft8_lib/ft8/message.h"
-#include "../../components/ft8_lib/ft8/constants.h"
+#include "../../components/ft8_lib/vendor/ft8/encode.h"
+#include "../../components/ft8_lib/vendor/ft8/message.h"
+#include "../../components/ft8_lib/vendor/ft8/constants.h"
 
 struct GoldenSpec {
     const char*    filename;

@@ -19,7 +19,7 @@
 #include <cstring>
 #include <vector>
 #include "decode_helper.h"
-#include "../../components/ft8_lib/ft8/constants.h"
+#include "../../components/ft8_lib/vendor/ft8/constants.h"
 
 // GOLDEN_DIR is injected by CMake as an absolute path so ctest can find the
 // files regardless of where the test binary is run from.
