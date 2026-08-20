@@ -1,13 +1,7 @@
 ---
-description: Prefer switch over chained if for closed constant sets
+description: C/C++ style is docs/STYLE.md
 globs: "**/*.{c,cpp,h,hpp}"
 alwaysApply: false
 ---
 
-# Prefer `switch` over chained `if`
-
-When matching a value against a closed set of constants, use `switch`, not
-`if` / `else if` or a `||` equality chain. Keep `if` for ranges and compound
-predicates. Skip vendored `M5*` / `ft8_lib`.
-
-See `docs/STYLE.md`.
+Follow `docs/STYLE.md` for our C/C++ (not vendored `M5*` / `ft8_lib`).

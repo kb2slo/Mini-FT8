@@ -1,6 +1,6 @@
 # docs/
 
-Human- and tool-readable project memory. Prefer this tree over Cursor rules, `CLAUDE.md`, or chat transcripts.
+Human- and tool-readable project memory. Prefer this tree over editor-specific rule files, vendor instruction stubs, or chat transcripts.
 
 | File | Role |
 |---|---|
@@ -37,7 +37,17 @@ Do not expand `main.cpp` without extracting a tested function. Extract/style/rad
 
 This fork ships on **`origin/main`** (`kb2slo/Mini-FT8`). Do **not** push or open PRs to `upstream` (`wcheng95/Mini-FT8`) unless the operator explicitly asks. Staying mergeable with upstream is not a goal.
 
-Talk through any code change or proposed solution in chat **before** a local commit. Local edits are fine when the operator asked for the work; `git commit` waits until they have seen the diff/plan and said to commit. `git push origin` waits until they have seen it and said to push. Do not treat “ship on main” or “local commits are fine” as standing permission to commit or push.
+### Chat gates
+
+The operator reviews in chat, then green-lights each step. A good previous turn is not permission to skip a gate.
+
+1. **Design in chat.** Architecture and “should we” questions get an answer first. Do not implement until they say to (e.g. “go”, “do it”). Docs and roadmap questions do not need that wait.
+
+2. **Test plan with the result.** When work is done, the reply includes a short test plan: host command(s) they can run, and a field check if the path is field-only. They often run tests and flash themselves and will say when it is solid. Do not flash the device unless they ask.
+
+3. **Commit message in chat.** Propose the message here (match recent `git log`: one sentence, why). Wait for them to accept or edit. Do not commit in the same turn as the proposal unless they already asked to commit.
+
+4. **Commit / push only when asked.** Local edits are fine when they asked for the work. `git commit` waits until they have seen the plan or diff and said to commit. `git push origin` waits until they said to push. “Commit and push” is both, using the agreed message. Do not treat “ship on main”, a green host test, or “local commits are fine” as standing permission.
 
 ### Roadmap intake (ideas)
 
@@ -80,4 +90,4 @@ Do not split into separate `build` then `flash` unless the user asks.
 
 **`monitor`:** The Cardputer USB-C is either ESP USB Serial/JTAG (Mac ↔ firmware logs) **or** USB host for the radio (QMX / KH1-USBC) — not both. So `idf.py … flash monitor` works with the **radio unplugged** from USB-C. Live logs while the radio is connected need the console UART on **G4 (TX) / G5 (RX)** (USB–TTL adapter), not PORTA/Grove (`G1`/`G2`, GPS/CAT). That G4/G5 path is off when `GNSS_LoRa:ON`.
 
-The repo-root `AGENTS.md` exists only so Claude Code, Codex, and Cursor load this agreement. Do not duplicate the plan there.
+Loader stubs (`AGENTS.md`, `.cursor/rules/`, and similar) exist only so a given tool loads this agreement. They point here. Do not duplicate the plan in those files.
