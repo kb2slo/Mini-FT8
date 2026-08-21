@@ -1,3 +1,49 @@
+# Mini-FT8 (kb2slo fork)
+
+This is Jeff KB2SLO’s continuation of Wei AG6AQ’s Mini-FT8 for the Cardputer ADV. The goal is the same QRP FT8/FT4 box, with less of the original “don’t tap that during TX / don’t copy logs / don’t flash or you lose the launcher” friction, and with a path to more radios later.
+
+- **Improved UX while transmitting.** The decode list stays tappable so you can queue a QSO; a one-row banner shows the TX message plus QMX power and SWR (abort and high SWR stay pinned). Leftover rows dim after the slot so they don’t look live.
+- **One tap, one callsign.** R-tap will not stack the same station twice.
+- **Flash without losing M5Launcher.** `tools/flash_keep_launcher.py` writes the app slot only. Merges that change firmware also publish `minift8-dev.bin`.
+- **Logs survive the workflow.** Copy-to-SD merges `.adi` instead of overwriting; internal FAT append no longer leaves empty QSO files. Critically low battery stops TX and flash writes so a dying pack does not corrupt the filesystem.
+- **Charge Mode, not a dead Sleep.** MENU charge matches Launcher: percent stripe (or `SW ON to charge`), then dim and screen off; first key wakes.
+- **Busy band, busy UI.** Opening QSO browse or copying files does not stall the slot loop. Beacon CQ re-arms after a QSO or an empty slot (replies still win); turning beacon OFF drops the queued CQ. Low battery abort is visible on R.
+
+## Clone and CI firmware
+
+To build from source, clone with the `ft8_lib` submodule. GitHub’s default clone leaves `components/ft8_lib/vendor` empty, and host `tx_e2e` / `idf.py build` will fail.
+
+```
+git clone --recurse-submodules https://github.com/kb2slo/Mini-FT8.git
+```
+
+Existing trees: `git submodule update --init`.
+
+Pushes and pull requests run GitHub Actions (ESP-IDF **v5.5.1**, target **esp32s3**). When firmware sources change, the job uploads a flashable merged image as artifact **MiniFT8-Cardputer-ADV** (hash-first `.bin` inside the zip). Docs-only commits (roadmap, README, and similar) skip the IDF build and do not refresh the rolling image.
+
+- Each merge to `main` that changes the firmware updates a prerelease at tag [`dev`](https://github.com/kb2slo/Mini-FT8/releases/tag/dev) with `minift8-dev.bin`. Flash at `0x0`.
+- Tags matching `v*` also create a versioned GitHub Release (`MiniFT8-<tag>-Merged.bin`).
+
+```
+esptool.py --chip esp32s3 write_flash 0x0 minift8-dev.bin
+```
+
+Host autoseq (`host_mock`) and `tests/tx_e2e` CTest run in a separate job. Hardware CAT/flash is still local.
+
+A `0x0` flash of the merged image replaces Launcher. Daily iterate with `python tools/flash_keep_launcher.py` once Mini-FT8 has been installed from Launcher once.
+
+## Notes that differ from the manual below
+
+**Charge Mode (MENU `M` → `6`):** this fork replaced Sleep. Launcher stripe + Mini-FT8 version; `SW ON to charge` under the bar. Screen off after ~25 s idle. First key wakes; any key after that exits.
+
+**USB Drive (`C`):** expose internal FATFS as a USB disk. Best on Mac or PC; iPhone Files is unreliable. Unplug the radio from USB-C first if you were using QMX/KH1-USBC; the same port cannot be USB host and a disk at once. Press `C`. The Cardputer enumerates as `USB DISK`. The screen says `Waiting for computer...` until the computer actually attaches. On Mac or Windows, copy logs off the disk, eject it in Finder/Explorer, then press `C` again to return to RX. If the screen says `USB busy, unplug radio`, disconnect the QMX/KH1 USB cable first. iPhone/iPad Files is best-effort only.
+
+---
+
+# Original README (Wei AG6AQ)
+
+The hardware list, thanks, and operation manual below are Wei’s text as of the split from [wcheng95/Mini-FT8](https://github.com/wcheng95/Mini-FT8). Use the fork notes above where they disagree (Charge Mode, USB Drive, clone/CI).
+
 Subscribe to [https://freelists.org/list/qrp-portable](https://freelists.org/list/qrp-portable) for announcements, discussions, and updates about my Mini-series apps for the Cardputer ADV.
 
 ### Dean, KD3AN had added support for IC705: https://github.com/hamrec/cp705
@@ -25,27 +71,6 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
   - For KH1 TX: https://shop.m5stack.com/products/4pin-buckled-grove-cable, for a custom serial cable
   - For KH1-USBC RX: [USB-C microphone adapter](https://www.amazon.com/dp/B0FWC9ZFC4?ref=ppx_yo2ov_dt_b_fed_asin_title&th=1). Other adapters may also work, but this one is confirmed. KH1-MIC uses the Cardputer built-in microphone, so the USB-C adapter is optional.
 
-## CI firmware builds
-
-To build from source, clone with the `ft8_lib` submodule. GitHub’s default clone leaves `components/ft8_lib/vendor` empty, and host `tx_e2e` / `idf.py build` will fail.
-
-```
-git clone --recurse-submodules https://github.com/kb2slo/Mini-FT8.git
-```
-
-Existing trees: `git submodule update --init`.
-
-Pushes and pull requests run GitHub Actions (ESP-IDF **v5.5.1**, target **esp32s3**). When firmware sources change, the job uploads a flashable merged image as artifact **MiniFT8-Cardputer-ADV** (hash-first `.bin` inside the zip). Docs-only commits (roadmap, README, and similar) skip the IDF build and do not refresh the rolling image.
-
-- Each merge to `main` that changes the firmware updates a prerelease at tag [`dev`](https://github.com/kb2slo/Mini-FT8/releases/tag/dev) with `minift8-dev.bin`. Flash at `0x0`.
-- Tags matching `v*` also create a versioned GitHub Release (`MiniFT8-<tag>-Merged.bin`).
-
-```
-esptool.py --chip esp32s3 write_flash 0x0 minift8-dev.bin
-```
-
-Host autoseq (`host_mock`) and `tests/tx_e2e` CTest run in a separate job. Hardware CAT/flash is still local.
-
 73, Wei AG6AQ
 
 # Mini-FT8 Operation Manual
@@ -64,7 +89,7 @@ Host autoseq (`host_mock`) and `tests/tx_e2e` CTest run in a separate job. Hardw
 | `Q` | QSO | Browse QSO and log files, and view entries. |
 | `D` | Delete Files | Browse and delete files stored in internal FATFS. |
 | `B` | BAND | Edit per-band frequencies. |
-| `C` | USB Drive | Expose internal FATFS as a USB disk. Best on Mac or PC; iPhone Files is unreliable. |
+| `C` | USB Drive | Toggle internal FATFS ownership between Mini-FT8 and the PC. |
 | `P` | Performance | View A Simple Performance Monitor. (added in V2.0.4)|
 
 ## Global Keys and Navigation
@@ -100,7 +125,7 @@ Host autoseq (`host_mock`) and `tests/tx_e2e` CTest run in a separate job. Hardw
 |  | `3` | Edit FreeText (Long Edit). Used for SOTAMAT, park/summit reference, ARRL Field Day exchange, CQ modifiers (`CQ EU`, `CQ ASIA`), and similar text. |
 |  | `4` | Edit Call (in place). |
 |  | `5` | Edit Grid (in place). Supports 4/6/8-character grid. If GPS is available, the GPS grid is shown and used, but not saved. |
-|  | `6` | Charge Mode: Launcher stripe + Mini-FT8 version; `SW ON to charge` under the bar. Screen off after ~25 s idle. First key wakes; any key after that exits. |
+|  | `6` | Enter Sleep. Shows battery info. |
 | `N` (MENU P2) | `1` | Select offset source: Random / RX / Fixed. Random values are within 500-2500 Hz. |
 |  | `2` | Edit fixed cursor offset (in place). Enter directly or use `▲` `▼` `◀` `▶`. |
 |  | `3` | Select radio (`QMX` / `QDX` / `KH1-USBC` / `KH1-MIC`). |
@@ -117,7 +142,7 @@ Host autoseq (`host_mock`) and `tests/tx_e2e` CTest run in a separate job. Hardw
 |  | `◀` `▶` | Switch columns (Default view or SNR view). |
 | `D` (Delete Files) | `1..6` | Delete the selected file immediately, without confirmation. |
 | `B` (BAND) | `1..6` | Choose a band slot to edit. |
-| `C` (USB Drive) |  | Stop radio audio and present FATFS as `USB DISK`. Wait until the computer mounts it, eject it there, then press `C` again to remount storage and return to RX. If the screen says `USB busy, unplug radio`, disconnect the QMX/KH1 USB cable first. |
+| `C` (USB Drive) |  | Stop radio audio and expose FATFS to the PC. Safely eject it on the PC, then press `C` again to remount storage and return to RX. |
 | `P` (PERFORMANCE) | | A Simple Performance Monitor. (added in V2.0.4) |
 
 ## Download Logs
@@ -126,16 +151,6 @@ Host autoseq (`host_mock`) and `tests/tx_e2e` CTest run in a separate job. Hardw
   and current M5Launcher installs/reinstalls can switch between the applications
   while preserving an existing compatible FATFS partition. Both applications
   use 512-byte FATFS and wear-levelling sectors.
-
-- Use USB Drive (`C`)
-  - Unplug the radio from USB-C first if you were using QMX/KH1-USBC; the same
-    port cannot be USB host and a disk at once.
-  - Press `C`. The Cardputer enumerates as `USB DISK`. The screen says
-    `Waiting for computer...` until the computer actually attaches.
-  - On Mac or Windows, copy logs off the disk, eject it in Finder/Explorer, then
-    press `C` again to return to RX.
-  - iPhone/iPad Files is best-effort only. ESP flash MSC often fails to appear,
-    stalls, or cannot be ejected cleanly. Prefer Mac, PC, or Copy-to-SD.
 
 - Use SD
   - Insert a FAT/FAT32-formatted SD card.
