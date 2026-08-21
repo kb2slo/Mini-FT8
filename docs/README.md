@@ -11,7 +11,7 @@ Human- and tool-readable project memory. Prefer this tree over editor-specific r
 | [AUTOSEQ_INACTIVE_QUEUE.md](AUTOSEQ_INACTIVE_QUEUE.md) | Retry exhaustion / reincarnation / inactive zone. |
 | [RTC_COMPENSATION.md](RTC_COMPENSATION.md) | Clock compensation. |
 | [FT8 Free-Text Reference Extension.md](FT8%20Free-Text%20Reference%20Extension.md) | Free-text / SOTA-style payload notes. |
-| `rfcs/` | Long specs. Extract/style/boundaries: [0002](rfcs/0002-extract-and-boundaries.md). BLE companion: [0001](rfcs/0001-ble-companion.md) (RAM measurement is a Phase 1 gate). Roadmap only links them. |
+| `rfcs/` | Long specs. Extract/style/boundaries: [0002](rfcs/0002-extract-and-boundaries.md). BLE companion: [0001](rfcs/0001-ble-companion.md) (RAM measurement is a Phase 1 gate). M32 Pocket + CTS time: [0003](rfcs/0003-m32-pocket-port-and-ble-time.md) (B15 then I17). Roadmap only links them. |
 
 Git history is the changelog. Do not keep a narrative log in these files.
 
