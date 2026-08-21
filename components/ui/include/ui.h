@@ -64,9 +64,13 @@ bool ui_waterfall_dirty();
 void ui_draw_countdown(float fraction, bool even_slot, int offset_hz);  // 0.0-1.0 fill of the countdown bar
 // Sticky R-view cue while TX is halted for low battery (last decode row + countdown tint).
 void ui_set_tx_halt_sticky(bool on);
+// TX HUD as a 1-row banner; decode list keeps the rows above it (B10).
+void ui_set_tx_hud_banner(bool on);
 void ui_set_rx_list(const std::vector<UiRxLine>& lines);
 // Zero-heap RX list setter — preferred when callers use RxDecodeEntry directly.
 void ui_set_rx_list_static(const RxDecodeEntry* entries, int count);
+// Dim the current decode list until the next non-empty ui_set_rx_list*.
+void ui_mark_rx_list_stale();
 // Copy a single RX entry by index (for touch handler, thread-safe via disp mutex).
 // Returns true if idx is valid and out was populated.
 bool ui_get_rx_entry(int idx, RxDecodeEntry* out);
@@ -78,10 +82,10 @@ void ui_draw_rx(int flash_index = -1);
 void ui_force_redraw_rx();
 // Colors: pass same-length slot_colors (0 even->green, 1 odd->red) for next/queue
 void ui_draw_tx(const std::string& next, const std::vector<std::string>& queue, int page, int selected, const std::vector<bool>& mark_delete, const std::vector<int>& slot_colors = {});
-// Replace the six RX text rows during TX. Waterfall/countdown are unchanged.
+// Paint the 1-row TX banner at the bottom of the R list. Waterfall/countdown are unchanged.
 void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent, bool warn, bool writes_blocked,
                     float power_w = -1.f, float swr = -1.f, bool full_clear = false,
-                    bool tx_aborted = false);
+                    bool tx_aborted = false, int64_t now_ms = 0);
 // Returns selected absolute index or -1 if none
 int ui_handle_rx_key(char c);
 // Generic list draw (6 lines per page)

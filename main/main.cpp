@@ -1413,14 +1413,11 @@ static bool tx_hud_visible() {
 
 static void draw_tx_hud(bool force) {
   if (!tx_hud_visible()) return;
+  ui_set_tx_hud_banner(true);
 
   const bool aborted = g_tx_abort_hud && !g_tx_active;
 
   static int64_t s_last_ms = 0;
-  static int s_last_mv = -99999;
-  static int s_last_pc = -99999;
-  static int s_last_sw = -99999;
-  static bool s_last_aborted = false;
   const int64_t now_ms = rtc_now_ms();
   if (!force && (now_ms - s_last_ms) < 500) return;
 
@@ -1434,26 +1431,7 @@ static void draw_tx_hud(bool force) {
     radio_control_poll_tx_power_swr();
     (void)radio_control_get_tx_power_swr(&power_w, &swr);
   }
-  const int pc_key = (int)(power_w * 10.f + 0.5f);
-  const int sw_key = (int)(swr * 100.f + 0.5f);
-
-  if (!force && aborted == s_last_aborted && mv == s_last_mv && pc_key == s_last_pc &&
-      sw_key == s_last_sw && (now_ms - s_last_ms) < 1000) {
-    return;
-  }
-  if (!force && !aborted && s_last_mv >= 0) {
-    int d = mv - s_last_mv;
-    if (d < 0) d = -d;
-    if (d < 8 && pc_key == s_last_pc && sw_key == s_last_sw &&
-        (now_ms - s_last_ms) < 1500) {
-      return;
-    }
-  }
   s_last_ms = now_ms;
-  s_last_mv = mv;
-  s_last_pc = pc_key;
-  s_last_sw = sw_key;
-  s_last_aborted = aborted;
 
   const char* tx_text = "";
   if (aborted && g_tx_abort_text[0]) {
@@ -1462,10 +1440,22 @@ static void draw_tx_hud(bool force) {
     tx_text = g_pending_tx.text.c_str();
   }
   ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked,
-                 power_w, swr, force, aborted);
+                 power_w, swr, force, aborted, now_ms);
+}
+
+static void draw_rx_screen(int flash_index = -1) {
+  if (ui_mode != UIMode::RX) return;
+  if (tx_hud_visible()) {
+    ui_set_tx_hud_banner(true);
+  }
+  ui_draw_rx(flash_index);
+  if (tx_hud_visible()) {
+    draw_tx_hud(true);
+  }
 }
 
 static void restore_rx_after_tx() {
+  ui_set_tx_hud_banner(false);
   if (ui_mode != UIMode::RX) return;
   ui_force_redraw_rx();
   ui_draw_rx();
@@ -1479,9 +1469,7 @@ static void begin_low_batt_tx_abort_hud() {
   g_tx_abort_hud = true;
   const int slot_ms = (g_protocol && g_protocol->slot_time_ms > 0) ? g_protocol->slot_time_ms : 15000;
   g_tx_abort_hud_until_ms = rtc_now_ms() + slot_ms;
-  if (ui_mode == UIMode::RX) {
-    draw_tx_hud(true);
-  }
+  draw_rx_screen();
 }
 
 static void tx_abort_hud_tick() {
@@ -2273,9 +2261,9 @@ static void low_batt_apply_resume() {
   ui_set_tx_halt_sticky(false);
   end_low_batt_tx_abort_hud();
   redraw_countdown_now();
-  if (ui_mode == UIMode::RX && !tx_hud_visible()) {
+  if (ui_mode == UIMode::RX) {
     ui_force_redraw_rx();
-    ui_draw_rx();
+    draw_rx_screen();
   }
   if (ui_mode == UIMode::STATUS) {
     draw_status_view();
@@ -2805,8 +2793,8 @@ static void rx_flash_tick() {
   if (now >= rx_flash_deadline) {
     rx_flash_idx = -1;
     rx_flash_deadline = 0;
-    if (ui_mode == UIMode::RX && !tx_hud_visible()) {
-      ui_draw_rx();
+    if (ui_mode == UIMode::RX) {
+      draw_rx_screen();
     }
   }
 }
@@ -3049,6 +3037,15 @@ static int dec_sort_cmp(const void* a, const void* b) {
   return decode_sort_cmp(&ea, &eb);
 }
 
+static void keep_rx_list_stale(bool update_ui) {
+  ui_mark_rx_list_stale();
+  if (update_ui) {
+    draw_rx_screen();
+  } else {
+    core_fire_rx_changed();
+  }
+}
+
 void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool update_ui) {
   // ---- heap instrumentation ----
   size_t heap_entry = heap_caps_get_free_size(MALLOC_CAP_8BIT);
@@ -3113,6 +3110,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
 
   if (num_candidates <= 0) {
     ESP_LOGD(TAG, "No candidates found; keeping RX list");
+    keep_rx_list_stale(update_ui);
     // No candidates means we processed the slot's audio but found nothing —
     // still counts as "applied" for the TX-trigger guard.
     if (g_decode_slot_idx > g_decode_applied_slot_idx) {
@@ -3311,7 +3309,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   if (s_dec_count > 0) {
     ui_set_rx_list_static(s_dec, s_dec_count);
     if (update_ui) {
-      ui_draw_rx();
+      draw_rx_screen();
       char buf[64];
       snprintf(buf, sizeof(buf), "Heap %u", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
       debug_log_line(buf);
@@ -3320,6 +3318,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
     }
   } else {
     ESP_LOGD(TAG, "No messages decoded; keeping RX list");
+    keep_rx_list_stale(update_ui);
   }
 
   // ---- heap instrumentation (exit) ----
@@ -3569,7 +3568,7 @@ static void tx_start(int skip_tones) {
   // Mark TX as active
   ui_set_rx_waterfall_muted(true);
   g_tx_active = true;
-  draw_tx_hud(true);
+  draw_rx_screen();
 }
 
 // TX state machine tick - called from main loop
@@ -4609,11 +4608,7 @@ static void enter_mode(UIMode new_mode) {
     case UIMode::RX:
       // Force RX list redraw
       ui_force_redraw_rx();
-      if (tx_hud_visible()) {
-        draw_tx_hud(true);
-      } else {
-        ui_draw_rx();
-      }
+      draw_rx_screen();
       break;
     case UIMode::TX:
       tx_page = 0;
@@ -5031,13 +5026,13 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     }
 
     if (c == 0) {
-      if (tx_hud_visible()) {
-        draw_tx_hud(false);
-      } else if (g_rx_dirty && ui_mode == UIMode::RX) {
+      if (g_rx_dirty && ui_mode == UIMode::RX) {
         // decode_monitor_results already called ui_set_rx_list_static(),
         // so UI's internal list is current. Just redraw.
-        ui_draw_rx(rx_flash_idx);
+        draw_rx_screen(rx_flash_idx);
         g_rx_dirty = false;
+      } else if (tx_hud_visible()) {
+        draw_tx_hud(false);
       }
       if (ui_mode == UIMode::TX && g_tx_view_dirty) {
         g_tx_view_dirty = false;
@@ -5121,9 +5116,9 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     ui_set_paused(false);
   }
 
-  if (g_rx_dirty && ui_mode == UIMode::RX && !tx_hud_visible()) {
+  if (g_rx_dirty && ui_mode == UIMode::RX) {
       // decode already populated ui.cpp's internal list via ui_set_rx_list_static
-      ui_draw_rx(rx_flash_idx);
+      draw_rx_screen(rx_flash_idx);
       g_rx_dirty = false;
   }
   ui_draw_waterfall_if_dirty();
@@ -5213,11 +5208,13 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       case UIMode::PERF: break;
       case UIMode::RX: {
         int sel = ui_handle_rx_key(c);
-        if (sel >= 0 && core_cmd_tap_rx(sel) && !tx_hud_visible()) {
+        if (sel >= 0 && core_cmd_tap_rx(sel)) {
           // TX-state arming lives inside core_cmd_tap_rx for every UI path.
           rx_flash_idx = sel;
           rx_flash_deadline = rtc_now_ms() + 500;
-          ui_draw_rx(rx_flash_idx);
+          draw_rx_screen(rx_flash_idx);
+        } else if (tx_hud_visible()) {
+          draw_tx_hud(true);
         }
         break;
       }

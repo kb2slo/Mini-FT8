@@ -46,6 +46,7 @@ extern std::string       g_date;
 extern std::string       g_time;
 extern std::vector<std::string> g_ignore_prefixes;
 extern volatile bool     g_tx_cancel_requested;
+extern volatile bool     g_tx_active;
 
 // Functions from main.cpp that core_api delegates to.
 void save_station_data();
@@ -407,7 +408,7 @@ bool core_cmd_tap_rx(int rx_list_idx) {
   msg.slot_id   = entry.slot_id;
   msg.is_cq     = entry.is_cq;
   msg.is_to_me  = entry.is_to_me;
-  const AutoseqTouchResult touch = autoseq_on_touch(msg);
+  const AutoseqTouchResult touch = autoseq_on_touch(msg, g_tx_active);
   if (touch == AutoseqTouchResult::IgnoredInProgress) {
     debug_log_line_public("QSO in progress");
     core_fire_qso_changed();
@@ -418,12 +419,10 @@ bool core_cmd_tap_rx(int rx_list_idx) {
     return false;
   }
 
-  // Arm the TX state machine for the next matching slot boundary so the
-  // user's pick is honoured immediately instead of waiting for the next
-  // autoseq tick to pull in the pending TX (which would delay by 1-2
-  // slots). Mirrors the Cardputer RX-key handler.
+  // Do not replace the in-flight pending TX. Autoseq already queued behind
+  // the live head; the next slot arm picks it up after this TX ends.
   AutoseqTxEntry pending{};
-  if (autoseq_fetch_pending_tx(pending)) {
+  if (!g_tx_active && autoseq_fetch_pending_tx(pending)) {
     arm_pending_tx(pending);
   }
   core_fire_qso_changed();

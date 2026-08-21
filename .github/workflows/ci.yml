@@ -76,6 +76,10 @@ jobs:
           ./host_test_file_list || failed=1
           echo "===== host_test_radio_profile ====="
           ./host_test_radio_profile || failed=1
+          echo "===== host_test_tx_hud_banner ====="
+          ./host_test_tx_hud_banner || failed=1
+          echo "===== host_test_rx_list_stale ====="
+          ./host_test_rx_list_stale || failed=1
           exit "$failed"
 
       - name: TX e2e (CTest)

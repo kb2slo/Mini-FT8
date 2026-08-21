@@ -99,6 +99,26 @@ int main() {
         return fail("ignore path mutated the queue");
     }
 
+    // During TX the live head must stay put; a new tap queues behind it.
+    autoseq_init();
+    autoseq_set_station("KB2SLO", "FN30");
+    autoseq_set_max_retry(5);
+    if (autoseq_on_touch(other) != AutoseqTouchResult::Queued) {
+        return fail("hold-head setup W1AW");
+    }
+    if (autoseq_on_touch(target, true) != AutoseqTouchResult::Queued) {
+        return fail("hold-head queue K1ABC behind W1AW");
+    }
+    if (!autoseq_get_active_context(0, &head) ||
+        strcasecmp(head.dxcall.c_str(), "W1AW") != 0) {
+        return fail("hold-head must keep W1AW at front");
+    }
+    QsoContext behind;
+    if (!autoseq_get_active_context(1, &behind) ||
+        strcasecmp(behind.dxcall.c_str(), "K1ABC") != 0) {
+        return fail("hold-head should place K1ABC next");
+    }
+
     printf("PASS: unique-callsign touch dedupe/promote\n");
     return 0;
 }

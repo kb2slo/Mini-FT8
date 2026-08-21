@@ -85,6 +85,7 @@ static void evict_oldest_inactive();
 static int find_inactive_by_dxcall(const std::string& dxcall);
 static void remove_active_at(int idx);
 static void force_active_to_front(int idx);
+static void force_active_behind_head(int idx);
 static bool same_dxcall(const std::string& a, const std::string& b);
 static bool is_live_qso_state(AutoseqState state);
 static bool is_dx_queue_marker(const std::string& dxcall);
@@ -284,6 +285,24 @@ static void force_active_to_front(int idx) {
     s_queue[0] = moved;
 }
 
+// Leave queue[0] alone (in-flight TX) and put the tapped QSO next.
+static void force_active_behind_head(int idx) {
+    if (idx <= 1 || idx >= s_active_count) return;
+    QsoContext moved = s_queue[idx];
+    for (int i = idx; i > 1; --i) {
+        s_queue[i] = s_queue[i - 1];
+    }
+    s_queue[1] = moved;
+}
+
+static void promote_touched(int idx, bool hold_queue_head) {
+    if (hold_queue_head) {
+        force_active_behind_head(idx);
+    } else {
+        force_active_to_front(idx);
+    }
+}
+
 static bool same_dxcall(const std::string& a, const std::string& b) {
     if (a.empty() || b.empty()) return false;
     if (a.size() != b.size()) return false;
@@ -341,6 +360,10 @@ static bool purge_dxcall_for_touch(const std::string& dxcall, bool* blocked_live
 }
 
 AutoseqTouchResult autoseq_on_touch(const UiRxLine& msg) {
+    return autoseq_on_touch(msg, false);
+}
+
+AutoseqTouchResult autoseq_on_touch(const UiRxLine& msg, bool hold_queue_head) {
     // Resolve DX callsign before mutating the queue (normalize <> hashes).
     std::string dxcall;
     if (!msg.field2.empty()) {
@@ -382,7 +405,7 @@ AutoseqTouchResult autoseq_on_touch(const UiRxLine& msg) {
         // by state. Find the new ctx (may have moved during sort).
         for (int i = 0; i < s_active_count; ++i) {
             if (same_dxcall(s_queue[i].dxcall, dxcall) && !s_queue[i].is_freetext) {
-                force_active_to_front(i);
+                promote_touched(i, hold_queue_head);
                 break;
             }
         }
@@ -411,7 +434,7 @@ AutoseqTouchResult autoseq_on_touch(const UiRxLine& msg) {
     sort_and_clean();
     for (int i = 0; i < s_active_count; ++i) {
         if (same_dxcall(s_queue[i].dxcall, dxcall) && !s_queue[i].is_freetext) {
-            force_active_to_front(i);
+            promote_touched(i, hold_queue_head);
             break;
         }
     }

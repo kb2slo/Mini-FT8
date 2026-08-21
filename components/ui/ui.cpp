@@ -1,4 +1,6 @@
 #include "ui.h"
+#include "rx_list_stale.h"
+#include "tx_hud_banner.h"
 #include <M5Unified.h>
 #include <M5Cardputer.h>
 #include <cstring>
@@ -67,9 +69,44 @@ static bool s_rx_waterfall_muted = false;
 void ui_set_rx_waterfall_muted(bool muted) { s_rx_waterfall_muted = muted; }
 
 static bool s_tx_halt_sticky = false;
+static bool s_tx_hud_banner = false;
+static bool s_rx_list_stale = false;
+static bool s_hud_valid = false;
+static bool s_last_drawn_dim = false;
+
+static int rx_list_vis_rows() {
+    return tx_hud_banner_list_rows(s_tx_hud_banner, s_tx_halt_sticky, RX_LINES);
+}
+
+static void clamp_rx_page() {
+    const int vis = rx_list_vis_rows();
+    if (vis <= 0) return;
+    const int max_page = (rx_lines_count <= 0) ? 0 : (rx_lines_count - 1) / vis;
+    if (rx_page > max_page) rx_page = max_page;
+    if (rx_page < 0) rx_page = 0;
+}
+
 void ui_set_tx_halt_sticky(bool on) {
     if (s_tx_halt_sticky == on) return;
     s_tx_halt_sticky = on;
+    clamp_rx_page();
+    last_page = -1;
+    last_drawn_count = 0;
+}
+
+void ui_set_tx_hud_banner(bool on) {
+    if (s_tx_hud_banner == on) return;
+    s_tx_hud_banner = on;
+    s_rx_list_stale = !on;
+    clamp_rx_page();
+    last_page = -1;
+    last_drawn_count = 0;
+    s_hud_valid = false;
+}
+
+void ui_mark_rx_list_stale() {
+    if (s_rx_list_stale) return;
+    s_rx_list_stale = true;
     last_page = -1;
     last_drawn_count = 0;
 }
@@ -142,135 +179,54 @@ static void fill_text_row(int row, uint16_t bg) {
 
 void ui_draw_tx_hud(const char* tx_text, int voltage_mv, int percent,
                     bool warn, bool writes_blocked, float power_w, float swr,
-                    bool full_clear, bool tx_aborted) {
+                    bool full_clear, bool tx_aborted, int64_t now_ms) {
     const int line_h = 19;
     const int start_y = UI_START_Y;
-    const int max_chars = SCREEN_W / 12;  // text size 2, 6px glyph
+    const int banner0 = RX_LINES - kTxHudBannerRows;
+    char msg[kTxHudBannerCols + 1];
+    char status[kTxHudBannerCols + 1];
+    TxHudBannerInput in;
+    in.tx_text = tx_text;
+    in.voltage_mv = voltage_mv;
+    in.percent = percent;
+    in.writes_blocked = writes_blocked;
+    in.power_w = power_w;
+    in.swr = swr;
+    in.tx_aborted = tx_aborted;
+    tx_hud_banner_format(in, msg, status, (int)sizeof(msg));
+    const bool show_status = tx_hud_banner_show_status(in, now_ms);
+    const char* line = show_status ? status : msg;
 
-    char line0[24] = {0};
-    char line1[24] = {0};
-    if (tx_text && tx_text[0]) {
-        const int n = (int)strlen(tx_text);
-        if (n <= max_chars) {
-            snprintf(line0, sizeof(line0), "%s", tx_text);
-        } else {
-            snprintf(line0, sizeof(line0), "%.*s", max_chars, tx_text);
-            snprintf(line1, sizeof(line1), "%.*s", max_chars, tx_text + max_chars);
+    uint16_t fg = TFT_RED;
+    if (show_status) {
+        fg = TFT_WHITE;
+        if (tx_aborted || writes_blocked) {
+            fg = TFT_RED;
+        } else if (swr >= 3.f) {
+            fg = TFT_RED;
+        } else if (warn || swr >= kTxHudBannerSwrWarn) {
+            fg = TFT_YELLOW;
         }
     }
 
-    char batt_line[32];
-    if (writes_blocked) {
-        if (voltage_mv >= 0) {
-            snprintf(batt_line, sizeof(batt_line), "%d mV  WR BLOCK", voltage_mv);
-        } else {
-            snprintf(batt_line, sizeof(batt_line), "WR BLOCK");
-        }
-    } else if (voltage_mv >= 0 && percent >= 0) {
-        snprintf(batt_line, sizeof(batt_line), "%d mV  %d%%", voltage_mv, percent);
-    } else if (voltage_mv >= 0) {
-        snprintf(batt_line, sizeof(batt_line), "%d mV  --", voltage_mv);
-    } else if (percent >= 0) {
-        snprintf(batt_line, sizeof(batt_line), "-- mV  %d%%", percent);
-    } else {
-        snprintf(batt_line, sizeof(batt_line), "-- mV  --");
-    }
+    static char s_line[kTxHudBannerCols + 1];
+    static uint16_t s_fg = 0;
 
-    char rf_line[24] = {0};
-    // Size-2 glyphs are 12px; 20 chars fill the 240px row. The abort
-    // phrasing is shortened so it stays on the power/SWR line.
-    const bool show_rf = tx_aborted || (power_w >= 0.f) || (swr >= 0.f);
-    if (tx_aborted) {
-        snprintf(rf_line, sizeof(rf_line), "TX ABORT (low batt)");
-    } else if (power_w >= 0.f && swr >= 0.f) {
-        snprintf(rf_line, sizeof(rf_line), "%.1fW  SWR %.2f", (double)power_w, (double)swr);
-    } else if (power_w >= 0.f) {
-        snprintf(rf_line, sizeof(rf_line), "%.1fW", (double)power_w);
-    } else if (swr >= 0.f) {
-        snprintf(rf_line, sizeof(rf_line), "SWR %.2f", (double)swr);
-    }
-
-    uint16_t batt_fg = TFT_WHITE;
-    if (writes_blocked) {
-        batt_fg = TFT_RED;
-    } else if (warn) {
-        batt_fg = TFT_YELLOW;
-    }
-
-    uint16_t swr_fg = TFT_WHITE;
-    if (tx_aborted) {
-        swr_fg = TFT_RED;
-    } else if (swr >= 3.f) {
-        swr_fg = TFT_RED;
-    } else if (swr >= 2.f) {
-        swr_fg = TFT_YELLOW;
-    }
-
-    static char s_line0[24];
-    static char s_line1[24];
-    static char s_batt[32];
-    static char s_rf[24];
-    static uint16_t s_batt_fg = 0;
-    static uint16_t s_swr_fg = 0;
-    static bool s_rf_shown = false;
-    static bool s_valid = false;
-
-    const bool msg_changed = !s_valid || strcmp(s_line0, line0) != 0 || strcmp(s_line1, line1) != 0;
-    const bool batt_changed = !s_valid || strcmp(s_batt, batt_line) != 0 || s_batt_fg != batt_fg;
-    const bool rf_changed = !s_valid || strcmp(s_rf, rf_line) != 0 || s_swr_fg != swr_fg ||
-                            s_rf_shown != show_rf;
-    if (!full_clear && !msg_changed && !batt_changed && !rf_changed) {
+    const bool changed = !s_hud_valid || strcmp(s_line, line) != 0 || s_fg != fg;
+    if (!full_clear && !changed) {
         return;
     }
 
     DispGuard guard;
     M5.Display.startWrite();
-    if (full_clear || !s_valid) {
-        M5.Display.fillRect(0, start_y, SCREEN_W, SCREEN_H - UI_START_Y, TFT_BLACK);
-        draw_centered_text(start_y, 2, TFT_RED, line0);
-        draw_centered_text(start_y + line_h, 2, TFT_RED, line1);
-        draw_centered_text(start_y + 3 * line_h, 2, batt_fg, batt_line);
-        if (show_rf) {
-            draw_centered_text(start_y + 4 * line_h, 2, swr_fg, rf_line);
-        }
-    } else {
-        if (msg_changed) {
-            fill_text_row(0, TFT_BLACK);
-            fill_text_row(1, TFT_BLACK);
-            draw_centered_text(start_y, 2, TFT_RED, line0);
-            draw_centered_text(start_y + line_h, 2, TFT_RED, line1);
-        }
-        if (batt_changed) {
-            fill_text_row(3, TFT_BLACK);
-            draw_centered_text(start_y + 3 * line_h, 2, batt_fg, batt_line);
-        }
-        if (rf_changed) {
-            fill_text_row(4, TFT_BLACK);
-            if (show_rf) {
-                draw_centered_text(start_y + 4 * line_h, 2, swr_fg, rf_line);
-            }
-        }
-    }
+    fill_text_row(banner0, TFT_BLACK);
+    draw_centered_text(start_y + banner0 * line_h, 2, fg, line);
     M5.Display.endWrite();
 
-    snprintf(s_line0, sizeof(s_line0), "%s", line0);
-    snprintf(s_line1, sizeof(s_line1), "%s", line1);
-    snprintf(s_batt, sizeof(s_batt), "%s", batt_line);
-    snprintf(s_rf, sizeof(s_rf), "%s", rf_line);
-    s_batt_fg = batt_fg;
-    s_swr_fg = swr_fg;
-    s_rf_shown = show_rf;
-    s_valid = true;
-
-    for (int i = 0; i < RX_LINES; ++i) {
-        g_visible_rows[i].clear();
-    }
-    g_visible_rows[0] = line0;
-    g_visible_rows[1] = line1;
-    g_visible_rows[3] = batt_line;
-    if (show_rf) {
-        g_visible_rows[4] = rf_line;
-    }
+    snprintf(s_line, sizeof(s_line), "%s", line);
+    s_fg = fg;
+    s_hud_valid = true;
+    g_visible_rows[banner0] = line;
 }
 
 void ui_init(bool display_only) {
@@ -444,6 +400,7 @@ void ui_set_rx_list(const std::vector<UiRxLine>& lines) {
     if (n > RX_MAX_DECODES) n = RX_MAX_DECODES;
     for (int i = 0; i < n; ++i) ui_copy_uirxline_to_entry(lines[i], &rx_lines[i]);
     rx_lines_count = n;
+    if (n > 0) s_rx_list_stale = false;
     rx_page = 0;
     rx_selected = -1;
     last_drawn_count = 0;
@@ -457,6 +414,7 @@ void ui_set_rx_list_static(const RxDecodeEntry* entries, int count) {
     if (n < 0) n = 0;
     for (int i = 0; i < n; ++i) rx_lines[i] = entries[i];  // POD copy, no heap
     rx_lines_count = n;
+    if (n > 0) s_rx_list_stale = false;
     rx_page = 0;
     rx_selected = -1;
     last_drawn_count = 0;
@@ -481,7 +439,8 @@ void ui_force_redraw_rx() {
     last_page = -1;
 }
 
-static void draw_rx_line(int y, const RxDecodeEntry& l, int line_no, bool selected, bool cyan_index_marker) {
+static void draw_rx_line(int y, const RxDecodeEntry& l, int line_no, bool selected, bool cyan_index_marker,
+                         bool dim) {
     uint16_t color = TFT_WHITE;
     if (l.is_to_me) {
         color = rgb565(255, 0, 0);
@@ -490,9 +449,12 @@ static void draw_rx_line(int y, const RxDecodeEntry& l, int line_no, bool select
     } else if (l.is_cq) {
         color = rgb565(0, 220, 0);
     }
-    // Sticky line number in first column
     uint16_t bg = selected ? rgb565(30, 30, 60) : TFT_BLACK;
-    const uint16_t index_color = cyan_index_marker ? rgb565(0, 255, 255) : TFT_WHITE;
+    uint16_t index_color = cyan_index_marker ? rgb565(0, 255, 255) : TFT_WHITE;
+    if (dim && !selected) {
+        color = rx_list_dim_rgb565(color);
+        index_color = rx_list_dim_rgb565(index_color);
+    }
     M5.Display.fillRect(0, y, SCREEN_W, 16, bg);  // clear text band; gap handled by line_h
     M5.Display.setTextColor(index_color, bg);
     M5.Display.setCursor(0, y);
@@ -512,8 +474,9 @@ void ui_draw_rx(int flash_index) {
     // Add a 3px gap below the countdown before the first line
     const int start_y = UI_START_Y;
     // Only redraw when page changes or content changes, but always draw if list is empty
+    const bool dim = rx_list_should_dim(s_rx_list_stale);
     if (rx_lines_count > 0 && flash_index < 0) {
-        if (rx_page == last_page && last_drawn_count == rx_lines_count) {
+        if (rx_page == last_page && last_drawn_count == rx_lines_count && dim == s_last_drawn_dim) {
             bool same = true;
             for (int i = 0; i < rx_lines_count; ++i) {
                 if (strcmp(rx_lines[i].text, last_drawn_cache[i].text) != 0 ||
@@ -532,7 +495,7 @@ void ui_draw_rx(int flash_index) {
     M5.Display.startWrite();
     M5.Display.setTextSize(2);
     const bool can_page_up = (rx_page > 0);
-    const int vis_rows = s_tx_halt_sticky ? (RX_LINES - 1) : RX_LINES;
+    const int vis_rows = rx_list_vis_rows();
     const bool can_page_down = ((rx_page + 1) * vis_rows < rx_lines_count);
     int start = rx_page * vis_rows;
     for (int i = 0; i < vis_rows; ++i) {
@@ -542,12 +505,18 @@ void ui_draw_rx(int flash_index) {
         if (idx < rx_lines_count) {
             bool selected = (idx == flash_index);
             bool cyan_marker = ((i == 0) && can_page_up) || ((i == vis_rows - 1) && can_page_down);
-            draw_rx_line(y, rx_lines[idx], i + 1, selected, cyan_marker);
+            draw_rx_line(y, rx_lines[idx], i + 1, selected, cyan_marker, dim);
         } else {
             g_visible_rows[i].clear();
         }
     }
-    if (s_tx_halt_sticky) {
+    if (s_tx_hud_banner) {
+        for (int i = vis_rows; i < RX_LINES; ++i) {
+            int y = start_y + i * line_h;
+            M5.Display.fillRect(0, y, SCREEN_W, line_h, TFT_BLACK);
+        }
+    }
+    if (s_tx_halt_sticky && !s_tx_hud_banner) {
         const int y = start_y + (RX_LINES - 1) * line_h;
         M5.Display.fillRect(0, y, SCREEN_W, line_h, TFT_BLACK);
         draw_centered_text(y, 2, TFT_RED, "TX ABORT (low batt)");
@@ -559,6 +528,7 @@ void ui_draw_rx(int flash_index) {
     if (flash_index < 0) {
         last_page = rx_page;
         last_drawn_count = rx_lines_count;
+        s_last_drawn_dim = dim;
         for (int i = 0; i < rx_lines_count; ++i) {
             strncpy(last_drawn_cache[i].text, rx_lines[i].text, RX_TEXT_MAX - 1);
             last_drawn_cache[i].text[RX_TEXT_MAX - 1] = '\0';
@@ -583,17 +553,17 @@ int ui_handle_rx_key(char c) {
             ui_draw_rx();
         }
     } else if (c == '.') {
-        const int vis_rows = s_tx_halt_sticky ? (RX_LINES - 1) : RX_LINES;
+        const int vis_rows = rx_list_vis_rows();
         if ((rx_page + 1) * vis_rows < rx_lines_count) {
             rx_page++;
             ui_draw_rx();
         }
     } else if (c >= '1' && c <= '6') {
         int line = c - '1';
-        if (s_tx_halt_sticky && line >= (RX_LINES - 1)) {
+        const int vis_rows = rx_list_vis_rows();
+        if (!tx_hud_banner_line_is_list(line, vis_rows)) {
             return selected_idx;
         }
-        const int vis_rows = s_tx_halt_sticky ? (RX_LINES - 1) : RX_LINES;
         int idx = rx_page * vis_rows + line;
         if (idx >= 0 && idx < rx_lines_count) {
             rx_selected = idx;
@@ -712,7 +682,8 @@ void ui_set_visible_text_line(int row_idx, const std::string& text) {
 }
 
 void ui_get_rx_page_info(int& current_page, int& total_pages) {
-    total_pages = (rx_lines_count <= 0) ? 1 : ((rx_lines_count + RX_LINES - 1) / RX_LINES);
+    const int vis_rows = rx_list_vis_rows();
+    total_pages = (rx_lines_count <= 0) ? 1 : ((rx_lines_count + vis_rows - 1) / vis_rows);
     if (total_pages < 1) total_pages = 1;
     current_page = rx_page + 1;
     if (current_page < 1) current_page = 1;
