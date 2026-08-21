@@ -1,20 +1,20 @@
 # RFC 0003: Morserino M32 Pocket Port & Zero-App BLE Time Sync
 
-* **Status:** Phase 0 accepted. Firmware: Backlog [B15](../ROADMAP.md) (CTS on ADV+QMX), then Ideas [I17](../ROADMAP.md) (Pocket). Now is B10.
+* **Status:** Phase 0 accepted. Track A (CTS) is Backlog [B15](../ROADMAP.md) on ADV+QMX. Track B (Pocket) is Ideas [I17](../ROADMAP.md), **de-prioritized** until USB-host + QMX is proven on the desk (§3.1). Now is B10.
 * **Author / Lead:** Jeff Kalikstein, KB2SLO
 * **Path:** `docs/rfcs/0003-m32-pocket-port-and-ble-time.md`
-* **Hardware in scope:** M5Stack Cardputer ADV and Morserino M32 Pocket. Both run Mini-FT8 with **QMX on USB-C** (UAC+CAT). Both get one-shot BLE CTS time.
+* **Hardware in scope:** Cardputer ADV (QMX UAC+CAT native USB-C host). M32 Pocket is a second target **if** §3.1 passes. One-shot BLE CTS is ADV first; Pocket CTS only after I17 USB host works.
 * **Does not cover:** RFC 0001 companion GATT / iOS app (I3), clock-obvious UX (I15), sleep-RTC compensation (`RTC_COMPENSATION.md`)
 
-Chat is intake; `docs/ROADMAP.md` is truth. Track A (BLE CTS) must be Done before track B (Pocket) starts. No new logic in `main.cpp` ([STYLE.md](../STYLE.md), [RFC 0002](0002-extract-and-boundaries.md)).
+Chat is intake; `docs/ROADMAP.md` is truth. Do not start I17 firmware while it is de-prioritized. No new logic in `main.cpp` ([STYLE.md](../STYLE.md), [RFC 0002](0002-extract-and-boundaries.md)).
 
 ---
 
 ## 1. Context & Motivation
 
-The Morserino **M32 Pocket** is a QRP field tool on ESP32-S3: 1.9″ TFT, TLV320 codec, 3.5 mm TRRS, rotary encoder + FN, 14500 cell, 8 MB flash, **no PSRAM**. Mini-FT8 on Pocket is the same **QMX on USB-C** product as ADV (UAC+CAT). What differs is display, keys vs encoder, flash-only storage, dual-boot with stock Morserino, and whether that USB-C port can actually host a QMX without a board change.
+The Morserino **M32 Pocket** is a QRP field tool on ESP32-S3: 1.9″ TFT, TLV320 codec, 3.5 mm TRRS, rotary encoder + FN, 14500 cell, 8 MB flash, **no PSRAM**. We wanted Mini-FT8 on Pocket to be the same **QMX on USB-C** product as ADV (UAC+CAT). Stock Pocket USB-C is **not** that host port (§3.1). Until a dongle path enumerates a QMX on the desk, track B stays parked. Track A (CTS on ADV) does not wait on that.
 
-FT8 needs slot time within about 1 s. Off-grid SOTA/POTA without a laptop or GPS is the gap. This RFC is a **zero-hardware-mod** path:
+FT8 needs slot time within about 1 s. Off-grid SOTA/POTA without a laptop or GPS is the gap. This RFC is a **zero-soldering** path (an OTG/charge dongle is extra kit, not a board mod):
 
 1. **BLE CTS time**, one-shot, then BLE off. iOS is zero-app (native Time Service). Android is an off-the-shelf CTS GATT server (nRF Connect), not a Mini-FT8 app.
 2. **Board ops** so one firmware tree can target ADV and Pocket without growing `main.cpp`.
@@ -26,7 +26,7 @@ FT8 needs slot time within about 1 s. Off-grid SOTA/POTA without a laptop or GPS
 
 We will **not**:
 
-* Require soldering, extra UART GPS, or any Pocket hardware change
+* Require soldering, extra UART GPS, or any Pocket PCB change. An external USB-C OTG / charge dongle is allowed as field kit; it is not assumed to work until §3.1 is proven.
 * Require a MicroSD card on the Pocket
 * Keep BLE up during FT8 RX/TX. NimBLE exists only for the Sync Time action, then is deinitialized. This RFC does not land RFC 0001 companion GATT.
 * Patch Morserino-32 application source; dual-boot is partition-isolated
@@ -37,7 +37,7 @@ We will **not**:
 * Enable PSRAM to make NimBLE fit
 * Mirror the 56-key ADV UI on the encoder as a “driver”
 * Ship a Mini-FT8 Android (or iOS) app for time. Android uses nRF Connect or any app that advertises SIG CTS. RFC 0001 remains the companion product.
-* Use Pocket TRRS analog audio or the key/PTT jack as the Mini-FT8 radio. FT8 is QMX on USB-C on both boxes.
+* Use Pocket TRRS analog audio or the key/PTT jack as the Mini-FT8 radio. If §3.1 fails, we stop — we do not silently switch to analog FT8 in this RFC.
 
 ---
 
@@ -47,13 +47,33 @@ We will **not**:
 |---|---|---|
 | MCU | ESP32-S3FN8 | ESP32-S3 (`pocketwroom`), no PSRAM |
 | Display | 1.14″ ST7789, **240×135** | 1.9″ ST7789; Morserino tree **170×320**, plus `pocketwroom-170x240` |
-| Audio (FT8) | QMX UAC on USB-C; ES8311 local | QMX UAC on USB-C (same). TLV320 / TRRS stay Morserino CW / headphones, not the FT8 RX path |
-| Radio attach | USB-C host: QMX UAC+CAT | **Same paradigm:** USB-C host, QMX UAC+CAT. Hardware-prove OTG host + enumeration with no soldering |
+| Audio (FT8) | QMX UAC on USB-C host; ES8311 local | **Blocked on §3.1.** TLV320 / TRRS stay Morserino CW / headphones, not the Mini-FT8 radio |
+| Radio attach | USB-C **host** (DFP): QMX UAC+CAT | Native USB **PHY** on the same C connector, but the port is wired as a **device/sink**. QMX host needs an OTG (and, to charge at the same time, a powered) dongle — desk proof, not assumed |
 | Input | 56-key matrix | Encoder (push) + FN (case cut-out) |
 | Storage | Internal FAT + optional MicroSD | 8 MB flash only |
 | Time today | GPS / LoRa GNSS cap / DS3231 / manual | No GPS in the zero-mod rule |
 
-FT8 audio and CAT come from the QMX USB-C cable, as on ADV. The Pocket TRRS jack is not the Mini-FT8 radio attach. (Morserino’s own FAQ still applies if someone uses that jack for CW: a TRS radio cable can damage the TLV320.) Pocket USB-C in stock firmware is a **device** port (charge, web serial). Mini-FT8 needs **host** mode for QMX. Same cable rule as ADV: that port cannot be a PC disk and a QMX host at once. If the connector/CC/VBUS wiring cannot host a self-powered QMX with zero mods, the QMX-on-Pocket requirement fails this RFC’s non-goals — that is an exit criterion, not a silent analog fallback.
+FT8 audio and CAT on ADV come from the QMX USB-C cable. The Pocket TRRS jack is not the Mini-FT8 radio attach. (Morserino’s own FAQ still applies if someone uses that jack for CW: a TRS radio cable can damage the TLV320.)
+
+### 3.1 Pocket USB-C (QRP Labs schematic)
+
+Source: [QRP Labs Pocket schematic](https://qrp-labs.com/images/morserino/Schematic.pdf) (production PCB). Classic Heltec M32 UART-bridge lore does **not** apply.
+
+* **No CP2102 / CH340.** USB-C `D+` / `D−` go to the ESP32-S3 native USB PHY (`IO20` / `IO19`). Stock Morserino `ARDUINO_USB_CDC_ON_BOOT` + 1200 bps touch matches device CDC on that PHY.
+* **CC1 / CC2 = 5.1 kΩ to ground.** The connector is a USB-C **UFP / sink**. It asks a PC for 5 V and presents as a gadget.
+* **VBUS is an input** to the MCP73871 charger, not a host 5 V source like ADV.
+
+ADV is a USB **host**. QMX is a USB **device**. Two sinks on a C-to-C cable do not become host/device. ESP-IDF can still put the S3 PHY in **host** mode on those pins; copper CC/VBUS will not help a straight QMX cable.
+
+| Cable / dongle | Charge Pocket | QMX UAC+CAT |
+|---|---|---|
+| USB-C–C into QMX | Only if something else feeds `VBUS` | **No** |
+| Simple C-to-A OTG, QMX on A (or A-to-C) | **No** (adapter wants the Pocket to *source* VBUS) | **Maybe** — PHY host + self-powered QMX |
+| Powered OTG / hub splitter (5 V in, data to QMX, `VBUS` into Pocket) | **If** 5 V actually lands on Pocket `VBUS` | **Maybe** — same PHY-host path |
+
+Phone “OTG + PD” dongles often need a PD CC controller. Pocket has **resistors**, not PD. Prefer a dumb **5 V + D+/D−** splitter. Desk proof: QMX enumerates UAC+CDC with Mini-FT8 in host mode; Pocket still charges if that is a requirement.
+
+Until that proof, **I17 is de-prioritized.** Do not start Pocket board/encoder/dual-boot firmware. B15 (CTS on ADV) is independent and stays sequenced.
 
 ---
 
@@ -98,9 +118,9 @@ No Mini-FT8 Play Store app. Document nRF Connect as the recipe we field-test; an
 * Manual ±100 ms and ±1 s against WWV/CHU: operator-initiated. Encoder on Pocket, keys on ADV. Extracted module; host-test the step math. I15 “clock is obviously wrong” UX is separate and still Ideas.
 * Wi-Fi SNTP: optional, later, menu. Bring the radio up, set time, **disable Wi-Fi** before FT8. Not a Phase-1 deliverable. Not required in the field.
 
-### 4.5 RAM (both boards, both with QMX USB-C)
+### 4.5 RAM (ADV+QMX now; Pocket only after §3.1)
 
-Not the companion; NimBLE is up only for sync. **Sync Time** ships on ADV and on Pocket. Both host a QMX on USB-C, so both can hit the V2.0.4 failure (NimBLE steals the DMA block CDC needs). Teardown is the intent; **largest DMA block after deinit** is the proof on each board.
+Not the companion; NimBLE is up only for sync. **Sync Time** is specified for ADV now. Pocket CTS (Phase 4b) only after I17 USB host works. ADV+QMX can hit the V2.0.4 failure (NimBLE steals the DMA block CDC needs). Teardown is the intent; **largest DMA block after deinit** is the proof.
 
 Every BLE time PR inherits RFC 0001’s §4 loop (measurement recipe, not companion features):
 
@@ -121,7 +141,7 @@ STYLE is not the reason. We would change [STYLE.md](../STYLE.md) in this RFC if 
 
 ADV vs Pocket is two **flash images**: different `sdkconfig`, pins, partition table, display driver. One binary never holds both boards. A `class Board` / `IDisplay` vtable is how you pick an implementation at runtime (and how you get `dynamic_cast` you cannot use: no RTTI). Here the linker already picks the implementation. That is the same choice we already made for radio: `radio_control_ops_t` (NULL op = not supported), and for ADV hardware: `components/board_cardputer_adv` as C APIs (`board_audio_*`, `board_pins.h`). Host tests stub the same functions; they do not need fake subclasses.
 
-The work that will actually hurt is encoder UX and Pocket USB-host, not `drawPixel`. Wrapping those in `class Input` / `class UsbHost` does not design the key map or prove QMX enumeration.
+The work that will actually hurt is encoder UX and Pocket USB-host **if §3.1 passes**, not `drawPixel`. Wrapping those in `class Input` / `class UsbHost` does not design the key map or prove QMX enumeration.
 
 **Do this:** `components/board_m32_pocket` plus a `board_ops_t` (or just C APIs with one component linked per target), same QMX `radio_control` backend. Core does not `if (M32)` in `main.cpp`. If the header wants the word HAL, it means that boundary, not `class Hal`.
 
@@ -134,7 +154,7 @@ If we later need **one** firmware to detect hardware at boot, that is a new RFC 
 | Pins / I²C / I²S | `board_pins.h`, `board_audio`, `board_i2c` | Pocket USB-host / power pins; local codec only if we need it (FT8 audio is QMX UAC) |
 | Display | M5 240×135 | LovyanGFX/ST7789 170×320 (and a build flag if 170×240 exists in the wild) |
 | Input | Key matrix in `main` / M5 | Encoder + FN → events the UI already consumes, or a later keymap module |
-| Radio | `radio_control` QMX/QDX/KH1 | **Same QMX backend.** Pocket is another USB-host board. No `if (M32)` in `main.cpp` |
+| Radio | `radio_control` QMX/QDX/KH1 | **Same QMX backend** if §3.1 passes. Pocket is not a new analog radio. No `if (M32)` in `main.cpp` |
 | Storage | FAT + optional SD | Flash FAT only; skip SD import paths |
 
 Encoder UI is **product**, not pins: character-picker for call/grid, and a written map of ADV keys (`1`–`5` tap, `C`, `M`, abort) to encoder+FN. That map is an RFC 0003 Phase exit, not a driver PR.
@@ -206,17 +226,18 @@ Offsets follow the table in force, not this example.
 
 ## 7. Phased implementation
 
-One open firmware slice at a time. **Do not start Phase 2+ until Phase 1 is Roadmap Done** (B15). STYLE applies from day one.
+One open firmware slice at a time. **Do not start Phase 2+ until B15 is Done and §3.1 has a desk pass.** I17 is parked until then. STYLE applies from day one.
 
 | Phase | Track | Deliverable | Exit |
 |---|---|---|---|
-| **0 — RFC** | — | This document + Backlog B15 + Ideas I17 | Phase 0 accepted. B15 at top of Backlog. I17 blocked on B15 |
+| **0 — RFC** | — | This document + Backlog B15 + Ideas I17 | Phase 0 accepted. B15 sequenced. I17 de-prioritized on §3.1 |
 | **1 — CTS time** | A | Named module (not `main.cpp`). Shared `0x2A2B` parse. iPhone: advertise + GATTC. Android: scan `0x1805` + GATTC. NimBLE teardown | **B15 Done-when:** iOS Settings-pair and Android nRF Connect set time on **ADV+QMX**. BLE down before next slot. CAT/`TA` still work. Host: payload parse / Fractions256. RFC 0001 §4 table for **each** GAP role (largest DMA after deinit). Official bins still CTS-off until that table passes |
-| **2 — Pocket board** | B | `board_m32_pocket` + display + encoder events. USB host on Pocket USB-C | Starts only after B15 Done. IDF target builds; ADV unchanged. **QMX enumerates** on Pocket USB-C with no hardware mod. If it does not, stop — no TRRS analog fallback |
+| **1b — Pocket USB host proof** | B gate | No firmware required. QMX UAC+CDC on Pocket PHY via OTG / powered splitter (§3.1) | Enumerate on the desk. Charge-while-host if that is a requirement. Fail → I17 stays parked; no analog fallback |
+| **2 — Pocket board** | B | `board_m32_pocket` + display + encoder events. USB host | Starts only after B15 Done **and** 1b. IDF target builds; ADV unchanged |
 | **3 — Encoder UX + QMX on Pocket** | B | Written ADV-key → encoder+FN map; QMX QSO on Pocket | Same unique-callsign / abort rules as ADV, via encoder. Reuse QMX `radio_control`. No `if (M32)` in `main.cpp` |
 | **4 — Dual-boot CI** | B | Pocket partition CSV, bootloader GPIO hook, `merge_bin`, size gates | Both apps fit; Morserino still runs from `app0`; Mini-FT8 FAT/NVS isolated; restore-to-stock documented |
 | **4b — CTS on Pocket** | A on B | Enable the Phase 1 module on Pocket+QMX | Repeat RFC 0001 §4 on Pocket+QMX; then CTS may turn on there |
-| **5 — Optional SNTP** | A | Menu Wi-Fi NTP, then Wi-Fi off | Does not block A or B |
+| **5 — Optional SNTP** | A | Menu Wi-Fi NTP, then Wi-Fi off | Does not block A. Does not unpark I17 |
 
 Central/scan is **Android-only**. No PlatformIO product target.
 
@@ -229,8 +250,9 @@ Central/scan is **Android-only**. No PlatformIO product target.
 | Central/scan vs iOS | iOS is peripheral + Settings pair + GATTC |
 | Android has no native CTS | nRF Connect (or equivalent) advertises `0x1805`; Mini-FT8 Central reads `0x2A2B` |
 | Dual GAP roles in one session | Menu picks iPhone vs Android; never advertise and scan together |
-| NimBLE vs QMX CDC | Both boards host QMX. RFC 0001 §4 on ADV+QMX and Pocket+QMX; official bins CTS-off until each table passes |
-| Pocket USB-C is stock a device port | Phase 2: prove USB host + QMX enumerate, zero mods. Fail closed — no analog FT8 fallback in this RFC |
+| NimBLE vs QMX CDC | ADV+QMX now (B15). Pocket+QMX only after §3.1. RFC 0001 §4; official bins CTS-off until each table passes |
+| Pocket USB-C is a UFP/sink | Not a missing CP2102: native PHY, 5.1 kΩ CC, VBUS into MCP73871. Straight C–C to QMX is dead. OTG / powered splitter is Phase 1b. I17 parked until that desk proof. No analog fallback |
+| Phone PD OTG dongles | Pocket has no PD CC controller. Prefer dumb 5 V + D+/D− splitters |
 | NimBLE deinit does not return RAM | Largest DMA before/after teardown; fail the PR if it does not recover |
 | Shared NVS | Second NVS partition for Mini-FT8 only |
 | No FAT on 8 MB dual-app | Original 3.5+3.5 slots were the problem. Size slots to bins (§6.1); ~5 MiB remains after 2.17+1.07 payloads |
@@ -241,15 +263,15 @@ Central/scan is **Android-only**. No PlatformIO product target.
 | Encoder is not a keyboard | Phase 3 key map; character-picker first |
 | Analog/TRRS as FT8 radio | Non-goal. QMX USB-C only |
 | `main.cpp` growth | Board/radio modules only; STYLE ratchet |
-| Scope glue (board + CTS + dual-boot + SNTP) | One RFC; B15 (CTS) Done before any Pocket slice; SNTP last |
+| Scope glue (board + CTS + dual-boot + SNTP) | One RFC; B15 independent of I17; I17 parked on §3.1; SNTP last |
 
 ---
 
 ## 9. Firmware PR rules
 
-1. **B15 before I17.** No Pocket board/USB/encoder/dual-boot work until B15 is Roadmap Done.
-2. **Phase 1 only with the RAM table** on ADV+QMX (each GAP role). Repeat on Pocket+QMX before enabling CTS there. Runtime BLE off except the sync action. Do not treat “we deinit” as a pass without numbers.
-3. **No PlatformIO product target.** Pocket is an IDF board + CI image.
-4. No firmware in the Phase 0 commit.
+1. **I17 is parked** until §3.1 / Phase 1b passes on the desk. Do not start Pocket board/encoder/dual-boot firmware while it is de-prioritized. B15 (CTS on ADV) does not wait on I17.
+2. **B15 before any later Pocket firmware.** If I17 is unparked, B15 is still Done first.
+3. **Phase 1 only with the RAM table** on ADV+QMX (each GAP role). Repeat on Pocket+QMX before enabling CTS there. Runtime BLE off except the sync action. Do not treat “we deinit” as a pass without numbers.
+4. **No PlatformIO product target.** Pocket is an IDF board + CI image.
 
 KB2SLO owns the RFC. Firmware stays on `origin/main` (`kb2slo/Mini-FT8`). Do not push `upstream` unless asked.
