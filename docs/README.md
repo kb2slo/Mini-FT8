@@ -62,6 +62,12 @@ The operator reviews in chat, then green-lights each step. A good previous turn 
 
 4. **Commit / push only when asked.** Local edits are fine when they asked for the work. `git commit` waits until they have seen the plan or diff and said to commit. `git push origin` waits until they said to push. “Commit and push” is both, using the agreed message. Do not treat “ship on main”, a green host test, or “local commits are fine” as standing permission.
 
+5. **Undo with git, not a second edit.** Do not invert your last turn by re-editing files. That is slow and easy to get wrong when other uncommitted work is in the same tree.
+   - Already a commit: `git revert` (or drop a *local, unpushed* commit only if they asked).
+   - Uncommitted, and those paths contain *only* the work to undo: `git restore -- <paths>`.
+   - Uncommitted mixed with other dirty files: do **not** `git restore` (that drops the other work). One sentence in chat: cheap undo needs a commit. Ask them to checkpoint, then revert.
+   Before an experiment they may want to unwind, ask for a checkpoint commit first.
+
 ### Roadmap intake (ideas)
 
 If the operator asks to add an idea or “add to the backlog”:
