@@ -1,6 +1,6 @@
 # RFC 0003: Morserino M32 Pocket Port & Zero-App BLE Time Sync
 
-* **Status:** Phase 0 accepted. Track A (CTS) is Backlog [B15](../ROADMAP.md) on ADV+QMX. Track B (Pocket) is Ideas [I17](../ROADMAP.md), **de-prioritized** until USB-host + QMX is proven on the desk (§3.1). Now is B10.
+* **Status:** Phase 0 accepted. Track A (CTS) is Now [B15](../ROADMAP.md) on ADV+QMX. Track B (Pocket) is Ideas [I17](../ROADMAP.md), **de-prioritized** until USB-host + QMX is proven on the desk (§3.1).
 * **Author / Lead:** Jeff Kalikstein, KB2SLO
 * **Path:** `docs/rfcs/0003-m32-pocket-port-and-ble-time.md`
 * **Hardware in scope:** Cardputer ADV (QMX UAC+CAT native USB-C host). M32 Pocket is a second target **if** §3.1 passes. One-shot BLE CTS is ADV first; Pocket CTS only after I17 USB host works.
