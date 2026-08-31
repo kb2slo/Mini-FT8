@@ -11,6 +11,7 @@
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "nvs_flash.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
@@ -18,6 +19,7 @@
 
 static const char* TAG = "CTS_BLE";
 static constexpr int64_t kAdvertiseTimeoutUs = 90LL * 1000000LL;
+static constexpr int64_t kCtsDiscDelayUs = 1LL * 1000000LL;
 
 extern "C" void ble_store_config_init(void);
 
@@ -39,6 +41,8 @@ static bool s_stop_host;
 static bool s_host_up;
 static struct timeval s_tv;
 static int64_t s_deadline_us;
+static int64_t s_cts_disc_us;
+static uint16_t s_disc_conn;
 static uint8_t s_own_addr_type;
 
 static void set_state(CtsBleState st, const char* menu)
@@ -57,6 +61,7 @@ static void request_stop(void)
 static void fail_now(const char* why)
 {
     ESP_LOGW(TAG, "%s", why);
+    s_cts_disc_us = 0;
     set_state(CtsBleState::Failed, why);
     if (s_conn != BLE_HS_CONN_HANDLE_NONE) {
         ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
@@ -146,11 +151,19 @@ static void start_cts_disc(uint16_t conn)
 {
     s_have_svc = false;
     s_have_chr = false;
+    s_cts_disc_us = 0;
     set_state(CtsBleState::Connected, "Paired");
     int rc = ble_gattc_disc_svc_by_uuid(conn, &k_cts_svc.u, on_svc, nullptr);
     if (rc != 0) {
         fail_now("Disc start");
     }
+}
+
+static void schedule_cts_disc(uint16_t conn)
+{
+    s_disc_conn = conn;
+    s_cts_disc_us = esp_timer_get_time() + kCtsDiscDelayUs;
+    set_state(CtsBleState::Connected, "Paired");
 }
 
 static void advertise(void);
@@ -168,7 +181,7 @@ static int gap_event(struct ble_gap_event* event, void* /*arg*/)
             {
                 struct ble_gap_conn_desc desc;
                 if (ble_gap_conn_find(s_conn, &desc) == 0 && desc.sec_state.encrypted) {
-                    start_cts_disc(s_conn);
+                    schedule_cts_disc(s_conn);
                 } else {
                     int sec = ble_gap_security_initiate(s_conn);
                     if (sec != 0) {
@@ -178,20 +191,24 @@ static int gap_event(struct ble_gap_event* event, void* /*arg*/)
             }
             return 0;
         case BLE_GAP_EVENT_DISCONNECT:
+            ESP_LOGW(TAG, "disconnect reason=%d", event->disconnect.reason);
             s_conn = BLE_HS_CONN_HANDLE_NONE;
-            if (s_state != CtsBleState::Success && s_state != CtsBleState::Failed &&
-                s_state != CtsBleState::Stopping) {
-                fail_now("Dropped");
-            } else {
+            s_cts_disc_us = 0;
+            if (s_state == CtsBleState::Success || s_state == CtsBleState::Failed ||
+                s_state == CtsBleState::Stopping) {
                 request_stop();
+            } else {
+                // Settings My Devices often probes and drops. Stay up for nRF Connect.
+                advertise();
             }
             return 0;
         case BLE_GAP_EVENT_ENC_CHANGE:
             if (event->enc_change.status != 0) {
-                fail_now("Pair fail");
+                ESP_LOGW(TAG, "enc fail %d", event->enc_change.status);
+                ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
                 return 0;
             }
-            start_cts_disc(event->enc_change.conn_handle);
+            schedule_cts_disc(event->enc_change.conn_handle);
             return 0;
         case BLE_GAP_EVENT_REPEAT_PAIRING:
             {
@@ -288,6 +305,7 @@ esp_err_t cts_ble_start_iphone(const char* adv_name)
     s_have_result = false;
     s_stop_host = false;
     s_host_up = true;
+    s_cts_disc_us = 0;
     s_deadline_us = esp_timer_get_time() + kAdvertiseTimeoutUs;
     set_state(CtsBleState::Starting, "Starting...");
 
@@ -308,6 +326,12 @@ esp_err_t cts_ble_start_iphone(const char* adv_name)
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
 
+    {
+        esp_err_t nvs = nvs_flash_init();
+        if (nvs != ESP_OK && nvs != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "nvs_flash_init %s", esp_err_to_name(nvs));
+        }
+    }
     ble_store_config_init();
 
     nimble_port_freertos_init(host_task);
@@ -337,6 +361,14 @@ void cts_ble_poll(void)
         s_state == CtsBleState::Connected || s_state == CtsBleState::Reading) {
         if (esp_timer_get_time() > s_deadline_us) {
             fail_now("Timeout");
+        }
+    }
+
+    if (s_cts_disc_us != 0 && esp_timer_get_time() >= s_cts_disc_us) {
+        const uint16_t conn = s_disc_conn;
+        s_cts_disc_us = 0;
+        if (s_conn == conn && s_state == CtsBleState::Connected) {
+            start_cts_disc(conn);
         }
     }
 

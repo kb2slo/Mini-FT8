@@ -356,7 +356,7 @@ static bool rewrite_dxpedition_for_mycall(const std::string& raw_text,
 }
 
 static const char* TAG = "FT8";
-enum class UIMode { RX, TX, BAND, MENU, MSC, DEBUG, STATUS, QSO, GPS, PERF };
+enum class UIMode { RX, TX, BAND, MENU, MSC, DEBUG, STATUS, QSO, GPS, PERF, BT };
 enum class RtcTimeSource : uint8_t {
   SAVED = 0,
   ESP_RTC,
@@ -1191,6 +1191,7 @@ static const char* uart_mirror_mode_label(UIMode mode) {
     case UIMode::QSO:     return "QSO";
     case UIMode::GPS:     return "GPS";
     case UIMode::PERF:    return "PERF";
+    case UIMode::BT:      return "BT";
   }
   return "?";
 }
@@ -1753,6 +1754,7 @@ static std::string lat_lon_to_maidenhead8(double lat, double lon) {
 }
 
 static void draw_gps_view(bool force_redraw = false);
+static void draw_bt_view(bool force_redraw = false);
 
 static void gps_runtime_tick() {
   static int64_t s_last_apply_ms = 0;
@@ -3697,7 +3699,6 @@ static void draw_menu_view() {
   } else {
     lines.push_back(std::string("Max Retry:") + std::to_string(g_autoseq_max_retry));
   }
-  lines.push_back(cts_ble_menu_item());
 
   int highlight_abs = -1;
   if (menu_edit_idx >= 0) {
@@ -3776,7 +3777,7 @@ static void draw_gps_view(bool force_redraw) {
   } else {
     lines.push_back("Sync: Pending...");
   }
-  
+
   const int line_h = 19;
   const int start_y = UI_START_Y;
 
@@ -3789,6 +3790,55 @@ static void draw_gps_view(bool force_redraw) {
     if (force_redraw || text != s_last_gps_lines[i]) {
       s_last_gps_lines[i] = text;
       int y = start_y + i * line_h;
+      M5.Display.fillRect(0, y, 240, line_h, TFT_BLACK);
+      if (!text.empty()) {
+        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+        M5.Display.setCursor(0, y);
+        M5.Display.printf("%s", text.c_str());
+      }
+    }
+  }
+  M5.Display.endWrite();
+}
+
+static std::string s_last_bt_lines[6];
+
+static void cts_iphone_start_from_ui() {
+  if (g_tx_active) {
+    debug_log_line("CTS: TX busy");
+    return;
+  }
+  log_mem_caps("CTS_BEFORE");
+  char name[20];
+  std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
+  if (cts_ble_start_iphone(name) != ESP_OK) {
+    debug_log_line("CTS: start fail");
+  }
+}
+
+static void draw_bt_view(bool force_redraw) {
+  std::vector<std::string> lines;
+  lines.reserve(6);
+  lines.push_back(std::string("BT: ") + cts_ble_menu_item());
+  lines.push_back("1: Start sync");
+  lines.push_back("nRF Connect");
+  char name[20];
+  std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
+  lines.push_back(name);
+  lines.push_back("Time only, no grid");
+  lines.push_back("Keep in My Devices");
+
+  const int line_h = 19;
+  const int start_y = UI_START_Y;
+
+  M5.Display.startWrite();
+  M5.Display.setTextSize(2);
+  for (size_t i = 0; i < 6; ++i) {
+    std::string text = (i < lines.size()) ? lines[i] : "";
+    ui_set_visible_text_line((int)i, text);
+    if (force_redraw || text != s_last_bt_lines[i]) {
+      s_last_bt_lines[i] = text;
+      int y = start_y + (int)i * line_h;
       M5.Display.fillRect(0, y, 240, line_h, TFT_BLACK);
       if (!text.empty()) {
         M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -4655,6 +4705,9 @@ static void enter_mode(UIMode new_mode) {
     case UIMode::PERF:
       draw_perf_view(true);
       break;
+    case UIMode::BT:
+      draw_bt_view(true);
+      break;
   }
 }
 
@@ -5013,8 +5066,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         debug_log_line("CTS: time set");
       }
     }
-    if (cts_ble_ui_dirty() && ui_mode == UIMode::MENU) {
-      draw_menu_view();
+    if (cts_ble_ui_dirty() && ui_mode == UIMode::BT) {
+      draw_bt_view();
     }
 
     // Drain deferred config saves requested by core commands.
@@ -5220,6 +5273,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       else if (c == 'd' || c == 'D') { cancel_status_edit(); enter_mode(ui_mode == UIMode::DEBUG ? UIMode::RX : UIMode::DEBUG); switched = true; }
       else if (c == 's' || c == 'S') { cancel_status_edit(); enter_mode(ui_mode == UIMode::STATUS ? UIMode::RX : UIMode::STATUS); switched = true; }
       else if (c == 'g' || c == 'G') { cancel_status_edit(); enter_mode(ui_mode == UIMode::GPS ? UIMode::RX : UIMode::GPS); switched = true; }
+      else if (c == 'h' || c == 'H') { cancel_status_edit(); enter_mode(ui_mode == UIMode::BT ? UIMode::RX : UIMode::BT); switched = true; }
       else if (c == 'p' || c == 'P') { cancel_status_edit(); enter_mode(ui_mode == UIMode::PERF ? UIMode::RX : UIMode::PERF); switched = true; }
     }
 
@@ -5228,6 +5282,13 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     switch (ui_mode) {
       case UIMode::GPS: break;
       case UIMode::PERF: break;
+      case UIMode::BT: {
+        if (c == '1') {
+          cts_iphone_start_from_ui();
+          draw_bt_view();
+        }
+        break;
+      }
       case UIMode::RX: {
         int sel = ui_handle_rx_key(c);
         if (sel >= 0 && core_cmd_tap_rx(sel)) {
@@ -5642,7 +5703,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         if (c == ';') {
           if (menu_page > 0) { menu_page--; draw_menu_view(); }
         } else if (c == '.') {
-          if (menu_page < 3) { menu_page++; draw_menu_view(); }
+          if (menu_page < 2) { menu_page++; draw_menu_view(); }
         } else if (menu_page == 0) {
               if (c == '1') {
                 g_cq_type = (CqType)(((int)g_cq_type + 1) % 6);
@@ -5784,20 +5845,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               } else if (c == '6') {
                 menu_edit_idx = 17; // Max Retry line
                 menu_edit_buf = std::to_string(g_autoseq_max_retry);
-                draw_menu_view();
-              }
-            } else if (menu_page == 3) {
-              if (c == '1') {
-                if (g_tx_active) {
-                  debug_log_line("CTS: TX busy");
-                } else {
-                  log_mem_caps("CTS_BEFORE");
-                  char name[20];
-                  std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
-                  if (cts_ble_start_iphone(name) != ESP_OK) {
-                    debug_log_line("CTS: start fail");
-                  }
-                }
                 draw_menu_view();
               }
             }

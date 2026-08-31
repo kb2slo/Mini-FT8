@@ -16,7 +16,7 @@ The Morserino **M32 Pocket** is a QRP field tool on ESP32-S3: 1.9″ TFT, TLV320
 
 FT8 needs slot time within about 1 s. Off-grid SOTA/POTA without a laptop or GPS is the gap. This RFC is a **zero-soldering** path (an OTG/charge dongle is extra kit, not a board mod):
 
-1. **BLE CTS time**, one-shot, then BLE off. iOS is zero-app (native Time Service). Android is an off-the-shelf CTS GATT server (nRF Connect), not a Mini-FT8 app.
+1. **BLE CTS time**, one-shot, then BLE off. iOS time comes from native Time Service after a BLE connection. First pair uses an off-the-shelf scanner (nRF Connect / LightBlue), not a Mini-FT8 app. Android is an off-the-shelf CTS GATT server (nRF Connect), not a Mini-FT8 app.
 2. **Board ops** so one firmware tree can target ADV and Pocket without growing `main.cpp`.
 3. **Dual-boot bundle** on 8 MB: stock Morserino CW in one OTA slot, Mini-FT8 in the other, one `0x0` image.
 
@@ -33,7 +33,7 @@ We will **not**:
 * Change the Cardputer ADV `idf.py` / Launcher / `partitions.csv` path
 * Add PlatformIO as a product build (the tree is ESP-IDF 5.5.1; the only `platformio.ini` is a vendored M5 example)
 * Auto-nudge the clock (I15). Operator-initiated ±100 ms / ±1 s is in scope as a later UI, not in `main.cpp` policy
-* Give CTS a grid or GPS. Maidenhead stays manual or RFC 0001. Settings-pair does not expose Location.
+* Give CTS a grid or GPS. Maidenhead stays manual or RFC 0001. Phone pair does not expose Location.
 * Compile-time `ENABLE_CTS` / dual official bins. NimBLE may be in the image; **do not push CTS to `origin/main` until the iPhone+QMX RAM table passes**. Fail → dump the feature.
 * Enable PSRAM to make NimBLE fit
 * Mirror the 56-key ADV UI on the encoder as a “driver”
@@ -90,18 +90,18 @@ This track is **UTC time**, not location. Apple Time Service does not publish la
 
 Fractions256 is necessary and not sufficient. Field pass: systematic |DT| well under 1 s vs WWV/CHU or a GPS-synced ADV after a one-shot sync.
 
-### 4.2 iOS (zero app)
+### 4.2 iOS (off-the-shelf scanner)
 
-iOS does **not** advertise `0x1805` for an ESP32 Central to scan. Apple’s Accessory Design Guidelines: the iPhone is a GATT **server** for Time Service on a connection that already exists. Third-party iOS apps must not publish CTS.
+iOS does **not** advertise `0x1805` for an ESP32 Central to scan. Apple’s Accessory Design Guidelines: the iPhone is a GATT **server** for Time Service on a connection that already exists. Third-party iOS apps must not publish CTS. iOS Settings **Other Devices** does not list generic BLE peripherals.
 
-**Workflow (Adafruit `BLEClientCts` / Apple dual-role):**
+**Workflow (Adafruit `BLEClientCts` / Apple dual-role; field-proven with nRF Connect):**
 
-1. **Sync Time → iPhone.** Mini-FT8 **advertises as a peripheral** (`Mini-FT8-<call>`).
-2. Operator: **Settings → Bluetooth**, tap, **Pair**.
+1. **H → 1** (BT screen). Mini-FT8 **advertises as a peripheral** (`Mini-FT8-<call>`).
+2. Operator opens **nRF Connect** or **LightBlue**, connects to that name, Pairs if asked. Do this on every sync, including after an ADV reboot. iOS **My Devices** may list the name; tapping it in Settings is not a Current Time session (connect then drop). Do not Forget between nRF Connect sessions if you want a faster re-pair.
 3. On that link, firmware is a **GATT client**: discover `0x1805`, read `0x2A2B`. Bonding required; iOS Pair dialog, not silent Just Works.
 4. Apply time, drop the link, tear down NimBLE, return to RX.
 
-Do not Central-scan for iPhones.
+Do not Central-scan for iPhones. Do not advertise as HID to spoof Settings discovery.
 
 ### 4.3 Android (off-the-shelf app)
 
@@ -234,7 +234,7 @@ One open firmware slice at a time. **Do not start Phase 2+ until B15 is Done and
 | Phase | Track | Deliverable | Exit |
 |---|---|---|---|
 | **0 — RFC** | — | This document + Backlog B15 + Ideas I17 | Phase 0 accepted. B15 sequenced. I17 de-prioritized on §3.1 |
-| **1 — CTS time** | A | Named module (not `main.cpp`). `0x2A2B` parse. iPhone: advertise + GATTC. NimBLE teardown | **B15 Done-when:** iOS Settings-pair sets time on **ADV+QMX**. BLE down before next slot. CAT/`TA` still work. Host: payload parse / Fractions256. RFC 0001 §4 table for the **iPhone** GAP role (largest DMA after deinit) **before push to `origin/main`**. Fail → dump. No `ENABLE_CTS`. Android Central is later (§4.3) |
+| **1 — CTS time** | A | Named module (not `main.cpp`). `0x2A2B` parse. iPhone: advertise + GATTC. NimBLE teardown | **B15 Done-when:** iOS nRF Connect / LightBlue pair sets time on **ADV+QMX**. BLE down before next slot. CAT/`TA` still work. Host: payload parse / Fractions256. RFC 0001 §4 table for the **iPhone** GAP role (largest DMA after deinit) **before push to `origin/main`**. Fail → dump. No `ENABLE_CTS`. Android Central is later (§4.3) |
 | **1b — Pocket USB host proof** | B gate | No firmware required. QMX UAC+CDC on Pocket PHY via OTG / powered splitter (§3.1) | Enumerate on the desk. Charge-while-host if that is a requirement. Fail → I17 stays parked; no analog fallback |
 | **2 — Pocket board** | B | `board_m32_pocket` + display + encoder events. USB host | Starts only after B15 Done **and** 1b. IDF target builds; ADV unchanged |
 | **3 — Encoder UX + QMX on Pocket** | B | Written ADV-key → encoder+FN map; QMX QSO on Pocket | Same unique-callsign / abort rules as ADV, via encoder. Reuse QMX `radio_control`. No `if (M32)` in `main.cpp` |
@@ -250,7 +250,8 @@ Central/scan is **Android-only**. No PlatformIO product target.
 
 | Risk | Mitigation |
 |---|---|
-| Central/scan vs iOS | iOS is peripheral + Settings pair + GATTC |
+| Central/scan vs iOS | iOS is peripheral + nRF Connect / LightBlue + GATTC |
+| iOS Settings hides generic BLE | nRF Connect / LightBlue for every pair. Settings My Devices tap is not CTS. No HID spoof. |
 | Android has no native CTS | nRF Connect (or equivalent) advertises `0x1805`; Mini-FT8 Central reads `0x2A2B` |
 | Dual GAP roles in one session | Menu picks iPhone vs Android; never advertise and scan together |
 | NimBLE vs QMX CDC | ADV+QMX now (B15 iPhone). Pocket+QMX only after §3.1. RFC 0001 §4; do not push to `main` until the table passes. Fail → dump |

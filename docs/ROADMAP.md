@@ -10,7 +10,7 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 | ID | Item | Done when |
 |---|---|---|
-| B15 | BLE CTS phone time (RFC 0003 track A) | [RFC 0003](rfcs/0003-m32-pocket-port-and-ble-time.md) §4. **iPhone** Settings-pair on **ADV+QMX**. NimBLE in the binary; init only for Sync Time, deinit before the next FT8 slot. CAT/`TA` still work. Host: `0x2A2B` parse / Fractions256. RFC 0001 §4 table (largest DMA after deinit) **before any push to `origin/main`**. Fail the table → dump the feature; no compile-time `ENABLE_CTS`. Time only (no grid/GPS). Not the companion (I3). Android nRF Connect / Central is specified later, not this Done-when. Independent of I17. |
+| B15 | BLE CTS phone time (RFC 0003 track A) | [RFC 0003](rfcs/0003-m32-pocket-port-and-ble-time.md) §4. **iPhone** nRF Connect / LightBlue pair on **ADV+QMX**. NimBLE in the binary; init only for Sync Time, deinit before the next FT8 slot. CAT/`TA` still work. Host: `0x2A2B` parse / Fractions256. RFC 0001 §4 table (largest DMA after deinit) **before any push to `origin/main`**. Fail the table → dump the feature; no compile-time `ENABLE_CTS`. Time only (no grid/GPS). Not the companion (I3). Android nRF Connect / Central is specified later, not this Done-when. Independent of I17. |
 
 
 
