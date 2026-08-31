@@ -69,6 +69,7 @@ extern "C" {
 
 #include "storage_service.h"
 #include "adif.h"
+#include "cts_ble.h"
 
 static const char* STATION_FILE = "Station.txt";
 
@@ -362,6 +363,7 @@ enum class RtcTimeSource : uint8_t {
   DS3231,
   GPS,
   MANUAL,
+  PHONE,
 };
 static UIMode ui_mode = UIMode::RX;
 static int tx_page = 0;
@@ -2319,6 +2321,7 @@ static const char* rtc_time_source_suffix() {
   switch (g_rtc_time_source) {
     case RtcTimeSource::DS3231: return " R";
     case RtcTimeSource::GPS: return " G";
+    case RtcTimeSource::PHONE: return " P";
     case RtcTimeSource::SAVED:
     case RtcTimeSource::ESP_RTC:
     case RtcTimeSource::MANUAL:
@@ -3694,6 +3697,7 @@ static void draw_menu_view() {
   } else {
     lines.push_back(std::string("Max Retry:") + std::to_string(g_autoseq_max_retry));
   }
+  lines.push_back(cts_ble_menu_item());
 
   int highlight_abs = -1;
   if (menu_edit_idx >= 0) {
@@ -4994,6 +4998,24 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     tx_abort_hud_tick();
     qso_load_entries_tick();
     file_list_tick();
+    cts_ble_poll();
+    if (g_tx_active) {
+      cts_ble_abort();
+    }
+    {
+      struct timeval tv;
+      if (cts_ble_take_result(&tv)) {
+        rtc_seed_epoch(tv.tv_sec, esp_timer_get_time() / 1000, RtcTimeSource::PHONE);
+        g_time_synced_from_gps = false;
+        settimeofday(&tv, nullptr);
+        (void)rtc_write_external_from_soft("iPhone CTS");
+        log_mem_caps("CTS_AFTER");
+        debug_log_line("CTS: time set");
+      }
+    }
+    if (cts_ble_ui_dirty() && ui_mode == UIMode::MENU) {
+      draw_menu_view();
+    }
 
     // Drain deferred config saves requested by core commands.
     if (g_config_save_pending && storage_service_firmware_available() &&
@@ -5620,7 +5642,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         if (c == ';') {
           if (menu_page > 0) { menu_page--; draw_menu_view(); }
         } else if (c == '.') {
-          if (menu_page < 2) { menu_page++; draw_menu_view(); }
+          if (menu_page < 3) { menu_page++; draw_menu_view(); }
         } else if (menu_page == 0) {
               if (c == '1') {
                 g_cq_type = (CqType)(((int)g_cq_type + 1) % 6);
@@ -5762,6 +5784,20 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               } else if (c == '6') {
                 menu_edit_idx = 17; // Max Retry line
                 menu_edit_buf = std::to_string(g_autoseq_max_retry);
+                draw_menu_view();
+              }
+            } else if (menu_page == 3) {
+              if (c == '1') {
+                if (g_tx_active) {
+                  debug_log_line("CTS: TX busy");
+                } else {
+                  log_mem_caps("CTS_BEFORE");
+                  char name[20];
+                  std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
+                  if (cts_ble_start_iphone(name) != ESP_OK) {
+                    debug_log_line("CTS: start fail");
+                  }
+                }
                 draw_menu_view();
               }
             }

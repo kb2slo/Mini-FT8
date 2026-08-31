@@ -7,6 +7,7 @@ This is Jeff KB2SLO’s continuation of Wei AG6AQ’s Mini-FT8 for the Cardputer
 - **Flash without losing M5Launcher.** `tools/flash_keep_launcher.py` writes the app slot only. Merges that change firmware also publish `minift8-dev.bin`.
 - **Logs survive the workflow.** Copy-to-SD merges `.adi` instead of overwriting; internal FAT append no longer leaves empty QSO files. Critically low battery stops TX and flash writes so a dying pack does not corrupt the filesystem.
 - **Charge Mode, not a dead Sleep.** MENU charge matches Launcher: percent stripe (or `SW ON to charge`), then dim and screen off; first key wakes.
+- **Sync time from an iPhone.** MENU page 4 (`O` then `.`, then `1`): Cardputer advertises `Mini-FT8-<call>`; Pair in Settings → Bluetooth. Time only, no grid. NimBLE is torn down after the read.
 - **Busy band, busy UI.** Opening QSO browse or copying files does not stall the slot loop. Beacon CQ re-arms after a QSO or an empty slot (replies still win); turning beacon OFF drops the queued CQ. Low battery abort is visible on R.
 
 ## Clone and CI firmware
@@ -36,7 +37,11 @@ A `0x0` flash of the merged image replaces Launcher. Daily iterate with `python 
 
 **Charge Mode (MENU `M` → `6`):** this fork replaced Sleep. Launcher stripe + Mini-FT8 version; `SW ON to charge` under the bar. Screen off after ~25 s idle. First key wakes; any key after that exits.
 
+**Sync iPhone (MENU P4 `1`):** start one-shot BLE time sync. On the iPhone: Settings → Bluetooth → tap `Mini-FT8-<call>` and Pair. STATUS time shows `P` after a successful read. This does not set grid.
+
 **USB Drive (`C`):** expose internal FATFS as a USB disk. Best on Mac or PC; iPhone Files is unreliable. Unplug the radio from USB-C first if you were using QMX/KH1-USBC; the same port cannot be USB host and a disk at once. Press `C`. The Cardputer enumerates as `USB DISK`. The screen says `Waiting for computer...` until the computer actually attaches. On Mac or Windows, copy logs off the disk, eject it in Finder/Explorer, then press `C` again to return to RX. If the screen says `USB busy, unplug radio`, disconnect the QMX/KH1 USB cable first. iPhone/iPad Files is best-effort only.
+
+**Sync iPhone (MENU P4 `1`):** start one-shot BLE time sync. On the iPhone: Settings → Bluetooth → tap `Mini-FT8-<call>` and Pair. STATUS time shows `P` after a successful read. This does not set grid.
 
 ---
 
