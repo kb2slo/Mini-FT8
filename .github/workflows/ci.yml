@@ -80,6 +80,8 @@ jobs:
           ./host_test_tx_hud_banner || failed=1
           echo "===== host_test_rx_list_stale ====="
           ./host_test_rx_list_stale || failed=1
+          echo "===== host_test_cts_time ====="
+          ./host_test_cts_time || failed=1
           exit "$failed"
 
       - name: TX e2e (CTest)

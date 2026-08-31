@@ -8,6 +8,7 @@ INCLUDES = -I. -I../main -I../components/ui/include \
            -I../components/ft8_lib -I../components/ft8_lib/vendor \
            -I../components/ft8_lib/vendor/ft8 \
            -I../components/adif/include \
+           -I../components/cts_time/include \
            -I../components/station/include \
            -I../components/board_cardputer_adv/include \
            -I../components/qso_browse/include \
@@ -40,11 +41,12 @@ FILE_LIST_TARGET = host_test_file_list
 RADIO_PROFILE_TARGET = host_test_radio_profile
 TX_HUD_BANNER_TARGET = host_test_tx_hud_banner
 RX_LIST_STALE_TARGET = host_test_rx_list_stale
+CTS_TIME_TARGET = host_test_cts_time
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
-     $(RX_LIST_STALE_TARGET)
+     $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -83,6 +85,12 @@ $(TX_HUD_BANNER_TARGET): $(TX_HUD_BANNER_OBJ)
 
 RX_LIST_STALE_OBJ = test_rx_list_stale.o
 $(RX_LIST_STALE_TARGET): $(RX_LIST_STALE_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+CTS_TIME_OBJ = cts_time.o test_cts_time.o
+cts_time.o: ../components/cts_time/cts_time.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(CTS_TIME_TARGET): $(CTS_TIME_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 POWER_OBJ = power_hysteresis.o test_power_hysteresis.o
@@ -125,10 +133,10 @@ clean:
 	rm -f $(OBJ) $(UNIQUE_OBJ) $(CANCEL_OBJ) $(ADIF_OBJ) $(STATION_OBJ) \
 	      $(DECODE_SORT_OBJ) $(POWER_OBJ) $(QSO_BROWSE_OBJ) $(COPY_BLOCK_OBJ) \
 	      $(STATION_SAVE_OBJ) $(FILE_LIST_OBJ) $(RADIO_PROFILE_OBJ) $(TX_HUD_BANNER_OBJ) \
-	      $(RX_LIST_STALE_OBJ) \
+	      $(RX_LIST_STALE_OBJ) $(CTS_TIME_OBJ) \
 	      $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
 	      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
 	      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
-	      $(RX_LIST_STALE_TARGET)
+	      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET)
 
 .PHONY: all clean

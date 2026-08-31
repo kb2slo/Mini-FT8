@@ -14,4 +14,5 @@ host_test_file_list
 host_test_radio_profile
 host_test_tx_hud_banner
 host_test_rx_list_stale
+host_test_cts_time
 
