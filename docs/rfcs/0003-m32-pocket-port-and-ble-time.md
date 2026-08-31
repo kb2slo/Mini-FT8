@@ -33,7 +33,8 @@ We will **not**:
 * Change the Cardputer ADV `idf.py` / Launcher / `partitions.csv` path
 * Add PlatformIO as a product build (the tree is ESP-IDF 5.5.1; the only `platformio.ini` is a vendored M5 example)
 * Auto-nudge the clock (I15). Operator-initiated ±100 ms / ±1 s is in scope as a later UI, not in `main.cpp` policy
-* Give CTS a grid; Maidenhead stays manual or RFC 0001
+* Give CTS a grid or GPS. Maidenhead stays manual or RFC 0001. Settings-pair does not expose Location.
+* Compile-time `ENABLE_CTS` / dual official bins. NimBLE may be in the image; **do not push CTS to `origin/main` until the iPhone+QMX RAM table passes**. Fail → dump the feature.
 * Enable PSRAM to make NimBLE fit
 * Mirror the 56-key ADV UI on the encoder as a “driver”
 * Ship a Mini-FT8 Android (or iOS) app for time. Android uses nRF Connect or any app that advertises SIG CTS. RFC 0001 remains the companion product.
@@ -83,7 +84,9 @@ Off-grid UTC: BLE phone first, then manual, then optional Wi-Fi SNTP later. Grid
 
 ### 4.1 Shared contract
 
-Both phone paths read SIG Current Time (`0x2A2B`, 10 bytes: date-time + **Fractions256**, ~3.9 ms units), apply it with `settimeofday()` (or the existing soft-RTC path) using the **read** timestamp, then disconnect and **deinit NimBLE** before the next FT8 slot. Host-test the payload parse once. Menu: **Sync Time → iPhone** | **Android**. Do not advertise and scan at the same time.
+Both phone paths read SIG Current Time (`0x2A2B`, 10 bytes: date-time + **Fractions256**, ~3.9 ms units), apply it with `settimeofday()` (or the existing soft-RTC path) using the **read** timestamp, then disconnect and **deinit NimBLE** before the next FT8 slot. Host-test the payload parse once. **B15 menu is iPhone only.** Android Central is §4.3, later. Do not advertise and scan at the same time.
+
+This track is **UTC time**, not location. Apple Time Service does not publish lat/lon or Maidenhead. Same-service extras (`Local Time Information` `0x2A0F` timezone/DST, `Reference Time Information` `0x2A14` source/accuracy) are optional metadata, not GPS. Do not scrape ANCS or other Apple protocols for “free” data.
 
 Fractions256 is necessary and not sufficient. Field pass: systematic |DT| well under 1 s vs WWV/CHU or a GPS-synced ADV after a one-shot sync.
 
@@ -109,7 +112,7 @@ Stock Android does **not** serve CTS after a Settings Bluetooth pair, so the iOS
 1. Operator opens **nRF Connect** (or any GATT-server app), starts a server that advertises Current Time Service `0x1805` and exposes Current Time `0x2A2B` (nRF Connect can fill this from the phone clock).
 2. **Sync Time → Android.** Mini-FT8 scans for `0x1805`, connects, reads `0x2A2B` with the same parser as iOS, applies time, disconnects, deinit NimBLE.
 
-No Mini-FT8 Play Store app. Document nRF Connect as the recipe we field-test; any advertiser of SIG CTS is acceptable. RFC 0001 companion is not required for this and is not scheduled here.
+No Mini-FT8 Play Store app. Document nRF Connect as the recipe we field-test; any advertiser of SIG CTS is acceptable. RFC 0001 companion is not required for this and is not scheduled here. **Not B15 Done-when** — sequence when an Android is on the bench.
 
 **Rejected for Android:** Mini-FT8 as peripheral hoping Settings-pair will expose CTS. **Not Phase 1:** Mini-FT8 hosting a writable CTS for nRF Connect to punch in a 10-byte value by hand.
 
@@ -129,9 +132,9 @@ Every BLE time PR inherits RFC 0001’s §4 loop (measurement recipe, not compan
 * **Largest DMA block** (the QMX CDC figure)
 * 8-bit minimum over a session
 
-Zero-cost when compiled out. Runtime default off. USB host + CDC **before** any NimBLE init. Official bins keep CTS off until the table passes on **ADV+QMX**. Repeat the table on **Pocket+QMX** before enabling it there. If largest DMA does not return to the pre-NimBLE floor, stop. Do not enable PSRAM.
+NimBLE is in the binary (no compile-time `ENABLE_CTS`). Runtime off except the Sync Time action. USB host + CDC **before** any NimBLE init. **Do not push CTS to `origin/main` until the table passes on iPhone + ADV+QMX.** Fail → dump the feature, do not merge a broken radio. Repeat the table on **Pocket+QMX** before enabling it there. If largest DMA does not return to the pre-NimBLE floor, stop. Do not enable PSRAM.
 
-iOS and Android CTS use different GAP roles (peripheral+GATTC vs central+GATTC). Measure teardown for **each** role. They may share one NimBLE build with RFC 0001 later; they do not share a Phase 1 PR with companion GATT.
+B15 measures the **iPhone** GAP role (peripheral+GATTC). Android Central is a later table on that role. They may share one NimBLE build with RFC 0001 later; they do not share a Phase 1 PR with companion GATT.
 
 ---
 
@@ -231,7 +234,7 @@ One open firmware slice at a time. **Do not start Phase 2+ until B15 is Done and
 | Phase | Track | Deliverable | Exit |
 |---|---|---|---|
 | **0 — RFC** | — | This document + Backlog B15 + Ideas I17 | Phase 0 accepted. B15 sequenced. I17 de-prioritized on §3.1 |
-| **1 — CTS time** | A | Named module (not `main.cpp`). Shared `0x2A2B` parse. iPhone: advertise + GATTC. Android: scan `0x1805` + GATTC. NimBLE teardown | **B15 Done-when:** iOS Settings-pair and Android nRF Connect set time on **ADV+QMX**. BLE down before next slot. CAT/`TA` still work. Host: payload parse / Fractions256. RFC 0001 §4 table for **each** GAP role (largest DMA after deinit). Official bins still CTS-off until that table passes |
+| **1 — CTS time** | A | Named module (not `main.cpp`). `0x2A2B` parse. iPhone: advertise + GATTC. NimBLE teardown | **B15 Done-when:** iOS Settings-pair sets time on **ADV+QMX**. BLE down before next slot. CAT/`TA` still work. Host: payload parse / Fractions256. RFC 0001 §4 table for the **iPhone** GAP role (largest DMA after deinit) **before push to `origin/main`**. Fail → dump. No `ENABLE_CTS`. Android Central is later (§4.3) |
 | **1b — Pocket USB host proof** | B gate | No firmware required. QMX UAC+CDC on Pocket PHY via OTG / powered splitter (§3.1) | Enumerate on the desk. Charge-while-host if that is a requirement. Fail → I17 stays parked; no analog fallback |
 | **2 — Pocket board** | B | `board_m32_pocket` + display + encoder events. USB host | Starts only after B15 Done **and** 1b. IDF target builds; ADV unchanged |
 | **3 — Encoder UX + QMX on Pocket** | B | Written ADV-key → encoder+FN map; QMX QSO on Pocket | Same unique-callsign / abort rules as ADV, via encoder. Reuse QMX `radio_control`. No `if (M32)` in `main.cpp` |
@@ -250,7 +253,7 @@ Central/scan is **Android-only**. No PlatformIO product target.
 | Central/scan vs iOS | iOS is peripheral + Settings pair + GATTC |
 | Android has no native CTS | nRF Connect (or equivalent) advertises `0x1805`; Mini-FT8 Central reads `0x2A2B` |
 | Dual GAP roles in one session | Menu picks iPhone vs Android; never advertise and scan together |
-| NimBLE vs QMX CDC | ADV+QMX now (B15). Pocket+QMX only after §3.1. RFC 0001 §4; official bins CTS-off until each table passes |
+| NimBLE vs QMX CDC | ADV+QMX now (B15 iPhone). Pocket+QMX only after §3.1. RFC 0001 §4; do not push to `main` until the table passes. Fail → dump |
 | Pocket USB-C is a UFP/sink | Not a missing CP2102: native PHY, 5.1 kΩ CC, VBUS into MCP73871. Straight C–C to QMX is dead. OTG / powered splitter is Phase 1b. I17 parked until that desk proof. No analog fallback |
 | Phone PD OTG dongles | Pocket has no PD CC controller. Prefer dumb 5 V + D+/D− splitters |
 | NimBLE deinit does not return RAM | Largest DMA before/after teardown; fail the PR if it does not recover |
@@ -271,7 +274,7 @@ Central/scan is **Android-only**. No PlatformIO product target.
 
 1. **I17 is parked** until §3.1 / Phase 1b passes on the desk. Do not start Pocket board/encoder/dual-boot firmware while it is de-prioritized. B15 (CTS on ADV) does not wait on I17.
 2. **B15 before any later Pocket firmware.** If I17 is unparked, B15 is still Done first.
-3. **Phase 1 only with the RAM table** on ADV+QMX (each GAP role). Repeat on Pocket+QMX before enabling CTS there. Runtime BLE off except the sync action. Do not treat “we deinit” as a pass without numbers.
+3. **Phase 1 only with the RAM table** on iPhone + ADV+QMX. Do not push CTS to `origin/main` until it passes. Repeat on Pocket+QMX before enabling CTS there. Runtime BLE off except the sync action. Do not treat “we deinit” as a pass without numbers. No compile-time `ENABLE_CTS`.
 4. **No PlatformIO product target.** Pocket is an IDF board + CI image.
 
 KB2SLO owns the RFC. Firmware stays on `origin/main` (`kb2slo/Mini-FT8`). Do not push `upstream` unless asked.
