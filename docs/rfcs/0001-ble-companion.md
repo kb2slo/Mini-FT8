@@ -1,11 +1,11 @@
 # RFC 0001: Optional BLE Companion (Add-on, Not a Second Radio UI)
 
-* **Status:** Draft RFC (Phase 0). **Same-chip NimBLE on ADV+QMX failed** the §4 DMA gate (2026-08-31). Companion BLE moves **off-chip**.
+* **Status:** Draft RFC (Phase 0). **Same-chip NimBLE on ADV+QMX failed** the §4 DMA gate (2026-08-31). Companion I/O moves **off-chip** (NanoC6 UART). **Phone path is not locked:** GATT/iOS app (§5.3 / §6) vs local-only Wi-Fi page ([I19](../ROADMAP.md)). Explore I19 before locking architecture.
 * **Author / Lead:** Jeff Kalikstein, KB2SLO
 * **Target File Path:** `docs/rfcs/0001-ble-companion.md`
 * **Companion Target:** iPhone first (Android later once the iOS GATT surface is stabilized)
 * **Radio:** Cardputer ADV + QMX (USB host). First BLE brick: **M5Stack NanoC6** on ADV UART. Distinct from one-shot CTS on the ADV ([B15](../ROADMAP.md)).
-* **Ask:** Keep this document as the companion plan. Do not land NimBLE-on-ADV for a live QMX session.
+* **Ask:** Keep this document as the companion plan. Do not land NimBLE-on-ADV for a live QMX session. Do not lock GATT-vs-web until [I19](../ROADMAP.md) is tried or rejected.
 
 ---
 
@@ -13,9 +13,9 @@
 
 The Cardputer ADV is the right place to decode, autoseq, CAT, and TX. A phone is the right place for maps, QRZ lookups, grid helpers, and PSK Reporter spots. Those auxiliary tasks compete heavily with the 240×135 screen and the ESP32-S3 internal DRAM budget if attempted on-device.
 
-While USB Drive mode (`C`) moves `.adi` log files to a computer, it is awkward on iOS via Apple Files. Operators in the field frequently have cellular connectivity on their phone but no laptop. A low-overhead BLE link that operates without a Wi-Fi Access Point allows the phone to pull logs and monitor live decodes while Mini-FT8 continues running uninterrupted.
+While USB Drive mode (`C`) moves `.adi` log files to a computer, it is awkward on iOS via Apple Files. Operators in the field frequently have cellular connectivity on their phone but no laptop. A low-overhead link from a coprocessor (not the ADV) lets the phone pull logs and monitor live decodes while Mini-FT8 continues uninterrupted. **How the phone talks to the Nano is open** ([I19](../ROADMAP.md)): BLE GATT was the first sketch; a Nano AP that DHCP-leases **without a default gateway** (so iOS may keep LTE) is in scope to try before this RFC locks.
 
-**How BLE attaches:** the ADV does **not** run NimBLE while the QMX is up. A second MCU (NanoC6) owns BLE. The ADV talks TTL UART. The phone talks GATT to the Nano. KB2SLO will lead the UART framing, the Nano firmware, and the iOS application in the open against this specification.
+**How the Nano attaches:** the ADV does **not** run NimBLE while the QMX is up. A second MCU (NanoC6) owns the phone link. The ADV talks TTL UART. KB2SLO will lead the UART framing and the Nano firmware. The phone UI (native app vs Safari) waits on I19.
 
 ---
 
@@ -137,14 +137,26 @@ The number that killed QMX TX was not DIRAM remain. It was **no contiguous DMA b
 
 ## 5. Proposed Firmware Architecture
 
+### 5.0 Phone path (not locked)
+
+Hardware split is locked: **ADV (QMX + Mini-FT8) + NanoC6 (UART)**. What the **phone** uses is not.
+
+| Path | Status |
+|---|---|
+| BLE GATT + iOS app (§5.3 / §6) | Working hypothesis. Do not treat as signed-off. |
+| Nano Wi-Fi AP + HTTP, DHCP **no Option 3 / no Option 6** ([I19](../ROADMAP.md)) | **Explore before locking.** Community reports iOS then keeps LTE and can still hit a local IP. Not Apple-documented. Field: LTE icon + Safari to Nano IP + QRZ on cellular. Fail → stay on GATT or reject web. |
+| HTTP-over-BLE, iPhone Personal Hotspot STA, Wi-Fi on the ADV | Out. |
+
+Do not start Nano firmware that assumes only GATT until I19 is tried or explicitly dropped.
+
 ### 5.1 Split: ADV + NanoC6
 
 | Piece | Role |
 |---|---|
 | **ADV** | Mini-FT8, QMX USB host, decode, CAT, UI. **No NimBLE** for companion. UART TX of decode/log bytes from a low-priority task (never the DSP task). |
-| **NanoC6** | NimBLE: iPhone CTS client and/or companion GATT server (§5.3). USB-C CDC for desk flash and optional ADV-log bridge. |
+| **NanoC6** | Phone link (GATT and/or I19 HTTP). USB-C CDC for desk flash and optional ADV-log bridge. UART from ADV. |
 
-**First brick:** [M5Stack NanoC6](https://docs.m5stack.com/en/core/M5NanoC6) (SKU C125). ESP32-C6FH4, 4 MB flash, Grove, USB-C CDC, ~24×12×9.5 mm. BLE-only IDF (no Wi-Fi/Thread/Matter on that image) is expected to fit; C6 BLE controller is not in ROM so the binary is fatter than the same sketch on S3. Dual-OTA + Wi-Fi on 4 MB is a later measurement, not a promise.
+**First brick:** [M5Stack NanoC6](https://docs.m5stack.com/en/core/M5NanoC6) (SKU C125). ESP32-C6FH4, 4 MB flash, Grove, USB-C CDC, ~24×12×9.5 mm. A BLE-only IDF (no Wi-Fi/Thread/Matter) is expected to fit if GATT wins. I19 needs Wi-Fi + lwIP + HTTP on that 4 MB — **measure before choosing**; dual-OTA + Wi-Fi is not a promise.
 
 **Dev:** ESP-IDF 5.5.x, `idf.py set-target esp32c6`, **separate project** (not this tree’s ADV target). Hold **GPIO9**, then plug USB-C. Arduino + M5Unified is acceptable for bring-up.
 
@@ -171,7 +183,9 @@ Data (cross TX/RX):
 
 **Not the first brick:** AtomS3 Lite (larger, stronger antenna, 8 MB — fallback if Nano range is sad). CoreS3 + proto + ATOM (slick 54 mm cube; new board + OTG proof). Module Gateway H2 (Thread RCP, not a ready BLE companion). IR (ADV and Nano are TX-only). **Rejected:** any Morserino-32 / M32 Pocket as the UART BLE box.
 
-### 5.3 GATT Specification (on the Nano)
+### 5.3 GATT Specification (on the Nano, if GATT is the phone path)
+
+Hypothesis only until I19 is resolved. One minimalist service with notify and pull semantics. No remote execution. The ADV never exposes these characteristics.
 
 One minimalist service with notify and pull semantics. No remote execution. The ADV never exposes these characteristics.
 
@@ -198,7 +212,9 @@ CTS time on the Nano (read iPhone `0x2A2B`, print epoch on UART, ADV `settimeofd
 
 ---
 
-## 6. Companion App Scope (iOS First)
+## 6. Companion App Scope (iOS First — if GATT wins)
+
+Skip this section’s App Store app if I19’s Safari path passes and we lock that instead. The phone still provides **value-add helpers**, not radio controls. It talks to the **Nano**, not to the ADV.
 
 The phone application provides **value-add helpers**, not radio controls. It connects to the **Nano**, not to the ADV.
 
@@ -219,7 +235,7 @@ I3 stays **Ideas** until sequenced. Do not start Nano/ADV UART firmware until th
 
 | Phase | Firmware | App / RFC | Exit |
 |---|---|---|---|
-| **0 — RFC** | None | This file, including §4.1b | Sign-off: on-chip BLE is out; Nano UART is the plan |
+| **0 — RFC** | None | This file, including §4.1b. **I19 before locking §5.3 / §6** | Sign-off: on-chip BLE is out; Nano UART is the coprocessor; **phone path chosen** (GATT or I19 web, or both) |
 | **1a — Same-chip NimBLE** | B15 CTS probe | — | **Closed, failed** (§4.1b) |
 | **1 — UART + Nano BLE** | Separate `esp32c6` project: NimBLE + Grove UART. ADV: queue + UART TX, not `main.cpp` policy | iOS: scan Nano, pair, decode feed | QMX CAT/`TA` unchanged with Nano powered; decode lines on the phone; ADV **DM L** stays in the QMX-only ballpark |
 | **2 — Log Sync** | `LOG_META` + blocks over UART then BLE | iOS: `.adi` pull | No slot stall; FATFS worker |
@@ -237,7 +253,7 @@ I3 stays **Ideas** until sequenced. Do not start Nano/ADV UART firmware until th
 | **NimBLE vs CDC-ACM on ADV** | Do not run NimBLE on the ADV with QMX up. Nano owns BLE. |
 | **Treating 94 KB DIRAM remain as BLE headroom** | §4.2 / §4.1b |
 | **UART in the decode task** | Queue; low-priority drain |
-| **Nano 4 MB + Wi-Fi/OTA** | BLE-only image first; measure before dual-OTA |
+| **Nano 4 MB + Wi-Fi/OTA** | BLE-only if GATT; I19 must **measure** Wi-Fi+lwIP+UI before lock |
 | **Nano ceramic antenna** | Face out of the sled; AtomS3 Lite fallback |
 | **G13/G15 vs LoRa GNSS** | Document; don’t enable both |
 | **5VOUT vs Nano USB-C** | One 5 V source |
@@ -250,6 +266,6 @@ I3 stays **Ideas** until sequenced. Do not start Nano/ADV UART firmware until th
 ## 9. Ask of the Mini-FT8 Maintainers
 
 1. Accept §4.1b: on-chip companion BLE is **rejected** on ADV+QMX.
-2. Accept §5: first hardware is **ADV + NanoC6** over EXT UART. I3 stays Ideas until sequenced.
+2. Accept §5 hardware: **ADV + NanoC6** over EXT UART. Phone path (**GATT vs I19 web**) is **not** signed off until I19 is tried or dropped. I3 stays Ideas until sequenced.
 3. Do not merge ADV NimBLE-on-while-QMX. B15 one-shot CTS is a separate product decision (ROADMAP).
 4. Field later (when I3 is Now): Nano powered, QMX streaming, ADV **DM L** and CAT/`TA` match Nano-off.

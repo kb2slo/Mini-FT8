@@ -11,7 +11,7 @@ Human- and tool-readable project memory. Prefer this tree over editor-specific r
 | [AUTOSEQ_INACTIVE_QUEUE.md](AUTOSEQ_INACTIVE_QUEUE.md) | Retry exhaustion / reincarnation / inactive zone. |
 | [RTC_COMPENSATION.md](RTC_COMPENSATION.md) | Clock compensation. |
 | [FT8 Free-Text Reference Extension.md](FT8%20Free-Text%20Reference%20Extension.md) | Free-text / SOTA-style payload notes. |
-| `rfcs/` | Long specs. Extract/style/boundaries: [0002](rfcs/0002-extract-and-boundaries.md). BLE companion: [0001](rfcs/0001-ble-companion.md) (on-chip NimBLE failed the DMA gate; UART + NanoC6). [0003](rfcs/0003-m32-pocket-port-and-ble-time.md) **rejected** (Pocket+CTS bundle). B15 CTS is ROADMAP; I17 is Ideas (own RFC if sequenced). Roadmap only links them. |
+| `rfcs/` | Long specs. Extract/style/boundaries: [0002](rfcs/0002-extract-and-boundaries.md). Companion: [0001](rfcs/0001-ble-companion.md) (on-chip NimBLE failed the DMA gate; UART + NanoC6; **phone path not locked**, see I19). [0003](rfcs/0003-m32-pocket-port-and-ble-time.md) **rejected** (Pocket+CTS bundle). B15 CTS is ROADMAP; I17 is Ideas (own RFC if sequenced). Roadmap only links them. |
 
 Git history is the changelog. Do not keep a narrative log in these files.
 
