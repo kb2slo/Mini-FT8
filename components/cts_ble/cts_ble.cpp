@@ -29,6 +29,7 @@ extern "C" void ble_store_config_init(void);
 
 static const ble_uuid16_t k_cts_svc = BLE_UUID16_INIT(0x1805);
 static const ble_uuid16_t k_cts_chr = BLE_UUID16_INIT(0x2A2B);
+static const ble_uuid16_t k_cts_lti = BLE_UUID16_INIT(0x2A0F);
 
 static CtsBleState s_state = CtsBleState::Idle;
 static char s_name[20];
@@ -37,9 +38,12 @@ static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t s_svc_start;
 static uint16_t s_svc_end;
 static uint16_t s_chr_val;
+static uint16_t s_lti_val;
 static bool s_have_svc;
 static bool s_have_chr;
+static bool s_have_lti;
 static bool s_have_result;
+static std::uint8_t s_ct_buf[kCtsCurrentTimeSize];
 static bool s_ui_dirty;
 static bool s_stop_host;
 static bool s_host_up;
@@ -75,6 +79,63 @@ static void fail_now(const char* why)
     request_stop();
 }
 
+static int on_read_lti(uint16_t conn, const struct ble_gatt_error* error, struct ble_gatt_attr* attr,
+                       void* /*arg*/)
+{
+    if (error == nullptr || error->status != 0 || attr == nullptr || attr->om == nullptr) {
+        fail_now("LTI read");
+        return 0;
+    }
+
+    std::uint8_t buf[kCtsLocalTimeInfoSize];
+    if (os_mbuf_copydata(attr->om, 0, kCtsLocalTimeInfoSize, buf) != 0) {
+        fail_now("Short LTI");
+        return 0;
+    }
+    CtsLocalTimeInfo lti;
+    CtsCurrentTime local;
+    if (!cts_parse_local_time_information(buf, kCtsLocalTimeInfoSize, &lti) ||
+        !cts_parse_current_time(s_ct_buf, kCtsCurrentTimeSize, &local) ||
+        !cts_local_to_utc_timeval(local, lti, &s_tv)) {
+        fail_now("Bad LTI");
+        return 0;
+    }
+
+    s_have_result = true;
+    set_state(CtsBleState::Success, "Time OK");
+    ESP_LOGI(TAG, "CTS UTC epoch=%ld tz=%d dst_s=%d", (long)s_tv.tv_sec, lti.timezone_15min,
+             lti.dst_offset_seconds);
+    ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+    request_stop();
+    return 0;
+}
+
+static int on_lti_chr(uint16_t conn, const struct ble_gatt_error* error, const struct ble_gatt_chr* chr,
+                      void* /*arg*/)
+{
+    if (error != nullptr && error->status == BLE_HS_EDONE) {
+        if (!s_have_lti) {
+            fail_now("No 2A0F");
+            return 0;
+        }
+        set_state(CtsBleState::Reading, "Reading TZ...");
+        int rc = ble_gattc_read(conn, s_lti_val, on_read_lti, nullptr);
+        if (rc != 0) {
+            fail_now("LTI start");
+        }
+        return 0;
+    }
+    if (error != nullptr && error->status != 0) {
+        fail_now("LTI disc");
+        return 0;
+    }
+    if (chr != nullptr) {
+        s_lti_val = chr->val_handle;
+        s_have_lti = true;
+    }
+    return 0;
+}
+
 static int on_read(uint16_t conn, const struct ble_gatt_error* error, struct ble_gatt_attr* attr,
                    void* /*arg*/)
 {
@@ -83,21 +144,24 @@ static int on_read(uint16_t conn, const struct ble_gatt_error* error, struct ble
         return 0;
     }
 
-    std::uint8_t buf[kCtsCurrentTimeSize];
-    if (os_mbuf_copydata(attr->om, 0, kCtsCurrentTimeSize, buf) != 0) {
+    if (os_mbuf_copydata(attr->om, 0, kCtsCurrentTimeSize, s_ct_buf) != 0) {
         fail_now("Short CTS");
         return 0;
     }
-    if (!cts_parse_current_time_to_timeval(buf, kCtsCurrentTimeSize, &s_tv)) {
+    CtsCurrentTime ct;
+    if (!cts_parse_current_time(s_ct_buf, kCtsCurrentTimeSize, &ct)) {
         fail_now("Bad CTS");
         return 0;
     }
+    ESP_LOGI(TAG, "CTS local %04d-%02d-%02d %02d:%02d:%02d", ct.year, ct.month, ct.day, ct.hour,
+             ct.minute, ct.second);
 
-    s_have_result = true;
-    set_state(CtsBleState::Success, "Time OK");
-    ESP_LOGI(TAG, "CTS read ok epoch=%ld usec=%ld", (long)s_tv.tv_sec, (long)s_tv.tv_usec);
-    ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
-    request_stop();
+    s_have_lti = false;
+    set_state(CtsBleState::Reading, "Reading TZ...");
+    int rc = ble_gattc_disc_chrs_by_uuid(conn, s_svc_start, s_svc_end, &k_cts_lti.u, on_lti_chr, nullptr);
+    if (rc != 0) {
+        fail_now("LTI disc");
+    }
     return 0;
 }
 
@@ -158,6 +222,7 @@ static void start_cts_disc(uint16_t conn)
 {
     s_have_svc = false;
     s_have_chr = false;
+    s_have_lti = false;
     s_cts_disc_us = 0;
     set_state(CtsBleState::Connected, "Paired");
     int rc = ble_gattc_disc_svc_by_uuid(conn, &k_cts_svc.u, on_svc, nullptr);

@@ -118,3 +118,66 @@ bool cts_parse_current_time_to_timeval(const std::uint8_t* data, std::size_t len
     }
     return cts_current_time_to_timeval(ct, tv);
 }
+
+bool cts_parse_local_time_information(const std::uint8_t* data, std::size_t len, CtsLocalTimeInfo* out)
+{
+    if (data == nullptr || out == nullptr || len != kCtsLocalTimeInfoSize) {
+        return false;
+    }
+    if (data[0] == 0x80u) {
+        return false;
+    }
+    const int timezone_15min = static_cast<int>(static_cast<std::int8_t>(data[0]));
+    if (timezone_15min < -48 || timezone_15min > 56) {
+        return false;
+    }
+
+    int dst_offset_seconds = 0;
+    switch (data[1]) {
+        case 0x00:
+            dst_offset_seconds = 0;
+            break;
+        case 0x02:
+            dst_offset_seconds = 30 * 60;
+            break;
+        case 0x04:
+            dst_offset_seconds = 60 * 60;
+            break;
+        case 0x08:
+            dst_offset_seconds = 2 * 60 * 60;
+            break;
+        default:
+            return false;
+    }
+
+    out->timezone_15min = timezone_15min;
+    out->dst_offset_seconds = dst_offset_seconds;
+    return true;
+}
+
+bool cts_local_to_utc_timeval(const CtsCurrentTime& local, const CtsLocalTimeInfo& lti, struct timeval* tv)
+{
+    if (!cts_current_time_to_timeval(local, tv)) {
+        return false;
+    }
+    // Local = UTC + (timezone × 15 min) + DST. Subtract those to seed UTC.
+    const time_t offset =
+        static_cast<time_t>(lti.timezone_15min) * 15 * 60 + static_cast<time_t>(lti.dst_offset_seconds);
+    tv->tv_sec -= offset;
+    return true;
+}
+
+bool cts_parse_phone_time_to_utc_timeval(const std::uint8_t* current_time, std::size_t current_time_len,
+                                         const std::uint8_t* local_time_info, std::size_t local_time_info_len,
+                                         struct timeval* tv)
+{
+    CtsCurrentTime local;
+    CtsLocalTimeInfo lti;
+    if (!cts_parse_current_time(current_time, current_time_len, &local)) {
+        return false;
+    }
+    if (!cts_parse_local_time_information(local_time_info, local_time_info_len, &lti)) {
+        return false;
+    }
+    return cts_local_to_utc_timeval(local, lti, tv);
+}

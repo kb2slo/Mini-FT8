@@ -94,6 +94,71 @@ int main()
     const std::uint8_t k_year0[] = {0x00, 0x00, 1, 1, 0, 0, 0, 0, 0, 0};
     expect_true(!cts_parse_current_time(k_year0, sizeof(k_year0), &ct), "year 0");
 
+    // Local Time Information 0x2A0F. Local = UTC + tz*15min + DST.
+    CtsLocalTimeInfo lti = {};
+    const std::uint8_t k_utc[] = {0, 0};
+    expect_true(cts_parse_local_time_information(k_utc, sizeof(k_utc), &lti), "LTI UTC");
+    expect_int(lti.timezone_15min, 0, "tz 0");
+    expect_int(lti.dst_offset_seconds, 0, "dst 0");
+
+    // US Eastern DST: tz=-20 (EST), DST=+1h. Local 2024-07-01 12:00 → 16:00 UTC.
+    const std::uint8_t k_noon_edt[] = {0xE8, 0x07, 7, 1, 12, 0, 0, 1, 0, 0};
+    const std::uint8_t k_est_dst[] = {static_cast<std::uint8_t>(-20), 0x04};
+    expect_true(cts_parse_phone_time_to_utc_timeval(k_noon_edt, sizeof(k_noon_edt), k_est_dst,
+                                                   sizeof(k_est_dst), &tv),
+                "EDT noon");
+    expect_long(static_cast<long>(tv.tv_sec), 1719849600L, "EDT → 16:00 UTC");
+
+    // Same offset if the phone folds DST into timezone (-16) and DST=0.
+    const std::uint8_t k_edt_folded[] = {static_cast<std::uint8_t>(-16), 0x00};
+    expect_true(cts_parse_phone_time_to_utc_timeval(k_noon_edt, sizeof(k_noon_edt), k_edt_folded,
+                                                   sizeof(k_edt_folded), &tv),
+                "EDT folded tz");
+    expect_long(static_cast<long>(tv.tv_sec), 1719849600L, "folded → 16:00 UTC");
+
+    // EST winter: local 2024-01-01 00:00, tz=-20, DST=0 → 05:00 UTC.
+    const std::uint8_t k_est[] = {static_cast<std::uint8_t>(-20), 0x00};
+    expect_true(cts_parse_phone_time_to_utc_timeval(k_new_year, sizeof(k_new_year), k_est, sizeof(k_est),
+                                                   &tv),
+                "EST midnight");
+    expect_long(static_cast<long>(tv.tv_sec), 1704085200L, "EST → 05:00 UTC");
+
+    // IST +5:30 (tz=+22). Local 05:30 2024-01-01 → 00:00 UTC.
+    const std::uint8_t k_ist_local[] = {0xE8, 0x07, 1, 1, 5, 30, 0, 1, 0, 0};
+    const std::uint8_t k_ist[] = {22, 0};
+    expect_true(cts_parse_phone_time_to_utc_timeval(k_ist_local, sizeof(k_ist_local), k_ist, sizeof(k_ist),
+                                                   &tv),
+                "IST 05:30");
+    expect_long(static_cast<long>(tv.tv_sec), 1704067200L, "IST → 00:00 UTC");
+
+    // Half-hour DST. tz=0, DST=+30 min. Local 00:30 → 00:00 UTC.
+    const std::uint8_t k_half_local[] = {0xE8, 0x07, 1, 1, 0, 30, 0, 1, 0, 0};
+    const std::uint8_t k_half_dst[] = {0, 0x02};
+    expect_true(cts_parse_phone_time_to_utc_timeval(k_half_local, sizeof(k_half_local), k_half_dst,
+                                                   sizeof(k_half_dst), &tv),
+                "half DST");
+    expect_long(static_cast<long>(tv.tv_sec), 1704067200L, "half DST → 00:00 UTC");
+
+    expect_true(cts_parse_phone_time_to_utc_timeval(k_new_year, sizeof(k_new_year), k_utc, sizeof(k_utc),
+                                                   &tv),
+                "UTC LTI");
+    expect_long(static_cast<long>(tv.tv_sec), 1704067200L, "UTC LTI unchanged");
+
+    const std::uint8_t k_tz_unknown[] = {0x80, 0};
+    expect_true(!cts_parse_local_time_information(k_tz_unknown, sizeof(k_tz_unknown), &lti), "tz unknown");
+
+    const std::uint8_t k_dst_unknown[] = {0, 0xFF};
+    expect_true(!cts_parse_local_time_information(k_dst_unknown, sizeof(k_dst_unknown), &lti),
+                "dst unknown");
+
+    const std::uint8_t k_tz_hi[] = {57, 0};
+    expect_true(!cts_parse_local_time_information(k_tz_hi, sizeof(k_tz_hi), &lti), "tz 57");
+
+    expect_true(!cts_parse_local_time_information(k_utc, 1, &lti), "LTI short");
+    expect_true(!cts_parse_phone_time_to_utc_timeval(k_new_year, sizeof(k_new_year), k_tz_unknown,
+                                                    sizeof(k_tz_unknown), &tv),
+                "phone missing tz");
+
     if (g_fails != 0) {
         fprintf(stderr, "%d FAIL(s)\n", g_fails);
         return 1;
