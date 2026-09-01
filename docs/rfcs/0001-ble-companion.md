@@ -89,7 +89,7 @@ PERF **P** screen, **DM** line, **L** = largest DMA block (KiB). Same session fa
 
 Both init orders fail. Leftover arithmetic (BLE keeps ~18K of the big block, QMX ~13K, 18+13 < 44) does **not** describe *start*: each stack wants a ~40K-class contiguous hole. QMX after BLE and BLE after QMX both lose.
 
-B15 one-shot CTS can still be “sync, tear NimBLE down, **then** radio.” That is not a companion. Contract: [ROADMAP B15](../ROADMAP.md).
+B15 one-shot CTS is “unplug QMX, sync, tear NimBLE down, **then** plug in and **S → 2**.” That is not a companion, and it is not NimBLE beside a live USB host. Parking UAC around CTS (cable stays in) is [ROADMAP B17](../ROADMAP.md), after B15; it is not this RFC. Contract: [ROADMAP B15](../ROADMAP.md).
 
 ### 4.2 What “fits” means
 
