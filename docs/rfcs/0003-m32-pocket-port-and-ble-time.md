@@ -1,12 +1,12 @@
 # RFC 0003: Morserino M32 Pocket Port & Zero-App BLE Time Sync
 
-* **Status:** Phase 0 accepted. Track A (CTS) is Now [B15](../ROADMAP.md) on ADV+QMX. Track B (Pocket) is Ideas [I17](../ROADMAP.md), **de-prioritized** until USB-host + QMX is proven on the desk (§3.1).
+* **Status:** **Rejected.** Gluing M32 Pocket port and BLE CTS into one RFC was the wrong vehicle. Do not implement Pocket firmware or treat this file as the B15 spec.
 * **Author / Lead:** Jeff Kalikstein, KB2SLO
 * **Path:** `docs/rfcs/0003-m32-pocket-port-and-ble-time.md`
-* **Hardware in scope:** Cardputer ADV (QMX UAC+CAT native USB-C host). M32 Pocket is a second target **if** §3.1 passes. One-shot BLE CTS is ADV first; Pocket CTS only after I17 USB host works.
-* **Does not cover:** RFC 0001 companion GATT / iOS app (I3), clock-obvious UX (I15), sleep-RTC compensation (`RTC_COMPENSATION.md`)
+* **What stays:** [I17](../ROADMAP.md) (Pocket as a Mini-FT8 *host*) remains Ideas. Own RFC when sequenced. [B15](../ROADMAP.md) one-shot CTS stays Now; contract is the ROADMAP Done-when (plus [RFC 0001](0001-ble-companion.md) §4 RAM table), not this document.
+* **What this file is now:** Historical notes. §3.1 USB-C UFP/sink facts may inform I17. §4 iPhone CTS flow is the field recipe B15 already uses. Neither is an accepted RFC.
 
-Chat is intake; `docs/ROADMAP.md` is truth. Do not start I17 firmware while it is de-prioritized. No new logic in `main.cpp` ([STYLE.md](../STYLE.md), [RFC 0002](0002-extract-and-boundaries.md)).
+Chat is intake; `docs/ROADMAP.md` is truth. No new logic in `main.cpp` ([STYLE.md](../STYLE.md), [RFC 0002](0002-extract-and-boundaries.md)).
 
 ---
 
