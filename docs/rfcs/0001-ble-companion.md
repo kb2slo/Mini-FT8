@@ -1,10 +1,11 @@
 # RFC 0001: Optional BLE Companion (Add-on, Not a Second Radio UI)
 
-* **Status:** Draft RFC (Phase 0 Review)
+* **Status:** Draft RFC (Phase 0). **Same-chip NimBLE on ADV+QMX failed** the §4 DMA gate (2026-08-31). Companion BLE moves **off-chip**.
 * **Author / Lead:** Jeff Kalikstein, KB2SLO
 * **Target File Path:** `docs/rfcs/0001-ble-companion.md`
 * **Companion Target:** iPhone first (Android later once the iOS GATT surface is stabilized)
-* **Ask:** Review and merge this RFC document to establish consensus on safety constraints, GATT design, RAM gates, and non-goals before Phase 1 firmware code PRs are submitted.
+* **Radio:** Cardputer ADV + QMX (USB host). First BLE brick: **M5Stack NanoC6** on ADV UART. Distinct from one-shot CTS on the ADV ([B15](../ROADMAP.md)).
+* **Ask:** Keep this document as the companion plan. Do not land NimBLE-on-ADV for a live QMX session.
 
 ---
 
@@ -14,7 +15,7 @@ The Cardputer ADV is the right place to decode, autoseq, CAT, and TX. A phone is
 
 While USB Drive mode (`C`) moves `.adi` log files to a computer, it is awkward on iOS via Apple Files. Operators in the field frequently have cellular connectivity on their phone but no laptop. A low-overhead BLE link that operates without a Wi-Fi Access Point allows the phone to pull logs and monitor live decodes while Mini-FT8 continues running uninterrupted.
 
-KB2SLO will lead the firmware GATT implementation and the iOS application in the open against this specification.
+**How BLE attaches:** the ADV does **not** run NimBLE while the QMX is up. A second MCU (NanoC6) owns BLE. The ADV talks TTL UART. The phone talks GATT to the Nano. KB2SLO will lead the UART framing, the Nano firmware, and the iOS application in the open against this specification.
 
 ---
 
@@ -23,14 +24,18 @@ KB2SLO will lead the firmware GATT implementation and the iOS application in the
 This project is **not** a revival of the V2.0.x BLE Terminal / native-client stack.
 
 We will **not**:
+* Run NimBLE on the ADV at the same time as QMX UAC/CDC (field-failed; §4.1b)
 * Mirror or replace `R` / `T` / `S` screens or menus on the phone
 * Stream the waterfall over BLE
 * Expose JSON RPC endpoints for core commands
-* Require Wi-Fi, a hotspot, or AP mode on either device
-* Make BLE mandatory at boot
-* Block QMX USB-host CAT (the precise failure mode that forced the previous BLE removal)
-* Turn on SPIRAM / PSRAM to “make room” for NimBLE. USB CDC and UAC need **internal DMA-capable** RAM. External RAM does not fix the V2.0.4 failure mode.
-* Ship `ENABLE_BLE` on in official `dev` / tagged binaries until §4 gates pass on QMX + FT8 hardware.
+* Require Wi-Fi, a hotspot, or AP mode on the ADV
+* Make BLE or the Nano mandatory at boot
+* Block QMX USB-host CAT
+* Turn on SPIRAM / PSRAM on the ADV to “make room” for NimBLE. USB CDC and UAC need **internal DMA-capable** RAM. External RAM does not fix the V2.0.4 / 2026-08-31 failure mode.
+* Ship on-chip `ENABLE_BLE` in official `dev` / tagged binaries
+* Treat two ATOMs/Nanos (no USB-host brain) as a QMX radio
+* Use a Morserino-32 or M32 Pocket as the BLE coprocessor (classic 4-pin header or Pocket USB). Leave those boxes as CW. I17 (Pocket as a Mini-FT8 *host*) is Ideas, not this path.
+* Use IR or the headphone jack as the companion pipe
 
 The Cardputer remains the single source of truth and operation. The phone acts strictly as a **spectator and librarian**.
 
@@ -55,7 +60,7 @@ The leftover internal RAM after linking is **not** a BLE allowance sitting next 
 
 ## 4. Internal RAM Budget and Measurement-Driven Development
 
-Flash is not the constraint. Internal DIRAM is. PSRAM is off (`CONFIG_SPIRAM` unset) on purpose for this product.
+Flash is not the constraint on the ADV. Internal DIRAM is. PSRAM is off (`CONFIG_SPIRAM` unset) on purpose for this product.
 
 ### 4.1 Snapshot (BLE off, 2026-08-19)
 
@@ -70,73 +75,105 @@ DIRAM mix: BSS ~160 KB, IRAM-resident `.text` ~70 KB, `.data` ~17 KB.
 
 That **94 KB remain is heap at link time**. Runtime takes stacks and buffers from it (`app_core0` 12 KB, USB/UAC tasks, waterfall blit ~8.6 KB, audio pipeline, copy-to-SD worker 12 KB while a copy runs, and any future Station-save worker). A live QMX session is therefore well below 94 KB free. PERF (`8B` / `IN` / `DM`) and `log_mem_caps` are the live view; `DECODE_HEAP` (roadmap B8) is a noisy decode-time probe, not a CI substitute.
 
-Refresh this snapshot in the Phase 1 PR if the radio/USB/decode stack has moved. Stale remain figures are worse than none.
+### 4.1b Field DMA (2026-08-31, ADV + QMX, CTS NimBLE-in-binary)
+
+PERF **P** screen, **DM** line, **L** = largest DMA block (KiB). Same session family as B15 CTS on `b15-cts-iphone` (NimBLE linked; not an `ENABLE_BLE` off build). Full `MEM:` byte logs were not captured (QMX owned USB-C).
+
+| Checkpoint | DM **L** | Result |
+|---|---:|---|
+| Boot, no **S**, no **H** | 44K | Floor |
+| **H → 1** only (BLE up, no QMX) | 26K | Advertised |
+| **S → 2** only (QMX UAC, no BLE start) | 31K | Radio OK |
+| **S → 2**, then **H → 1** | ~29K | **`Init fail`** (`nimble_port_init`) |
+| **H → 1**, then **S → 2** | 2K | **CAT dead** |
+
+Both init orders fail. Leftover arithmetic (BLE keeps ~18K of the big block, QMX ~13K, 18+13 < 44) does **not** describe *start*: each stack wants a ~40K-class contiguous hole. QMX after BLE and BLE after QMX both lose.
+
+B15 one-shot CTS can still be “sync, tear NimBLE down, **then** radio.” That is not a companion. Contract: [ROADMAP B15](../ROADMAP.md).
 
 ### 4.2 What “fits” means
 
 | Claim | Verdict |
 |---|---|
-| Spectator GATT, compile-time off, runtime off, USB/CDC **before** NimBLE | Architecturally compatible with this budget |
-| Old ~50 KB continuous NimBLE (second UI) on a live QMX session | Does **not** fit. Would cut link remain to ~44 KB before radio tasks and DMA buffers |
-| Spectator NimBLE in the **20–30 KB** static+heap range | Plausible; **must be measured**, not assumed |
-| Companion ON in the default release binary | Not until §4.4 gates pass |
+| NimBLE on the ADV while QMX UAC/CDC is up | **Does not fit.** §4.1b |
+| Old ~50 KB continuous NimBLE (second UI) on a live QMX session | Does **not** fit |
+| Spectator NimBLE 20–30 KB on the same S3 as QMX | **Rejected** after measurement |
+| Wi-Fi + lwIP on the ADV to replace BLE | Worse internal RAM, not better |
+| USB hub on ADV (`CONFIG_USB_HOST_HUBS_SUPPORTED` is off) | More host DMA; not enabled |
+| Another ESP32-S3 / PSRAM board | Same ~512 KB **internal** SRAM; USB still needs DIRAM |
+| CoreS3 OTG + proto + ATOM | Same UART architecture; new UI + unproven QMX host. Later, not the first brick |
+| UART to a second MCU; that MCU runs NimBLE | **The path.** First brick: NanoC6. ADV heap stays the QMX heap |
+| Morserino / M32 Pocket as that second MCU | **Rejected.** Not a companion brick. |
 
-The number that killed QMX TX was not DIRAM remain. It was **no contiguous DMA block left for CDC**. Link-time DIRAM remain is necessary and insufficient.
+The number that killed QMX TX was not DIRAM remain. It was **no contiguous DMA block left for CDC**.
 
-### 4.3 Metrics (record all four, every BLE firmware PR)
+### 4.3 Metrics (ADV, if anyone re-opens on-chip BLE)
 
 | Metric | How | What it tells |
 |---|---|---|
-| DIRAM used / remain | `python $IDF_PATH/tools/idf_size.py build/mini_ft8.map` | Static cost of `#ifdef ENABLE_BLE` |
-| 8-bit / internal free | `heap_caps_get_free_size(MALLOC_CAP_8BIT)` / `MALLOC_CAP_INTERNAL` (PERF + `log_mem_caps`) | Runtime heap after tasks |
-| **Largest DMA block** | `heap_caps_get_largest_free_block(MALLOC_CAP_DMA)` | The QMX-safe figure. CDC/UAC need a contiguous internal block, not just free-byte totals |
-| 8-bit minimum ever | `heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)` after a real session | Fragmentation and decode peaks |
+| DIRAM used / remain | `python $IDF_PATH/tools/idf_size.py build/mini_ft8.map` | Static cost of NimBLE in the ADV binary |
+| 8-bit / internal free | PERF + `log_mem_caps` | Runtime heap after tasks |
+| **Largest DMA block** | PERF **DM** **L**, or `heap_caps_get_largest_free_block(MALLOC_CAP_DMA)` | The QMX-safe figure |
+| 8-bit minimum ever | `heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)` | Fragmentation and decode peaks |
 
-**Field capture (cannot fake in CI):** QMX+ on USB-C, UAC streaming, FT8, Companion in the state under test. Same radio, same firmware family. Note FT8 vs FT4.
+**Field capture (cannot fake in CI):** QMX+ on USB-C, UAC streaming, FT8. Do not treat “heap free still looks like tens of KB” as a pass if **largest DMA** collapsed.
 
-Do not treat “heap free still looks like tens of KB” as a pass if **largest DMA** collapsed.
+### 4.4 On-chip loop (closed)
 
-### 4.4 Development loop (Phase 1 is this loop, not a NimBLE dump)
+§4.4 steps 1–7 were the original Phase 1 (CDC first, then NimBLE, soak, linker floor). B15 CTS ran the init-order probe on a NimBLE-in-binary build. **Stop.** Do not enable PSRAM. Do not trim NimBLE on the ADV hoping 31K **L** becomes enough to *start* and still leave CDC a block.
 
-Each step is a PR (or a clearly labeled commit series) with a **before/after table** in the PR body. If the table is missing, the PR is not reviewable.
-
-1. **Baseline (BLE still off).** `idf.py size` DIRAM row. On ADV + QMX: UAC up, then `log_mem_caps` (or PERF) **after streaming starts**, after one decode slot, after one TX. This sets the QMX-safe DMA-block floor. Write the numbers into this §4.1 snapshot or the PR; do not keep them only in chat.
-2. **Zero-cost guard.** `#ifdef ENABLE_BLE` plumbing that does **not** compile NimBLE in the default `sdkconfig`. Confirm DIRAM remain matches baseline (delta ~0).
-3. **Static cost cap.** A build with `ENABLE_BLE=y` and runtime still **OFF**. DIRAM remain vs the same SHA with `ENABLE_BLE` unset. **Stop** if the static DIRAM delta is still in the old ~50 KB second-UI class. Spectator target: well under that; treat **>30 KB static DIRAM delta** as a redesign trigger (trim NimBLE config, drop features, do not “just ship it”).
-4. **Init-order probe.** Runtime ON only **after** USB host + CDC allocation succeeded. Capture largest DMA **immediately before** NimBLE init, immediately after, then after a BLE connect. CAT/`TA` must still work. Any DMA-block collapse vs pre-init is a fail, even if CAT happened to work once.
-5. **Session soak.** Companion ON, phone subscribed, ~15 minutes of QMX FT8 (decode + TX). Compare min-heap and largest DMA to the BLE-off baseline from step 1. Decode count / slot timing must not regress. FATFS workers (copy-to-SD, later Station save) still allocate from this heap — do not soak only on an idle RX screen.
-6. **Linker floor.** Fail the `ENABLE_BLE=y` link if DIRAM remain drops more than the cap from step 3 vs a BLE-off map of the same tree. This catches static regressions in CI. It does **not** replace the field DMA measurement.
-7. **Release gate.** Official bins stay `ENABLE_BLE` **off** until steps 1–6 pass on QMX + FT8. Companion ON in a field `dev` build is opt-in, not default. FT4 stays BLE-off until this loop is repeated for FT4 (larger stream stack, heavier LDPC).
-
-If measurement says the spectator stack still costs ~50 KB continuous, **stop**. Do not enable PSRAM. Revisit transport (I3: BLE vs USB vs Wi‑Fi) instead of weakening the radio.
-
-### 4.5 Suggested PR table
+### 4.5 Suggested table (historical)
 
 ```
 | Checkpoint              | DIRAM remain | 8bit free | internal free | DMA largest | 8bit min |
 | BLE-off, UAC up         |              |           |               |             |          |
-| ENABLE_BLE=y, runtime OFF |            |           |               |             |          |
 | After NimBLE init       |              |           |               |             |          |
 | Connected, 15 min QMX   |              |           |               |             |          |
 ```
 
-Include the git SHA, `ENABLE_FT4`, and whether QMX was streaming.
+§4.1b is the filled-in field answer (PERF **L** only).
 
 ---
 
 ## 5. Proposed Firmware Architecture
 
-### 5.1 Build Safety & Zero Impact
-* **Zero-Invasive Guard:** The entire feature is wrapped in `#ifdef ENABLE_BLE`. When disabled (default for official release binaries), zero DRAM or flash overhead is introduced.
-* **Compile-Time Controls:** `ENABLE_BLE` defaults to **off** until §4 gates pass on QMX + FT8 hardware.
-* **Runtime Default:** Disabled at runtime until explicitly toggled in the menu (`Companion: ON`).
-* **Strict Init Sequence:** USB host + CAT CDC initializes **first**. NimBLE starts *only* after CDC allocation succeeds (or after a defined timeout when no USB radio is attached, e.g., KH1-MIC).
-* **FT4 Memory Guard:** NimBLE will not start in FT4 mode unless §4 is re-run on FT4 and proven safe.
-* **Linker DRAM Floor:** `ENABLE_BLE=y` builds fail the link if DIRAM remain regresses beyond the cap in §4.4 step 6.
+### 5.1 Split: ADV + NanoC6
 
-### 5.2 GATT Specification (Minimalist Surface)
+| Piece | Role |
+|---|---|
+| **ADV** | Mini-FT8, QMX USB host, decode, CAT, UI. **No NimBLE** for companion. UART TX of decode/log bytes from a low-priority task (never the DSP task). |
+| **NanoC6** | NimBLE: iPhone CTS client and/or companion GATT server (§5.3). USB-C CDC for desk flash and optional ADV-log bridge. |
 
-One minimalist service with notify and pull semantics. No remote execution capabilities:
+**First brick:** [M5Stack NanoC6](https://docs.m5stack.com/en/core/M5NanoC6) (SKU C125). ESP32-C6FH4, 4 MB flash, Grove, USB-C CDC, ~24×12×9.5 mm. BLE-only IDF (no Wi-Fi/Thread/Matter on that image) is expected to fit; C6 BLE controller is not in ROM so the binary is fatter than the same sketch on S3. Dual-OTA + Wi-Fi on 4 MB is a later measurement, not a promise.
+
+**Dev:** ESP-IDF 5.5.x, `idf.py set-target esp32c6`, **separate project** (not this tree’s ADV target). Hold **GPIO9**, then plug USB-C. Arduino + M5Unified is acceptable for bring-up.
+
+**UART is enough:** compact `CALL,GRID,SNR,DT,FREQ` lines are kilobits per 15 s slot. 115200 baud is plenty. Do not `uart_write` from the decode task. Software credits if a fat `.adi` dump can overrun the Nano RX buffer (four wires, no RTS/CTS unless more EXT pins are stolen).
+
+**I4 / `core_api`:** still a facade. A real UART consumer is part of sequencing I3, not a hand-wave in `main.cpp`.
+
+### 5.2 Physical (ADV + Nano)
+
+Power: EXT **pin 6 `5VOUT`**, **pin 4 GND**. ADV power switch **ON**. Do not use pin 2 `5VIN`. Desk log-bridge: power the Nano from **its** USB-C only (do not fight `5VOUT`).
+
+Data (cross TX/RX):
+
+| ADV EXT 2.54-14P | Nano Grove |
+|---|---|
+| Pin 12 **G13** UART TX | RX (white **G1** or yellow **G2** — assign in firmware) |
+| Pin 14 **G15** UART RX | TX |
+| Pin 4 GND | Black GND |
+| Pin 6 5VOUT | Red 5V (field only) |
+
+**Conflicts:** G13/G15 are `GNSS_LoRa` UART2. PORTA Grove **G1/G2** is KH1 / Grove GPS — do not steal it if those are in use. Firmware console on **G4/G5** can be a USB–TTL (or the Nano as a byte pump) for live ADV logs while QMX owns USB-C; that is a **second** UART. One Grove on the Nano is one UART: companion **or** log bridge unless multiplexed.
+
+**Enclosure:** no official ADV+Nano dock. Remix an ADV backpack STL; 24×12 bay; keep USB-C free for QMX; do not bury the Nano ceramic antenna against the battery slab.
+
+**Not the first brick:** AtomS3 Lite (larger, stronger antenna, 8 MB — fallback if Nano range is sad). CoreS3 + proto + ATOM (slick 54 mm cube; new board + OTG proof). Module Gateway H2 (Thread RCP, not a ready BLE companion). IR (ADV and Nano are TX-only). **Rejected:** any Morserino-32 / M32 Pocket as the UART BLE box.
+
+### 5.3 GATT Specification (on the Nano)
+
+One minimalist service with notify and pull semantics. No remote execution. The ADV never exposes these characteristics.
 
 | Characteristic | Direction | Payload & Protocol Design |
 |---|---|---|
@@ -146,25 +183,24 @@ One minimalist service with notify and pull semantics. No remote execution capab
 | `LOG_DATA` | `indicate` / `notify` | Chunked log data sent in response to explicit block requests. |
 | `CTRL` | `write` | `REQ_BLOCK <n>` (fetch log chunk), `ABORT_LOG`, `CLEAR_SUBSCRIPTION`. |
 
-> **Decoupling Guarantee (Zero Jitter):**  
-> Decodes are pushed to a non-blocking FreeRTOS ring queue (`xQueueSendFromISR`, depth 10) directly from the DSP task. A low-priority NimBLE background task pops from this queue to transmit notifications. If the BLE queue fills or stutters, decodes drop silently. **The DSP/decode task never blocks or waits on BLE.**
+> **Decoupling:** Decodes go ADV decode path → non-blocking queue → UART task → Nano → BLE notify. If the iPhone stutters, the Nano absorbs it. **The DSP/decode task never blocks on UART or BLE.**
 
-> **Resilient Log Sync State Machine:**  
-> Log transfers use a stateless offset request model (`REQ_BLOCK <n>`). If an active transfer is interrupted by a TX cycle, menu change, or temporary link drop, the phone simply re-requests missing blocks when idle. Log transfers run on a low-priority thread and yield immediately whenever firmware owns FATFS.
+> **Log sync:** Stateless `REQ_BLOCK <n>`. Phone re-requests after a drop. ADV FATFS stays on a worker; yield when TX or USB Drive owns storage.
 
----
+CTS time on the Nano (read iPhone `0x2A2B`, print epoch on UART, ADV `settimeofday`) can share this brick. That does **not** replace B15 one-shot NimBLE on the ADV unless B15 is dropped.
 
-### 5.3 Operator UX on the Cardputer
-* **MENU Option:** `Companion: OFF / ON`
-* **Device Name:** `Mini-FT8-<call>`
-* **Status Line Indicator:** A subtle `BLE` text/icon appears on screen when a phone is subscribed (informational only).
-* **Stack Isolation:** Enabling Companion while QMX is streaming must never reset or re-initialize the USB host stack.
+### 5.4 Operator UX on the Cardputer
+
+* Companion / Nano link **OFF / ON** (menu or BT screen). Default off.
+* ADV advertising name is irrelevant; the **Nano** advertises (name TBD, e.g. `Mini-FT8-<call>`).
+* Status: Nano present / phone subscribed. Informational only.
+* Enabling the UART link must never reset USB host.
 
 ---
 
 ## 6. Companion App Scope (iOS First)
 
-The phone application provides **value-add helpers**, not radio controls:
+The phone application provides **value-add helpers**, not radio controls. It connects to the **Nano**, not to the ADV.
 
 1. **Live Decode Snoop:** Real-time stream of calls and grids decoded by Mini-FT8.
 2. **Callsign Helpers:** Prefix-to-region lookup; single tap to open QRZ.com.
@@ -179,17 +215,18 @@ The phone application provides **value-add helpers**, not radio controls:
 
 ## 7. Phased Implementation Strategy
 
-| Phase | Firmware Deliverables | App / RFC Deliverables | Exit Criteria |
+I3 stays **Ideas** until sequenced. Do not start Nano/ADV UART firmware until the roadmap says so.
+
+| Phase | Firmware | App / RFC | Exit |
 |---|---|---|---|
-| **0 — RFC Merge** | None (Documentation only) | This file | Sign-off on non-goals, init order, GATT bounds, and **§4 RAM loop** |
-| **1 — Safe BLE Core** | Post-CDC NimBLE init, `#ifdef` guards, linker DIRAM cap, queue-decoupled `DECODE` notify | iOS: Scanner, pairing, decode feed | §4.4 steps 1–6 table in the PR; QMX CAT works; no decode-drop regression vs BLE-off; largest DMA holds vs pre-NimBLE |
-| **2 — Log Sync** | `LOG_META` + block-based `.adi` chunking | iOS: One-button `.adi` pull to Files | Log transfers do not interrupt TX/RX or stall FATFS; repeat §4.3 capture during an active pull |
-| **3 — Auxiliary Helpers** | Unchanged | iOS: QRZ, grid math, MapKit, PSK Reporter | Operational field tool for POTA/QRP |
-| **4 — Platform Expansion** | Android client; re-run §4 on FT4 | Android GATT integration | Independent evaluation; FT4 BLE still off unless the FT4 table passes |
+| **0 — RFC** | None | This file, including §4.1b | Sign-off: on-chip BLE is out; Nano UART is the plan |
+| **1a — Same-chip NimBLE** | B15 CTS probe | — | **Closed, failed** (§4.1b) |
+| **1 — UART + Nano BLE** | Separate `esp32c6` project: NimBLE + Grove UART. ADV: queue + UART TX, not `main.cpp` policy | iOS: scan Nano, pair, decode feed | QMX CAT/`TA` unchanged with Nano powered; decode lines on the phone; ADV **DM L** stays in the QMX-only ballpark |
+| **2 — Log Sync** | `LOG_META` + blocks over UART then BLE | iOS: `.adi` pull | No slot stall; FATFS worker |
+| **3 — Helpers** | Unchanged | QRZ, grid, MapKit, PSK Reporter | Field tool |
+| **4 — Android / other bricks** | Same GATT on Nano | Android | Optional AtomS3 Lite if Nano RF is weak |
 
-*KB2SLO owns Phases 0–3. All development will occur transparently via public GitHub PRs and forks.*
-
-Phase 1 is not “land NimBLE then see.” It is the measurement loop in §4.4. A Phase 1 PR without the RAM table is incomplete.
+*KB2SLO owns this. Public GitHub. Nano firmware is not an ADV `idf.py` target.*
 
 ---
 
@@ -197,22 +234,22 @@ Phase 1 is not “land NimBLE then see.” It is the measurement loop in §4.4. 
 
 | Risk | Mitigation |
 |---|---|
-| **NimBLE vs CDC-ACM (QMX TX failure)** | CDC init **before** NimBLE; runtime default `OFF`; official bins `ENABLE_BLE` off; §4 DMA-block capture; linker DIRAM cap |
-| **Treating 94 KB DIRAM remain as BLE headroom** | §4.2: that remain **is** the QMX heap. Budget NimBLE against DMA largest-block, not against link remain alone |
-| **Static NimBLE still ~50 KB** | §4.4 step 3 stop-ship at >30 KB DIRAM delta; redesign or drop; do not enable PSRAM |
-| **FT4 RAM starvation** | BLE disabled for FT4 until §4 is repeated on FT4 |
-| **DSP / Decode task jitter** | Non-blocking FreeRTOS ISR queue decoupling. Queue overflows drop notifications silently, preserving real-time execution |
-| **FATFS / Storage conflicts** | Log transfers abort/block if storage is claimed by USB Drive (`C`) or a copy/save worker |
-| **Interrupted ADIF transfer** | Stateless `REQ_BLOCK n` resume |
-| **Heap competition (copy-to-SD / Station save)** | Soak with those paths in mind; they take stacks from the same 94 KB-derived heap |
-| **Battery / thermal overhead** | Advertising stops on connection; RF TX power low (+0 dBm) |
-| **Scope creep ("Phone as Radio")** | Non-goals; zero CAT/QSY/TX control characteristics |
+| **NimBLE vs CDC-ACM on ADV** | Do not run NimBLE on the ADV with QMX up. Nano owns BLE. |
+| **Treating 94 KB DIRAM remain as BLE headroom** | §4.2 / §4.1b |
+| **UART in the decode task** | Queue; low-priority drain |
+| **Nano 4 MB + Wi-Fi/OTA** | BLE-only image first; measure before dual-OTA |
+| **Nano ceramic antenna** | Face out of the sled; AtomS3 Lite fallback |
+| **G13/G15 vs LoRa GNSS** | Document; don’t enable both |
+| **5VOUT vs Nano USB-C** | One 5 V source |
+| **FATFS / USB Drive** | Same as before: abort log pull |
+| **Scope creep ("Phone as Radio")** | Non-goals; zero CAT/QSY/TX on GATT |
+| **DSP jitter** | Nano absorbs BLE; ADV does not wait |
 
 ---
 
 ## 9. Ask of the Mini-FT8 Maintainers
 
-1. **Review and Merge Phase 0 (This RFC):** Accept this document to establish consensus on scope, safety bounds, RAM gates, and development order.
-2. **Inline Feedback:** Use GitHub PR comments for GATT payloads, queue depth, init order, or the §4 caps **before** firmware code is written.
-3. **Phase 1 only with a RAM table:** An `#ifdef ENABLE_BLE` PR is acceptable to *start* the loop. It is not acceptable to merge NimBLE-on behavior without §4.4 numbers. Runtime stays `OFF`; official binaries stay `ENABLE_BLE` off until the gates pass.
-4. **Field Validation:** ADV + QMX+, UAC streaming. CAT/`TA` and decode performance vs BLE-off. Largest DMA block is a first-class pass/fail, not a footnote.
+1. Accept §4.1b: on-chip companion BLE is **rejected** on ADV+QMX.
+2. Accept §5: first hardware is **ADV + NanoC6** over EXT UART. I3 stays Ideas until sequenced.
+3. Do not merge ADV NimBLE-on-while-QMX. B15 one-shot CTS is a separate product decision (ROADMAP).
+4. Field later (when I3 is Now): Nano powered, QMX streaming, ADV **DM L** and CAT/`TA` match Nano-off.
