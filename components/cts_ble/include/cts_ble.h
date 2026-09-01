@@ -20,5 +20,6 @@ void cts_ble_abort(void);
 void cts_ble_poll(void);
 CtsBleState cts_ble_state(void);
 const char* cts_ble_menu_item(void);
+bool cts_ble_host_up(void);
 bool cts_ble_take_result(struct timeval* tv);
 bool cts_ble_ui_dirty(void);

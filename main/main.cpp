@@ -3826,7 +3826,14 @@ static void draw_bt_view(bool force_redraw) {
   std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
   lines.push_back(name);
   lines.push_back("Time only, no grid");
-  lines.push_back("Keep in My Devices");
+  {
+    char lbuf[24];
+    const unsigned l_k =
+        (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_DMA) / 1024);
+    const unsigned f_k = (unsigned)(heap_caps_get_free_size(MALLOC_CAP_DMA) / 1024);
+    std::snprintf(lbuf, sizeof(lbuf), "L=%uK F=%uK", l_k, f_k);
+    lines.push_back(lbuf);
+  }
 
   const int line_h = 19;
   const int start_y = UI_START_Y;

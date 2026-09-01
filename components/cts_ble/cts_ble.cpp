@@ -2,8 +2,12 @@
 
 #include <cstring>
 
+#include "esp_bt.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
 #include "host/ble_hs.h"
@@ -44,6 +48,8 @@ static int64_t s_deadline_us;
 static int64_t s_cts_disc_us;
 static uint16_t s_disc_conn;
 static uint8_t s_own_addr_type;
+static SemaphoreHandle_t s_host_exited;
+static bool s_mem_released;
 
 static void set_state(CtsBleState st, const char* menu)
 {
@@ -91,6 +97,7 @@ static int on_read(uint16_t conn, const struct ble_gatt_error* error, struct ble
     set_state(CtsBleState::Success, "Time OK");
     ESP_LOGI(TAG, "CTS read ok epoch=%ld usec=%ld", (long)s_tv.tv_sec, (long)s_tv.tv_usec);
     ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+    request_stop();
     return 0;
 }
 
@@ -194,8 +201,8 @@ static int gap_event(struct ble_gap_event* event, void* /*arg*/)
             ESP_LOGW(TAG, "disconnect reason=%d", event->disconnect.reason);
             s_conn = BLE_HS_CONN_HANDLE_NONE;
             s_cts_disc_us = 0;
-            if (s_state == CtsBleState::Success || s_state == CtsBleState::Failed ||
-                s_state == CtsBleState::Stopping) {
+            if (s_have_result || s_state == CtsBleState::Success ||
+                s_state == CtsBleState::Failed || s_state == CtsBleState::Stopping) {
                 request_stop();
             } else {
                 // Settings My Devices often probes and drops. Stay up for nRF Connect.
@@ -274,7 +281,33 @@ static void host_task(void* /*param*/)
 {
     ESP_LOGI(TAG, "host task");
     nimble_port_run();
+    if (s_host_exited != nullptr) {
+        xSemaphoreGive(s_host_exited);
+    }
     nimble_port_freertos_deinit();
+}
+
+static void stop_and_release_nimble(void)
+{
+    const int rc = nimble_port_stop();
+    if (rc != 0) {
+        ESP_LOGW(TAG, "nimble_port_stop rc=%d", rc);
+        return;
+    }
+    if (s_host_exited != nullptr &&
+        xSemaphoreTake(s_host_exited, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        ESP_LOGW(TAG, "host task did not exit");
+    }
+    const esp_err_t derr = nimble_port_deinit();
+    if (derr != ESP_OK) {
+        ESP_LOGW(TAG, "nimble_port_deinit %s", esp_err_to_name(derr));
+        return;
+    }
+    const esp_err_t mret = esp_bt_mem_release(ESP_BT_MODE_BLE);
+    ESP_LOGI(TAG, "bt_mem_release %s", esp_err_to_name(mret));
+    if (mret == ESP_OK) {
+        s_mem_released = true;
+    }
 }
 
 esp_err_t cts_ble_start_iphone(const char* adv_name)
@@ -292,6 +325,10 @@ esp_err_t cts_ble_start_iphone(const char* adv_name)
             return ESP_ERR_INVALID_STATE;
     }
     if (s_host_up) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_mem_released) {
+        set_state(CtsBleState::Failed, "Reboot sync");
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -334,6 +371,18 @@ esp_err_t cts_ble_start_iphone(const char* adv_name)
     }
     ble_store_config_init();
 
+    if (s_host_exited != nullptr) {
+        vSemaphoreDelete(s_host_exited);
+        s_host_exited = nullptr;
+    }
+    s_host_exited = xSemaphoreCreateBinary();
+    if (s_host_exited == nullptr) {
+        (void)nimble_port_deinit();
+        s_host_up = false;
+        set_state(CtsBleState::Failed, "No sem");
+        return ESP_ERR_NO_MEM;
+    }
+
     nimble_port_freertos_init(host_task);
     return ESP_OK;
 }
@@ -372,22 +421,26 @@ void cts_ble_poll(void)
         }
     }
 
-    if (!s_stop_host) {
+    if (!s_stop_host || !s_host_up) {
         return;
     }
     s_stop_host = false;
     set_state(CtsBleState::Stopping, s_menu);
-    int rc = nimble_port_stop();
-    if (rc == 0) {
-        nimble_port_deinit();
-    } else {
-        ESP_LOGW(TAG, "nimble_port_stop rc=%d", rc);
-    }
+    (void)ble_gap_adv_stop();
+    stop_and_release_nimble();
     s_host_up = false;
-    if (s_state == CtsBleState::Stopping) {
-        set_state(s_have_result ? CtsBleState::Success : CtsBleState::Failed,
-                  s_have_result ? "Time OK" : s_menu);
+    s_conn = BLE_HS_CONN_HANDLE_NONE;
+    s_cts_disc_us = 0;
+    if (s_host_exited != nullptr) {
+        vSemaphoreDelete(s_host_exited);
+        s_host_exited = nullptr;
     }
+    const size_t dma_largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+    const size_t dma_free = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    ESP_LOGI(TAG, "nimble down dma_largest=%u dma_free=%u released=%d", (unsigned)dma_largest,
+             (unsigned)dma_free, static_cast<int>(s_mem_released));
+    set_state(s_have_result ? CtsBleState::Success : CtsBleState::Failed,
+              s_have_result ? "Time OK" : s_menu);
 }
 
 CtsBleState cts_ble_state(void)
@@ -412,6 +465,11 @@ const char* cts_ble_menu_item(void)
     return "Sync iPhone";
 }
 
+bool cts_ble_host_up(void)
+{
+    return s_host_up;
+}
+
 bool cts_ble_take_result(struct timeval* tv)
 {
     if (!s_have_result || tv == nullptr) {
@@ -419,9 +477,6 @@ bool cts_ble_take_result(struct timeval* tv)
     }
     *tv = s_tv;
     s_have_result = false;
-    if (s_state == CtsBleState::Success) {
-        set_state(CtsBleState::Idle, "Sync iPhone");
-    }
     return true;
 }
 
