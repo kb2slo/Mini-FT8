@@ -96,10 +96,10 @@ iOS does **not** advertise `0x1805` for an ESP32 Central to scan. Apple’s Acce
 
 **Workflow (Adafruit `BLEClientCts` / Apple dual-role; field-proven with nRF Connect):**
 
-1. **H → 1** (BT screen). Mini-FT8 **advertises as a peripheral** (`Mini-FT8-<call>`).
+1. Unplug QMX/KH1 from ADV USB-C. **H → 1** (BT screen). Mini-FT8 **advertises as a peripheral** (`Mini-FT8-<call>`).
 2. Operator opens **nRF Connect** or **LightBlue**, connects to that name, Pairs if asked. Do this on every sync, including after an ADV reboot. iOS **My Devices** may list the name; tapping it in Settings is not a Current Time session (connect then drop). Do not Forget between nRF Connect sessions if you want a faster re-pair.
 3. On that link, firmware is a **GATT client**: discover `0x1805`, read `0x2A2B`. Bonding required; iOS Pair dialog, not silent Just Works.
-4. Apply time, drop the link, tear down NimBLE, return to RX.
+4. Apply time, drop the link, tear down NimBLE. Plug the radio in, **S → 2**, return to RX. NimBLE and QMX USB host do not run in the same session.
 
 Do not Central-scan for iPhones. Do not advertise as HID to spoof Settings discovery.
 
