@@ -18,7 +18,7 @@ extern void debug_log_line_public(const std::string& msg);
 namespace {
 
 const char* kTag = "copy_to_sd";
-constexpr uint32_t kWorkerStackBytes = 12288;
+constexpr uint32_t kWorkerStackBytes = 20480;
 constexpr UBaseType_t kWorkerPriority = 3;
 
 SemaphoreHandle_t s_mu = nullptr;

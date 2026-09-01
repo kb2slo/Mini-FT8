@@ -5050,6 +5050,18 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       continue;
     }
 
+    if (copy_to_sd_dialog_active()) {
+      if (copy_to_sd_tick(rtc_now_ms())) {
+        restore_debug_uart_pins_after_sd();
+        if (ui_mode == UIMode::MENU) {
+          draw_menu_view();
+        }
+      }
+      last_key = c;
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
     rtc_tick();
     update_countdown();
     consume_cdc_initial_sync();  // auto-sync VFO on first QMX connect (every iter)
@@ -5082,18 +5094,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         !storage_writes_blocked()) {
       g_config_save_pending = false;
       save_station_data();
-    }
-
-    if (copy_to_sd_dialog_active()) {
-      if (copy_to_sd_tick(rtc_now_ms())) {
-        restore_debug_uart_pins_after_sd();
-        if (ui_mode == UIMode::MENU) {
-          draw_menu_view();
-        }
-      }
-      last_key = c;
-      vTaskDelay(pdMS_TO_TICKS(10));
-      continue;
     }
 
     // Global TX cancel (Esc/` in RX/TX/Status when not editing)

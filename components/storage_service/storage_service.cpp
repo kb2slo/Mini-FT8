@@ -68,6 +68,8 @@ bool s_station_sync_attempted;
 sdmmc_card_t* s_sd_card;
 bool s_sd_mounted;
 bool s_lora_cs_held_for_sd;
+constexpr size_t kCopyChunkBytes = 4096;
+uint8_t s_copy_chunk[kCopyChunkBytes];
 
 enum class MountTransitionResult : uint8_t {
     NONE,
@@ -232,6 +234,19 @@ bool flush_all_locked() {
     return rc == 0;
 }
 
+bool commit_temp_path(const std::string& final_path, const std::string& temp_path) {
+    if (unlink(final_path.c_str()) != 0 && errno != ENOENT) {
+        unlink(temp_path.c_str());
+        return false;
+    }
+    if (rename(temp_path.c_str(), final_path.c_str()) != 0) {
+        ESP_LOGE(TAG, "rename failed: %s -> %s", temp_path.c_str(), final_path.c_str());
+        unlink(temp_path.c_str());
+        return false;
+    }
+    return true;
+}
+
 bool write_atomic_file(const std::string& final_path,
                        const std::string& temp_path,
                        const std::string& content) {
@@ -250,16 +265,7 @@ bool write_atomic_file(const std::string& final_path,
         return false;
     }
 
-    if (unlink(final_path.c_str()) != 0 && errno != ENOENT) {
-        unlink(temp_path.c_str());
-        return false;
-    }
-    if (rename(temp_path.c_str(), final_path.c_str()) != 0) {
-        ESP_LOGE(TAG, "rename failed: %s -> %s", temp_path.c_str(), final_path.c_str());
-        unlink(temp_path.c_str());
-        return false;
-    }
-    return true;
+    return commit_temp_path(final_path, temp_path);
 }
 
 bool write_atomic_locked(const std::string& input, const std::string& content) {
@@ -417,15 +423,14 @@ CopyFileStatus copy_file_locked(const std::string& source, const std::string& de
         return copy_error(ESP_FAIL, err_no, "open-dst");
     }
 
-    uint8_t buffer[4096];
-    CopyFileStatus status;
+    CopyFileStatus status {};
     while (true) {
-        const size_t count = fread(buffer, 1, sizeof(buffer), input);
-        if (count > 0 && fwrite(buffer, 1, count, output) != count) {
+        const size_t count = fread(s_copy_chunk, 1, kCopyChunkBytes, input);
+        if (count > 0 && fwrite(s_copy_chunk, 1, count, output) != count) {
             status = copy_error(ESP_FAIL, errno, "write");
             break;
         }
-        if (count < sizeof(buffer)) {
+        if (count < kCopyChunkBytes) {
             if (ferror(input)) {
                 status = copy_error(ESP_FAIL, errno, "read");
             }
@@ -469,31 +474,18 @@ CopyFileStatus copy_file_retry_locked(const std::string& name,
     return result;
 }
 
-bool read_entire_file(const std::string& path, std::string& content, bool missing_ok) {
-    content.clear();
-    FILE* file = fopen(path.c_str(), "rb");
-    if (!file) {
-        return missing_ok && errno == ENOENT;
+CopyFileStatus merge_status_to_copy(AdifMergeStatus status) {
+    switch (status) {
+        case AdifMergeStatus::OK:
+            return CopyFileStatus {};
+        case AdifMergeStatus::PARSE_ARCHIVE:
+            return copy_error(ESP_FAIL, EINVAL, "adi-parse-sd");
+        case AdifMergeStatus::PARSE_INCOMING:
+            return copy_error(ESP_FAIL, EINVAL, "adi-parse-src");
+        case AdifMergeStatus::WRITE_FAILED:
+            return copy_error(ESP_FAIL, errno, "write");
     }
-    uint8_t buffer[4096];
-    bool ok = true;
-    while (true) {
-        const size_t count = fread(buffer, 1, sizeof(buffer), file);
-        if (count > 0) {
-            content.append(reinterpret_cast<const char*>(buffer), count);
-        }
-        if (count < sizeof(buffer)) {
-            if (ferror(file)) {
-                ok = false;
-            }
-            break;
-        }
-    }
-    fclose(file);
-    if (!ok) {
-        content.clear();
-    }
-    return ok;
+    return copy_error(ESP_FAIL, EINVAL, "adi-merge");
 }
 
 CopyFileStatus merge_adi_to_sd_locked(const std::string& name,
@@ -501,54 +493,87 @@ CopyFileStatus merge_adi_to_sd_locked(const std::string& name,
                                       const std::string& destination,
                                       const char* pass_name,
                                       int attempts) {
-    std::string incoming;
-    if (!read_entire_file(source, incoming, false)) {
+    FILE* incoming = fopen(source.c_str(), "rb");
+    if (!incoming) {
         return copy_error(ESP_FAIL, errno, "open-src");
     }
-
-    std::string archive;
-    if (!read_entire_file(destination, archive, true)) {
-        return copy_error(ESP_FAIL, errno, "open-dst");
-    }
-
-    std::string merged;
-    const AdifMergeStatus merge_status = adif_merge_export(archive, incoming, merged);
-    if (merge_status == AdifMergeStatus::PARSE_ARCHIVE) {
-        ESP_LOGE(COPY_TAG,
-                 "adi merge refused pass=%s file=%s: SD file is not parseable ADIF",
-                 pass_name, name.c_str());
-        return copy_error(ESP_FAIL, EINVAL, "adi-parse-sd");
-    }
-    if (merge_status != AdifMergeStatus::OK) {
-        ESP_LOGE(COPY_TAG,
-                 "adi merge refused pass=%s file=%s: internal file is not parseable ADIF",
-                 pass_name, name.c_str());
-        return copy_error(ESP_FAIL, EINVAL, "adi-parse-src");
+    FILE* archive = fopen(destination.c_str(), "rb");
+    if (!archive && errno != ENOENT) {
+        const int err_no = errno;
+        fclose(incoming);
+        return copy_error(ESP_FAIL, err_no, "open-dst");
     }
 
     const std::string temp_path = std::string(kSdBasePath) + "/" + make_temp_name(name);
-    ESP_LOGI(COPY_TAG,
-             "adi merge pass=%s file=%s archive_bytes=%u incoming_bytes=%u out_bytes=%u",
-             pass_name, name.c_str(),
-             static_cast<unsigned>(archive.size()),
-             static_cast<unsigned>(incoming.size()),
-             static_cast<unsigned>(merged.size()));
+    ESP_LOGI(COPY_TAG, "adi merge pass=%s file=%s stream=1", pass_name, name.c_str());
 
     CopyFileStatus result = copy_error(ESP_FAIL, 0, "not-run");
     for (int attempt = 0; attempt < attempts; ++attempt) {
-        if (write_atomic_file(destination, temp_path, merged)) {
-            result = CopyFileStatus {};
+        if (incoming && fseek(incoming, 0, SEEK_SET) != 0) {
+            result = copy_error(ESP_FAIL, errno, "rewind-src");
             break;
         }
-        result = copy_error(ESP_FAIL, errno, "write");
-        ESP_LOGW(COPY_TAG,
-                 "adi merge write failed pass=%s file=%s attempt=%d/%d errno=%d (%s)",
-                 pass_name, name.c_str(), attempt + 1, attempts,
-                 result.err_no, strerror(result.err_no));
-        if (attempt + 1 < attempts) {
-            vTaskDelay(pdMS_TO_TICKS(80));
+        if (archive && fseek(archive, 0, SEEK_SET) != 0) {
+            result = copy_error(ESP_FAIL, errno, "rewind-dst");
+            break;
         }
+
+        FILE* temp = fopen(temp_path.c_str(), "wb");
+        if (!temp) {
+            result = copy_error(ESP_FAIL, errno, "open-tmp");
+            break;
+        }
+
+        const AdifMergeStatus merge_status = adif_merge_stdio(archive, incoming, temp);
+        const bool synced = sync_file(temp);
+        const bool closed = fclose(temp) == 0;
+        if (merge_status != AdifMergeStatus::OK) {
+            unlink(temp_path.c_str());
+            result = merge_status_to_copy(merge_status);
+            if (merge_status == AdifMergeStatus::PARSE_ARCHIVE ||
+                merge_status == AdifMergeStatus::PARSE_INCOMING) {
+                ESP_LOGE(COPY_TAG,
+                         "adi merge refused pass=%s file=%s stage=%s",
+                         pass_name, name.c_str(), result.stage);
+                break;
+            }
+            ESP_LOGW(COPY_TAG,
+                     "adi merge write failed pass=%s file=%s attempt=%d/%d errno=%d (%s)",
+                     pass_name, name.c_str(), attempt + 1, attempts,
+                     result.err_no, strerror(result.err_no));
+            if (attempt + 1 < attempts) {
+                vTaskDelay(pdMS_TO_TICKS(80));
+            }
+            continue;
+        }
+        if (!synced || !closed) {
+            unlink(temp_path.c_str());
+            result = copy_error(ESP_FAIL, errno, closed ? "fsync-tmp" : "close-tmp");
+            ESP_LOGW(COPY_TAG,
+                     "adi merge write failed pass=%s file=%s attempt=%d/%d errno=%d (%s)",
+                     pass_name, name.c_str(), attempt + 1, attempts,
+                     result.err_no, strerror(result.err_no));
+            if (attempt + 1 < attempts) {
+                vTaskDelay(pdMS_TO_TICKS(80));
+            }
+            continue;
+        }
+        if (!commit_temp_path(destination, temp_path)) {
+            result = copy_error(ESP_FAIL, errno, "rename");
+            if (attempt + 1 < attempts) {
+                vTaskDelay(pdMS_TO_TICKS(80));
+                continue;
+            }
+            break;
+        }
+        result = CopyFileStatus {};
+        break;
     }
+
+    if (archive) {
+        fclose(archive);
+    }
+    fclose(incoming);
     return result;
 }
 

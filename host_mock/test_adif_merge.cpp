@@ -3,6 +3,7 @@
  * never duplicate station+call+date+time_on.
  */
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -243,6 +244,63 @@ int main() {
                   "records without eoh still parse");
     parsed = must_parse(out, "parse no-header");
     expect_true(parsed.size() == 2, "no-header two records");
+
+    {
+        AdifStream st;
+        std::vector<AdifRecord> chunked;
+        bool ok = true;
+        for (char ch : incoming) {
+            if (!adif_stream_feed(&st, &ch, 1, false, [](const AdifRecord& rec, void* ctx) {
+                    static_cast<std::vector<AdifRecord>*>(ctx)->push_back(rec);
+                    return true;
+                }, &chunked)) {
+                ok = false;
+                break;
+            }
+        }
+        ok = ok && adif_stream_feed(&st, nullptr, 0, true, [](const AdifRecord& rec, void* ctx) {
+            static_cast<std::vector<AdifRecord>*>(ctx)->push_back(rec);
+            return true;
+        }, &chunked);
+        expect_true(ok && chunked.size() == 2, "1-byte stream feed");
+    }
+
+    {
+        std::FILE* arch = std::tmpfile();
+        std::FILE* inc = std::tmpfile();
+        std::FILE* merged = std::tmpfile();
+        expect_true(arch && inc && merged, "tmpfile");
+        if (arch && inc && merged) {
+            std::fwrite(archive.data(), 1, archive.size(), arch);
+            std::fwrite(grown.data(), 1, grown.size(), inc);
+            std::rewind(arch);
+            std::rewind(inc);
+            expect_status(adif_merge_stdio(arch, inc, merged), AdifMergeStatus::OK,
+                          "stdio merge");
+            std::rewind(merged);
+            std::string streamed;
+            char buf[256];
+            size_t n = 0;
+            while ((n = std::fread(buf, 1, sizeof(buf), merged)) > 0) {
+                streamed.append(buf, n);
+            }
+            std::string in_memory;
+            expect_status(adif_merge_export(archive, grown, in_memory), AdifMergeStatus::OK,
+                          "memory merge for stdio compare");
+            expect_true(streamed == in_memory, "stdio merge matches memory merge");
+            parsed = must_parse(streamed, "parse stdio merge");
+            expect_true(parsed.size() == 3, "stdio union has three");
+        }
+        if (arch) {
+            std::fclose(arch);
+        }
+        if (inc) {
+            std::fclose(inc);
+        }
+        if (merged) {
+            std::fclose(merged);
+        }
+    }
 
     {
         AdifLoggerDedupe d;
