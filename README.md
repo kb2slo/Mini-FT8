@@ -41,11 +41,13 @@ A `0x0` flash of the merged image replaces Launcher. Daily iterate with `python 
 
 **USB Drive (`C`):** expose internal FATFS as a USB disk. Best on Mac or PC; iPhone Files is unreliable. Unplug the radio from USB-C first if you were using QMX/KH1-USBC; the same port cannot be USB host and a disk at once. Press `C`. The Cardputer enumerates as `USB DISK`. The screen says `Waiting for computer...` until the computer actually attaches. On Mac or Windows, copy logs off the disk, eject it in Finder/Explorer, then press `C` again to return to RX. If the screen says `USB busy, unplug radio`, disconnect the QMX/KH1 USB cable first. iPhone/iPad Files is best-effort only.
 
+**Band config (`O` then `3`):** replaces the old ActiveBand long-edit. `*` is in the STATUS band rotation, `.` is off. `1`–`6` toggle the row; `;` / `.` page; Enter edits kHz. The last enabled band cannot be turned off. `` ` `` returns to MENU P3. `S` then `3` still steps the enabled set. `B` is still the frequency-only list.
+
 ---
 
 # Original README (Wei AG6AQ)
 
-The hardware list, thanks, and operation manual below are Wei’s text as of the split from [wcheng95/Mini-FT8](https://github.com/wcheng95/Mini-FT8). Use the fork notes above where they disagree (Charge Mode, USB Drive, clone/CI).
+The hardware list, thanks, and operation manual below are Wei’s text as of the split from [wcheng95/Mini-FT8](https://github.com/wcheng95/Mini-FT8). Use the fork notes above where they disagree (Charge Mode, USB Drive, Band config, clone/CI).
 
 Subscribe to [https://freelists.org/list/qrp-portable](https://freelists.org/list/qrp-portable) for announcements, discussions, and updates about my Mini-series apps for the Cardputer ADV.
 

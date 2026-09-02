@@ -70,6 +70,7 @@ extern "C" {
 #include "storage_service.h"
 #include "adif.h"
 #include "cts_ble.h"
+#include "band_config.h"
 
 static const char* STATION_FILE = "Station.txt";
 
@@ -700,6 +701,9 @@ static bool looks_like_grid(const std::string& s);
 static bool looks_like_report(const std::string& s, int& out);
 static std::string g_last_reply_text;
 void rebuild_active_bands();   // visible to core_api.cpp
+static bool band_row_enabled(int index);
+static int s_menu_enter_page = -1;
+static bool s_band_config_menu = false;
 static void schedule_tx_if_idle();
 static int64_t s_last_tx_slot_idx = -1000;  // Track last TX slot for retry scheduling
 [[maybe_unused]] static bool g_sync_pending = false;
@@ -1504,9 +1508,19 @@ static void draw_band_view() {
       else             snprintf(fbuf, sizeof(fbuf), "%.1f", f);
       freq_str = fbuf;
     }
-    lines.push_back(std::string(g_bands[i].name) + ": " + freq_str);
+    const char mark = s_band_config_menu ? (band_row_enabled((int)i) ? '*' : '.') : '\0';
+    if (mark != '\0') {
+      lines.push_back(std::string(1, mark) + " " + g_bands[i].name + " " + freq_str);
+    } else {
+      lines.push_back(std::string(g_bands[i].name) + ": " + freq_str);
+    }
   }
-  ui_draw_list(lines, band_page, band_edit_idx);
+  const int page = s_band_config_menu ? band_config_page() : band_page;
+  int highlight = band_edit_idx;
+  if (highlight < 0 && s_band_config_menu) {
+    highlight = band_config_focus();
+  }
+  ui_draw_list(lines, page, highlight);
 }
 
 static const char* beacon_name(BeaconMode m) {
@@ -2856,6 +2870,38 @@ void rebuild_active_bands() {
   g_active_band_text = oss.str();
 }
 
+static bool band_row_enabled(int index) {
+  if (index < 0 || index >= (int)g_bands.size()) {
+    return false;
+  }
+  if (g_active_band_indices.empty()) {
+    return true;
+  }
+  return std::find(g_active_band_indices.begin(), g_active_band_indices.end(), index) !=
+         g_active_band_indices.end();
+}
+
+static void apply_band_config_toggle(int index) {
+  const int n = (int)g_bands.size();
+  if (index < 0 || index >= n || n > 16) {
+    return;
+  }
+  bool enabled[16];
+  int numbers[16];
+  for (int i = 0; i < n; ++i) {
+    numbers[i] = band_number_from_name(g_bands[i].name);
+    enabled[i] = band_row_enabled(i);
+  }
+  if (!band_config_toggle(enabled, n, index)) {
+    return;
+  }
+  char text[64];
+  band_config_to_text(enabled, numbers, n, text, sizeof(text));
+  g_active_band_text = text;
+  rebuild_active_bands();
+  save_station_data();
+}
+
 void update_autoseq_cq_type() {
   AutoseqCqType t = AutoseqCqType::CQ;
   switch (g_cq_type) {
@@ -3691,7 +3737,7 @@ static void draw_menu_view() {
   // Page 2 content (index 12+)
   lines.push_back(std::string("RxTxLog:") + (g_rxtx_log ? "ON" : "OFF"));
   lines.push_back(std::string("SkipTX1:") + (g_skip_tx1 ? "ON" : "OFF"));
-  lines.push_back(std::string("ActiveBand:") + head_trim(g_active_band_text, 16));
+  lines.push_back("Band config");
   lines.push_back(std::string("GNSS_LoRa:") + (g_gnss_lora_enabled ? "ON" : "OFF"));
   lines.push_back(copy_to_sd_menu_item(now));
   if (menu_edit_idx == 17) {
@@ -4611,6 +4657,9 @@ void save_station_data() {
 
 static void enter_mode(UIMode new_mode) {
   // No special handling needed when leaving TX mode - autoseq manages queue internally
+  if (ui_mode == UIMode::BAND && new_mode != UIMode::BAND) {
+    s_band_config_menu = false;
+  }
   if (ui_mode == UIMode::QSO && new_mode != UIMode::QSO) {
     qso_load_entries_cancel();
   }
@@ -4676,12 +4725,15 @@ static void enter_mode(UIMode new_mode) {
       redraw_tx_view();
       break;
     case UIMode::BAND:
-      band_page = 0;
+      if (!s_band_config_menu) {
+        band_page = 0;
+      }
       band_edit_idx = -1;
       draw_band_view();
       break;
     case UIMode::MENU:
-      menu_page = 0;
+      menu_page = (s_menu_enter_page >= 0) ? s_menu_enter_page : 0;
+      s_menu_enter_page = -1;
       menu_edit_idx = -1;
       menu_edit_buf.clear();
       draw_menu_view();
@@ -5348,7 +5400,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
             if ((c >= '0' && c <= '9') || c == '.') { band_edit_buffer.push_back(c); draw_band_view(); }
             else if (c == 0x08 || c == 0x7f) {
               if (!band_edit_buffer.empty()) { band_edit_buffer.pop_back(); draw_band_view(); }
-            } else if (c == '\r' || c == '\n') {
+              } else if (c == '\r' || c == '\n') {
               if (!band_edit_buffer.empty()) {
                 float val = std::stof(band_edit_buffer);
                 g_bands[band_edit_idx].freq = val;
@@ -5357,6 +5409,40 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               band_edit_idx = -1;
               band_edit_buffer.clear();
               draw_band_view();
+            } else if (c == '`') {
+              band_edit_idx = -1;
+              band_edit_buffer.clear();
+              draw_band_view();
+            }
+          } else if (s_band_config_menu) {
+            const BandConfigEvent ev = band_config_handle_key(c);
+            switch (ev) {
+              case BandConfigEvent::None:
+                break;
+              case BandConfigEvent::Toggle:
+                apply_band_config_toggle(band_config_focus());
+                draw_band_view();
+                break;
+              case BandConfigEvent::PageChanged:
+                draw_band_view();
+                break;
+              case BandConfigEvent::EditFrequency: {
+                const int idx = band_config_focus();
+                if (idx >= 0 && idx < (int)g_bands.size()) {
+                  band_edit_idx = idx;
+                  char fbuf[16];
+                  float f = g_bands[idx].freq;
+                  if (f == (int)f) snprintf(fbuf, sizeof(fbuf), "%d", (int)f);
+                  else             snprintf(fbuf, sizeof(fbuf), "%.1f", f);
+                  band_edit_buffer = fbuf;
+                  draw_band_view();
+                }
+                break;
+              }
+              case BandConfigEvent::Exit:
+                s_menu_enter_page = 2;
+                enter_mode(UIMode::MENU);
+                break;
             }
           } else {
             if (c == ';') {
@@ -5822,11 +5908,9 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 save_station_data();
                 draw_menu_view();
               } else if (c == '3') {
-                menu_long_edit = true;
-                menu_long_kind = LONG_ACTIVE;
-                menu_long_buf = g_active_band_text;
-                menu_long_backup = g_active_band_text;
-                draw_menu_view();
+                s_band_config_menu = true;
+                band_config_reset((int)g_bands.size());
+                enter_mode(UIMode::BAND);
               } else if (c == '4') {
                 gps_stop();
                 g_gnss_lora_enabled = !g_gnss_lora_enabled;
