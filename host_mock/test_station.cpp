@@ -62,6 +62,8 @@ int main()
             "grid=fn30pr\n"
             "date=2026-08-19\n"
             "time=18:04:01\n"
+            "rtc_comp=120\n"
+            "rtc_sleep_epoch=1735689600\n"
             "band5=14074\n"
             "radio=QDX\n"
             "cq_type=4\n"
@@ -70,13 +72,19 @@ int main()
             &s);
         expect_str(s.call, "KB2SLO", "call upper");
         expect_str(s.grid, "FN30pr", "grid maidenhead");
-        expect_str(s.date, "2026-08-19", "date not overlapping line");
-        expect_str(s.time, "18:04:01", "time hms");
         expect_true(s.band_freq_set[5], "band5 set");
         expect_float(s.band_freq[5], 14074.0f, "band5 freq");
         expect_int(s.radio, 5, "radio QDX");
         expect_int(s.cq_type, 4, "cq FD");
         expect_true(!s.protocol_ft4, "beacon must not imply ft4");
+        {
+            const std::string text = station_serialize(s);
+            expect_true(text.find("date=") == std::string::npos, "old date= not rewritten");
+            expect_true(text.find("time=") == std::string::npos, "old time= not rewritten");
+            expect_true(text.find("rtc_comp=") == std::string::npos, "old rtc_comp not rewritten");
+            expect_true(text.find("rtc_sleep_epoch=") == std::string::npos,
+                        "old rtc_sleep_epoch not rewritten");
+        }
     }
 
     {
@@ -94,6 +102,10 @@ int main()
         expect_true(text.find("ft4_band5=14080") != std::string::npos, "serialize ft4 band");
         expect_true(text.find("band5=14074") == std::string::npos, "serialize omits inactive prefix");
         expect_true(text.find("beacon=") == std::string::npos, "no beacon line");
+        expect_true(text.find("date=") == std::string::npos, "no date line");
+        expect_true(text.find("time=") == std::string::npos, "no time line");
+        expect_true(text.find("rtc_comp=") == std::string::npos, "no rtc_comp");
+        expect_true(text.find("rtc_sleep_epoch=") == std::string::npos, "no rtc_sleep_epoch");
     }
 
     {
@@ -101,8 +113,6 @@ int main()
         station_settings_init(&s);
         s.call = "KB2SLO";
         s.grid = "FN30";
-        s.date = "2026-08-19";
-        s.time = "01:02:03";
         s.band_freq[0] = 1840.0f;
         s.band_freq_set[0] = true;
         s.radio = 2;
@@ -112,8 +122,6 @@ int main()
         station_parse(text, &round);
         expect_str(round.call, "KB2SLO", "round-trip call");
         expect_str(round.grid, "FN30", "round-trip grid");
-        expect_str(round.date, "2026-08-19", "round-trip date");
-        expect_str(round.time, "01:02:03", "round-trip time");
         expect_float(round.band_freq[0], 1840.0f, "round-trip band0");
         expect_int(round.radio, 2, "round-trip radio");
     }

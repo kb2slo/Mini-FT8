@@ -599,19 +599,6 @@ static int64_t rtc_last_update = 0;
 static bool rtc_valid = false;
 static RtcTimeSource g_rtc_time_source = RtcTimeSource::SAVED;
 
-// RTC deep sleep compensation
-// rtc_sleep_epoch: epoch time when entering deep sleep (for calculating elapsed time)
-// rtc_comp is seconds per 10000 seconds. It remains load/save/core-API
-// compatible, but the local O-page editor is no longer exposed.
-static constexpr int kRtcCompFixed = 120;
-static time_t g_rtc_sleep_epoch = 0;
-int g_rtc_comp = kRtcCompFixed;        // visible to core_api.cpp
-static int clamp_rtc_comp_value(int value) {
-  if (value < -9000) return -9000;
-  if (value > 9000) return 9000;
-  return value;
-}
-
 // CqType, OffsetSrc, RadioType now defined in station_types.h
 CqType g_cq_type = CqType::CQ;                // visible to core_api.cpp
 std::string g_cq_freetext = "FreeText";       // visible to core_api.cpp
@@ -2496,7 +2483,6 @@ static bool rtc_init_from_ds3231() {
   }
 
   g_time_synced_from_gps = false;
-  g_rtc_sleep_epoch = 0;
   rtc_sync_to_esp_rtc();
   ESP_LOGI(TAG,
            "DS3231 time loaded: %04u-%02u-%02u %02u:%02u:%02u",
@@ -2509,8 +2495,7 @@ static bool rtc_init_from_ds3231() {
   return true;
 }
 
-// Initialize soft RTC from ESP RTC (persists through deep sleep)
-// Applies compensation if we have valid sleep epoch data
+// Initialize soft RTC from ESP RTC (persists through deep sleep if settimeofday ran).
 static bool rtc_init_from_esp_rtc() {
   struct timeval tv;
   if (gettimeofday(&tv, NULL) != 0) return false;
@@ -2520,40 +2505,14 @@ static bool rtc_init_from_esp_rtc() {
   localtime_r(&tv.tv_sec, &t);
   if (t.tm_year + 1900 < 2020) return false;
 
-  time_t compensated_now = tv.tv_sec;
-
-  // Apply compensation if we have valid sleep data
-  if (g_rtc_sleep_epoch > 0 && tv.tv_sec > g_rtc_sleep_epoch) {
-    int64_t raw_elapsed = tv.tv_sec - g_rtc_sleep_epoch;
-    int64_t actual_elapsed = raw_elapsed;
-
-    // Apply compensation: actual = raw * 10000 / (10000 + comp)
-    if (g_rtc_comp != 0) {
-      actual_elapsed = raw_elapsed * 10000 / (10000 + g_rtc_comp);
-    }
-
-    // Fixed 1s boot delay: deep sleep entry → wake → gettimeofday
-    static constexpr int64_t BOOT_DELAY_SEC = 1;
-    compensated_now = g_rtc_sleep_epoch + actual_elapsed + BOOT_DELAY_SEC;
-
-    ESP_LOGI(TAG, "RTC wake: raw_elapsed=%lld, actual_elapsed=%lld, comp=%d, boot_adj=%lld",
-             (long long)raw_elapsed, (long long)actual_elapsed, g_rtc_comp,
-             (long long)BOOT_DELAY_SEC);
-
-    // Clear sleep epoch after use (one-time compensation)
-    g_rtc_sleep_epoch = 0;
-  }
-
   // Account for sub-second offset: tv.tv_usec tells us how far past the
   // whole second we are, so rewind rtc_ms_start by that amount.
-  rtc_seed_epoch(compensated_now,
+  rtc_seed_epoch(tv.tv_sec,
                  esp_timer_get_time() / 1000 - tv.tv_usec / 1000,
                  RtcTimeSource::ESP_RTC);
 
   g_time_synced_from_gps = false;
-  ESP_LOGI(TAG, "ESP RTC initialized: %s %s (compensated=%s)",
-           g_date.c_str(), g_time.c_str(),
-           (g_rtc_comp != 0) ? "yes" : "no");
+  ESP_LOGI(TAG, "ESP RTC initialized: %s %s", g_date.c_str(), g_time.c_str());
   return true;
 }
 
@@ -4303,9 +4262,6 @@ static void host_handle_line(const std::string& line_in) {
       int64_t wait_ms = (frac > 0) ? (1000 - frac) : 0;
       time_t sleep_epoch = (time_t)((now_ms + 999) / 1000);  // ceil to next second
 
-      g_rtc_sleep_epoch = sleep_epoch;
-      save_station_data();
-
       // Wait until the second boundary, then set ESP RTC and sleep
       if (wait_ms > 0) vTaskDelay(pdMS_TO_TICKS(wait_ms));
       station_save_worker_flush();
@@ -4513,8 +4469,6 @@ static void station_fill_from_globals(StationSettings* s) {
   station_copy_bands_from_runtime(s, ft4_keys);
   s->offset_hz = g_offset_hz;
   s->band_sel = g_band_sel;
-  s->date = g_date;
-  s->time = g_time;
   s->cq_type = (int)g_cq_type;
   s->cq_freetext = g_cq_freetext;
   s->skip_tx1 = g_skip_tx1;
@@ -4529,8 +4483,6 @@ static void station_fill_from_globals(StationSettings* s) {
   s->ignore_prefixes = g_ignore_prefix_text;
   s->rxtx_log = g_rxtx_log;
   s->active_bands = g_active_band_text;
-  s->rtc_sleep_epoch = (std::int64_t)g_rtc_sleep_epoch;
-  s->rtc_comp = g_rtc_comp;
   s->autoseq_max_retry = g_autoseq_max_retry;
 }
 
@@ -4560,8 +4512,6 @@ static void station_apply_to_globals(const StationSettings& s) {
   if (s.band_sel >= 0 && s.band_sel < (int)g_bands.size()) {
     g_band_sel = s.band_sel;
   }
-  g_date = s.date;
-  g_time = s.time;
   g_cq_type = (CqType)s.cq_type;
   g_cq_freetext = s.cq_freetext;
   g_skip_tx1 = s.skip_tx1;
@@ -4582,8 +4532,6 @@ static void station_apply_to_globals(const StationSettings& s) {
   g_ignore_prefix_text = clamp_ignore_prefix_text(s.ignore_prefixes);
   g_rxtx_log = s.rxtx_log;
   g_active_band_text = s.active_bands;
-  g_rtc_sleep_epoch = (time_t)s.rtc_sleep_epoch;
-  g_rtc_comp = clamp_rtc_comp_value(s.rtc_comp);
   g_autoseq_max_retry = s.autoseq_max_retry;
 }
 
@@ -4602,7 +4550,6 @@ static RadioType load_station_radio_type_only() {
 static void load_station_data() {
   storage_sync_station_from_sd();
 
-  g_rtc_comp = kRtcCompFixed;
   g_autoseq_max_retry = AUTOSEQ_MAX_RETRY;
   g_gps_baud = 115200;
   g_gnss_lora_enabled = false;
@@ -4624,7 +4571,7 @@ static void load_station_data() {
 
   autoseq_set_max_retry(g_autoseq_max_retry);
   if (!rtc_init_from_ds3231() && !rtc_init_from_esp_rtc()) {
-    ESP_LOGI(TAG, "No valid DS3231 or ESP RTC time; using saved time strings");
+    ESP_LOGI(TAG, "No valid DS3231 or ESP RTC time; placeholder until CTS, GPS, or S");
     rtc_set_from_strings_source(RtcTimeSource::SAVED);
   }
   rebuild_active_bands();
@@ -5712,13 +5659,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 }
                 else if (menu_edit_idx == 7) { g_offset_hz = atoi(menu_edit_buf.c_str()); redraw_countdown_now(); }
                 else if (menu_edit_idx == 10) { g_comment1 = menu_edit_buf; }
-                else if (menu_edit_idx == 15) {
-                  char* end = nullptr;
-                  long v = std::strtol(menu_edit_buf.c_str(), &end, 10);
-                  if (end != menu_edit_buf.c_str() && end && *end == '\0') {
-                    g_rtc_comp = clamp_rtc_comp_value((int)v);
-                  }
-                } else if (menu_edit_idx == 17) {
+                else if (menu_edit_idx == 17) {
                   char* end = nullptr;
                   long v = std::strtol(menu_edit_buf.c_str(), &end, 10);
                   if (end != menu_edit_buf.c_str() && end && *end == '\0') {

@@ -109,8 +109,7 @@ struct StationConfig {
   bool             skip_tx1;
   int              max_retry;
 
-  // RTC
-  int32_t          rtc_comp;       // ppm-like drift comp
+  // Live clock (not persisted in Station.txt)
   std::string      date;           // "YYYY-MM-DD"
   std::string      time;           // "HH:MM:SS"
 
@@ -215,7 +214,6 @@ bool core_cmd_set_max_retry(int n);
 
 // RTC
 bool core_cmd_set_rtc(int64_t epoch_ms);
-bool core_cmd_set_rtc_comp(int32_t ppm_like);
 
 // Ignore list
 bool core_cmd_ignore_add   (const std::string& prefix);

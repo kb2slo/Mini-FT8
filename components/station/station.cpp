@@ -35,39 +35,6 @@ std::string trim_upper_copy(const std::string& s)
     return out;
 }
 
-std::string normalize_time_hms(const std::string& src)
-{
-    int h = 0;
-    int m = 0;
-    int s = 0;
-    if (sscanf(src.c_str(), "%d:%d:%d", &h, &m, &s) == 3) {
-        if (h >= 0 && h <= 23 && m >= 0 && m <= 59 && s >= 0 && s <= 59) {
-            char out[16];
-            snprintf(out, sizeof(out), "%02d:%02d:%02d", h, m, s);
-            return out;
-        }
-    }
-
-    std::string digits;
-    digits.reserve(src.size());
-    for (unsigned char ch : src) {
-        if (std::isdigit(ch)) {
-            digits.push_back(static_cast<char>(ch));
-        }
-    }
-    if (digits.size() >= 6) {
-        h = (digits[0] - '0') * 10 + (digits[1] - '0');
-        m = (digits[2] - '0') * 10 + (digits[3] - '0');
-        s = (digits[4] - '0') * 10 + (digits[5] - '0');
-        if (h >= 0 && h <= 23 && m >= 0 && m <= 59 && s >= 0 && s <= 59) {
-            char out[16];
-            snprintf(out, sizeof(out), "%02d:%02d:%02d", h, m, s);
-            return out;
-        }
-    }
-    return src;
-}
-
 std::string normalize_grid_maidenhead(const std::string& src)
 {
     size_t b = 0;
@@ -183,8 +150,6 @@ void format_freq(float f, char* fbuf, size_t n)
 enum class StationKey {
     Offset,
     BandSel,
-    Date,
-    Time,
     CqType,
     OffsetSrc,
     Radio,
@@ -203,8 +168,6 @@ enum class StationKey {
     ActiveBands,
     AutoseqMaxRetry,
     ProtocolMode,
-    RtcComp,
-    RtcSleepEpoch,
     Beacon,
     Unknown,
 };
@@ -213,8 +176,6 @@ StationKey key_from_name(const std::string& name)
 {
     if (name == "offset") return StationKey::Offset;
     if (name == "band_sel") return StationKey::BandSel;
-    if (name == "date") return StationKey::Date;
-    if (name == "time") return StationKey::Time;
     if (name == "cq_type") return StationKey::CqType;
     if (name == "offset_src") return StationKey::OffsetSrc;
     if (name == "radio") return StationKey::Radio;
@@ -233,8 +194,6 @@ StationKey key_from_name(const std::string& name)
     if (name == "active_bands") return StationKey::ActiveBands;
     if (name == "autoseq_max_retry") return StationKey::AutoseqMaxRetry;
     if (name == "protocol_mode") return StationKey::ProtocolMode;
-    if (name == "rtc_comp") return StationKey::RtcComp;
-    if (name == "rtc_sleep_epoch") return StationKey::RtcSleepEpoch;
     if (name == "beacon") return StationKey::Beacon;
     return StationKey::Unknown;
 }
@@ -254,12 +213,6 @@ void apply_key(StationSettings* io, StationKey key, const std::string& value)
                     io->band_sel = val;
                 }
             }
-            break;
-        case StationKey::Date:
-            io->date = trim_copy(value);
-            break;
-        case StationKey::Time:
-            io->time = normalize_time_hms(trim_copy(value));
             break;
         case StationKey::CqType:
             if (sscanf(value.c_str(), "%d", &val) == 1) {
@@ -341,18 +294,6 @@ void apply_key(StationSettings* io, StationKey key, const std::string& value)
         case StationKey::ProtocolMode: {
             std::string mode = trim_upper_copy(value);
             io->protocol_ft4 = (mode == "FT4");
-            break;
-        }
-        case StationKey::RtcComp:
-            if (sscanf(value.c_str(), "%d", &val) == 1) {
-                io->rtc_comp = val;
-            }
-            break;
-        case StationKey::RtcSleepEpoch: {
-            long long epoch_tmp = 0;
-            if (sscanf(value.c_str(), "%lld", &epoch_tmp) == 1) {
-                io->rtc_sleep_epoch = epoch_tmp;
-            }
             break;
         }
         case StationKey::Beacon:
@@ -440,8 +381,6 @@ std::string station_serialize(const StationSettings& in)
     }
     out << "offset=" << in.offset_hz << "\n";
     out << "band_sel=" << in.band_sel << "\n";
-    out << "date=" << in.date << "\n";
-    out << "time=" << in.time << "\n";
     out << "cq_type=" << in.cq_type << "\n";
     out << "cq_ft=" << in.cq_freetext << "\n";
     out << "skiptx1=" << (in.skip_tx1 ? 1 : 0) << "\n";
@@ -456,8 +395,6 @@ std::string station_serialize(const StationSettings& in)
     out << "ignore_prefixes=" << in.ignore_prefixes << "\n";
     out << "rxtx_log=" << (in.rxtx_log ? 1 : 0) << "\n";
     out << "active_bands=" << in.active_bands << "\n";
-    out << "rtc_sleep_epoch=" << static_cast<long long>(in.rtc_sleep_epoch) << "\n";
-    out << "rtc_comp=" << in.rtc_comp << "\n";
     out << "autoseq_max_retry=" << in.autoseq_max_retry << "\n";
     if (in.protocol_ft4) {
         out << "protocol_mode=FT4\n";

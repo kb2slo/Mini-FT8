@@ -41,7 +41,6 @@ extern OffsetSrc         g_offset_src;
 extern int               g_offset_hz;
 extern bool              g_skip_tx1;
 extern int               g_autoseq_max_retry;
-extern int               g_rtc_comp;
 extern std::string       g_date;
 extern std::string       g_time;
 extern std::vector<std::string> g_ignore_prefixes;
@@ -314,7 +313,6 @@ void core_get_config(StationConfig& out) {
   out.skip_tx1    = g_skip_tx1;
   out.max_retry   = g_autoseq_max_retry;
 
-  out.rtc_comp    = g_rtc_comp;
   out.date        = g_date;
   out.time        = g_time;
 
@@ -590,9 +588,6 @@ bool core_cmd_set_rtc(int64_t epoch_ms) {
   g_config_save_pending = true;
   core_fire_config_changed();
   return true;
-}
-bool core_cmd_set_rtc_comp(int32_t ppm_like) {
-  return apply_config_write([&]{ g_rtc_comp = ppm_like; });
 }
 
 bool core_cmd_ignore_add(const std::string& prefix) {

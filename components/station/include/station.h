@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <string>
 
 // Station.txt parse/serialize. No ESP-IDF. Host tests and firmware both link this.
@@ -16,8 +15,6 @@ struct StationSettings {
 
     int offset_hz;
     int band_sel;
-    std::string date;
-    std::string time;
     int cq_type;
     std::string cq_freetext;
     bool skip_tx1;
@@ -32,8 +29,6 @@ struct StationSettings {
     std::string ignore_prefixes;
     bool rxtx_log;
     std::string active_bands;
-    std::int64_t rtc_sleep_epoch;
-    int rtc_comp;
     int autoseq_max_retry;
     bool protocol_ft4;
     bool serialize_ft4_band_keys;
@@ -41,8 +36,8 @@ struct StationSettings {
 
 void station_settings_init(StationSettings* out);
 
-// Overlay key=value lines onto *io. Unknown keys ignored. beacon= ignored.
-// date=/time= never sscanf into the source line.
+// Overlay key=value lines onto *io. Unknown keys ignored. beacon=, date=,
+// time=, rtc_comp=, and rtc_sleep_epoch= are ignored (clock is not persisted).
 void station_parse(const std::string& text, StationSettings* io);
 
 // Writes the same keys save_station_data() does. No beacon= line.

@@ -43,11 +43,13 @@ A `0x0` flash of the merged image replaces Launcher. Daily iterate with `python 
 
 **Band config (`O` then `3`):** replaces the old ActiveBand long-edit. `*` is in the STATUS band rotation, `.` is off. `1`–`6` toggle the row; `;` / `.` page; Enter edits kHz. The last enabled band cannot be turned off. `` ` `` returns to MENU P3. `S` then `3` still steps the enabled set. `B` is still the frequency-only list.
 
+**Clock is not stored in Station.txt.** After reboot, time comes from a DS3231 if fitted, else the ESP RTC if it still has a valid year, else you sync (iPhone CTS, GPS, or `S` date/time). Last session’s clock is not reloaded from the file.
+
 ---
 
 # Original README (Wei AG6AQ)
 
-The hardware list, thanks, and operation manual below are Wei’s text as of the split from [wcheng95/Mini-FT8](https://github.com/wcheng95/Mini-FT8). Use the fork notes above where they disagree (Charge Mode, USB Drive, Band config, clone/CI).
+The hardware list, thanks, and operation manual below are Wei’s text as of the split from [wcheng95/Mini-FT8](https://github.com/wcheng95/Mini-FT8). Use the fork notes above where they disagree (Charge Mode, USB Drive, Band config, Station.txt clock, clone/CI).
 
 Subscribe to [https://freelists.org/list/qrp-portable](https://freelists.org/list/qrp-portable) for announcements, discussions, and updates about my Mini-series apps for the Cardputer ADV.
 
