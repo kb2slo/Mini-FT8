@@ -166,18 +166,13 @@ Do not start Nano firmware that assumes only GATT until I19 is tried or explicit
 
 ### 5.2 Physical (ADV + Nano)
 
-Power: EXT **pin 6 `5VOUT`**, **pin 4 GND**. ADV power switch **ON**. Do not use pin 2 `5VIN`. Desk log-bridge: power the Nano from **its** USB-C only (do not fight `5VOUT`).
+**Boot presence (B18):** the factory Nano speaks on **its USB-C** (Espressif CDC / USB-Serial-JTAG). ADV USB-C is USB **host** — same jack as QMX. A Grove ping cannot see a factory Nano (PORTA probe field-failed 2026-09-02: silent Grove, then idle-high false positive). See §5.5.
 
-Data (cross TX/RX):
+**Companion UART (I3, not B18):** PORTA Grove **G1/G2** (UART1). GPS puck and Nano are **either/or** on PORTA. Exclusive with [B11](../ROADMAP.md) (QMX+ AUX GPS into PORTA). LoRa GNSS stays UART2 and can coexist. Desk flash the Nano on **its** USB-C at a computer; do not treat ADV USB-C as the flash jack.
 
-| ADV EXT 2.54-14P | Nano Grove |
-|---|---|
-| Pin 12 **G13** UART TX | RX (white **G1** or yellow **G2** — assign in firmware) |
-| Pin 14 **G15** UART RX | TX |
-| Pin 4 GND | Black GND |
-| Pin 6 5VOUT | Red 5V (field only) |
+Power in the field (when UART is sequenced): PORTA 5 V / GND. ADV power switch **ON**. Desk log-bridge: power the Nano from **its** USB-C only.
 
-**Conflicts:** G13/G15 are `GNSS_LoRa` UART2. PORTA Grove **G1/G2** is KH1 / Grove GPS — do not steal it if those are in use. Firmware console on **G4/G5** can be a USB–TTL (or the Nano as a byte pump) for live ADV logs while QMX owns USB-C; that is a **second** UART. One Grove on the Nano is one UART: companion **or** log bridge unless multiplexed.
+**Conflicts:** PORTA G1/G2 is KH1 / Grove GPS / companion UART — one device. Firmware console on **G4/G5** can be a USB–TTL (or the Nano as a byte pump) for live ADV logs while QMX owns USB-C; that is a **second** UART. One Grove on the Nano is one UART: companion **or** log bridge unless multiplexed.
 
 **Enclosure:** no official ADV+Nano dock. Remix an ADV backpack STL; 24×12 bay; keep USB-C free for QMX; do not bury the Nano ceramic antenna against the battery slab.
 
@@ -205,10 +200,27 @@ CTS time on the Nano (read iPhone `0x2A2B`, print epoch on UART, ADV `settimeofd
 
 ### 5.4 Operator UX on the Cardputer
 
-* Companion / Nano link **OFF / ON** (menu or BT screen). Default off.
+* **B18:** 2 s toast on USB-C attach/detach (not a blocking modal). QMX/QDX, Green Nano (desk-flash on the Nano’s USB-C), or raw VID/PID. Empty jack: no toast.
+* Companion / Nano UART link **OFF / ON** (menu or BT screen) stays I3. Default off.
 * ADV advertising name is irrelevant; the **Nano** advertises (name TBD, e.g. `Mini-FT8-<call>`).
 * Status: Nano present / phone subscribed. Informational only.
-* Enabling the UART link must never reset USB host.
+* Enabling the UART link must never reset USB host. **S → 2** attaches UAC/CDC to the live host.
+
+### 5.5 USB-C host + presence (B18)
+
+ADV USB-C is one PHY. Hub is off. Host is the default owner of that PHY.
+
+1. After display init, install USB **host** with the QMX ISO FIFO split (so later **S → 2** can stream). No UAC class driver and no CDC-ACM open until **S → 2**.
+2. A presence client reads VID/PID on attach and notices detach. Classify (host-tested table; firmware only maps the enum):
+   * **QMX/QDX** — `0x0483` / `0xA34C` (same pair `stream_uac` opens for CAT). One ID; we cannot tell QMX from QDX.
+   * **Green Nano** — Espressif VID `0x303A` (USB-Serial-JTAG / TinyUSB CDC).
+   * **Other** — any other gadget; toast the IDs.
+   * **Empty** — no event.
+3. Host **stays up**. **S → 2** installs UAC/CDC and probes devices already on the bus (no root-port power cycle — QMX firmware does not survive a dropped link).
+4. **Park** (full uninstall, same bar as `uac_ensure_host_uninstalled`): USB Drive (**C**), and CTS start (`H → 1` then `1`). Reinstall host when Drive exits and when CTS ends (Idle / Success / Failed / abort). Do not auto-start UAC. B15 still unplugs the radio for CTS; B17 (cable stays in) is not this slice.
+5. UI per §5.4. Do not start NimBLE.
+
+Operator path: Nano or QMX on ADV USB-C at boot → toast → unplug/plug → toast. Radio session is still **S → 2**.
 
 ---
 
@@ -237,6 +249,7 @@ I3 stays **Ideas** until sequenced. Do not start Nano/ADV UART firmware until th
 |---|---|---|---|
 | **0 — RFC** | None | This file, including §4.1b. **I19 before locking §5.3 / §6** | Sign-off: on-chip BLE is out; Nano UART is the coprocessor; **phone path chosen** (GATT or I19 web, or both) |
 | **1a — Same-chip NimBLE** | B15 CTS probe | — | **Closed, failed** (§4.1b) |
+| **1b — USB-C presence** | B18: always-on host; attach/detach toasts; **S → 2** probes existing UAC (no bus reset); park for **C** and CTS | — | Empty = no toast; **S → 2** streams without QMX reboot; Grove ping **rejected**. |
 | **1 — UART + Nano BLE** | Separate `esp32c6` project: NimBLE + Grove UART. ADV: queue + UART TX, not `main.cpp` policy | iOS: scan Nano, pair, decode feed | QMX CAT/`TA` unchanged with Nano powered; decode lines on the phone; ADV **DM L** stays in the QMX-only ballpark |
 | **2 — Log Sync** | `LOG_META` + blocks over UART then BLE | iOS: `.adi` pull | No slot stall; FATFS worker |
 | **3 — Helpers** | Unchanged | QRZ, grid, MapKit, PSK Reporter | Field tool |
@@ -255,7 +268,10 @@ I3 stays **Ideas** until sequenced. Do not start Nano/ADV UART firmware until th
 | **UART in the decode task** | Queue; low-priority drain |
 | **Nano 4 MB + Wi-Fi/OTA** | BLE-only if GATT; I19 must **measure** Wi-Fi+lwIP+UI before lock |
 | **Nano ceramic antenna** | Face out of the sled; AtomS3 Lite fallback |
-| **G13/G15 vs LoRa GNSS** | Document; don’t enable both |
+| **PORTA vs LoRa GNSS** | Companion UART is PORTA; LoRa GNSS is UART2 and can coexist. Don’t put GPS puck and Nano on PORTA together. |
+| **Grove ping as presence** | **Rejected.** Factory Nano is silent on Grove; PORTA has idle-high pull-ups. Presence is USB-C VID/PID (B18). |
+| **B18 host vs later UAC** | Host up from boot with QMX FIFO. **S → 2** attaches UAC/CDC only. Fail if that second `usb_host_install` is required. |
+| **B18 vs C / CTS** | Park host (uninstall) for Drive and CTS start; reinstall host after, not UAC. |
 | **5VOUT vs Nano USB-C** | One 5 V source |
 | **FATFS / USB Drive** | Same as before: abort log pull |
 | **Scope creep ("Phone as Radio")** | Non-goals; zero CAT/QSY/TX on GATT |
@@ -266,6 +282,6 @@ I3 stays **Ideas** until sequenced. Do not start Nano/ADV UART firmware until th
 ## 9. Ask of the Mini-FT8 Maintainers
 
 1. Accept §4.1b: on-chip companion BLE is **rejected** on ADV+QMX.
-2. Accept §5 hardware: **ADV + NanoC6** over EXT UART. Phone path (**GATT vs I19 web**) is **not** signed off until I19 is tried or dropped. I3 stays Ideas until sequenced.
+2. Accept §5 hardware: **ADV + NanoC6**. Boot presence is USB-C (B18 / §5.5). Companion UART is PORTA Grove (I3). Phone path (**GATT vs I19 web**) is **not** signed off until I19 is tried or dropped. I3 stays Ideas until sequenced.
 3. Do not merge ADV NimBLE-on-while-QMX. B15 one-shot CTS is a separate product decision (ROADMAP).
 4. Field later (when I3 is Now): Nano powered, QMX streaming, ADV **DM L** and CAT/`TA` match Nano-off.

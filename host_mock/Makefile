@@ -13,7 +13,8 @@ INCLUDES = -I. -I../main -I../components/ui/include \
            -I../components/station/include \
            -I../components/board_cardputer_adv/include \
            -I../components/qso_browse/include \
-           -I../components/file_list/include
+           -I../components/file_list/include \
+           -I../components/usb_c_presence/include
 
 CORE_SRC   = ../main/autoseq.cpp
 MOCK_SRC   = host_main.cpp host_mocks.cpp json_parser.cpp
@@ -44,11 +45,13 @@ TX_HUD_BANNER_TARGET = host_test_tx_hud_banner
 RX_LIST_STALE_TARGET = host_test_rx_list_stale
 CTS_TIME_TARGET = host_test_cts_time
 BAND_CONFIG_TARGET = host_test_band_config
+USB_C_PRESENCE_TARGET = host_test_usb_c_presence
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
-     $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET)
+     $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
+     $(USB_C_PRESENCE_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -101,6 +104,12 @@ band_config.o: ../components/band_config/band_config.cpp
 $(BAND_CONFIG_TARGET): $(BAND_CONFIG_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+USB_C_PRESENCE_OBJ = usb_c_presence.o test_usb_c_presence.o
+usb_c_presence.o: ../components/usb_c_presence/usb_c_presence.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(USB_C_PRESENCE_TARGET): $(USB_C_PRESENCE_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 POWER_OBJ = power_hysteresis.o test_power_hysteresis.o
 power_hysteresis.o: ../components/board_cardputer_adv/power_hysteresis.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
@@ -142,9 +151,11 @@ clean:
 	      $(DECODE_SORT_OBJ) $(POWER_OBJ) $(QSO_BROWSE_OBJ) $(COPY_BLOCK_OBJ) \
 	      $(STATION_SAVE_OBJ) $(FILE_LIST_OBJ) $(RADIO_PROFILE_OBJ) $(TX_HUD_BANNER_OBJ) \
 	      $(RX_LIST_STALE_OBJ) $(CTS_TIME_OBJ) $(BAND_CONFIG_OBJ) \
+	      $(USB_C_PRESENCE_OBJ) \
 	      $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
 	      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
 	      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
-	      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET)
+	      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
+	      $(USB_C_PRESENCE_TARGET)
 
 .PHONY: all clean

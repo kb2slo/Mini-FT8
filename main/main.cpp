@@ -58,6 +58,7 @@ extern "C" {
 #include "soc/rtc.h"
 #include "audio_source.h"
 #include "stream_uac.h"
+#include "usb_c_presence.h"
 #include "dds_q15.h"
 #include "radio_control.h"
 #include "radio_control_backend.h"
@@ -538,6 +539,8 @@ static std::vector<std::string> g_startup_lines = {
 static bool    g_startup_active  = true;
 static int64_t g_startup_start_ms = 0;    // set on the first tick we see in the splash branch
 static constexpr int64_t kStartupAutoDismissMs = 1000;
+static int64_t g_usb_toast_until_ms = 0;
+static bool g_usb_host_parked_for_cts = false;
 
 static bool is_startup_direct_mode_key(char c) {
   const char k = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -3808,16 +3811,34 @@ static void draw_gps_view(bool force_redraw) {
 
 static std::string s_last_bt_lines[6];
 
+static void restore_usb_host_after_cts() {
+  if (!g_usb_host_parked_for_cts) {
+    return;
+  }
+  g_usb_host_parked_for_cts = false;
+  if (uac_host_ensure_started() != ESP_OK) {
+    debug_log_line("CTS: USB host back fail");
+  }
+}
+
 static void cts_iphone_start_from_ui() {
   if (g_tx_active) {
     debug_log_line("CTS: TX busy");
     return;
+  }
+  if (!g_usb_host_parked_for_cts) {
+    if (uac_ensure_host_uninstalled() != ESP_OK) {
+      debug_log_line("CTS: USB host busy");
+      return;
+    }
+    g_usb_host_parked_for_cts = true;
   }
   log_mem_caps("CTS_BEFORE");
   char name[20];
   std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
   if (cts_ble_start_iphone(name) != ESP_OK) {
     debug_log_line("CTS: start fail");
+    restore_usb_host_after_cts();
   }
 }
 
@@ -4779,11 +4800,17 @@ static void exit_msc_mode() {
       ui_force_redraw_rx();
       ui_draw_rx();
     }
+    if (uac_host_ensure_started() != ESP_OK) {
+      debug_log_line("USB host back fail");
+    }
     return;
   }
   enter_mode(UIMode::RX);
   ui_force_redraw_rx();
   ui_draw_rx();
+  if (uac_host_ensure_started() != ESP_OK) {
+    debug_log_line("USB host back fail");
+  }
 }
 
 // Perform the STATUS -> '2' action: start the UAC audio source that feeds
@@ -4819,6 +4846,72 @@ static void begin_usb_host_mode() {
   }
 }
 
+static void redraw_after_usb_toast() {
+  switch (ui_mode) {
+    case UIMode::RX:
+      ui_force_redraw_rx();
+      draw_rx_screen();
+      break;
+    case UIMode::TX:
+      redraw_tx_view();
+      break;
+    case UIMode::BAND:
+      draw_band_view();
+      break;
+    case UIMode::MENU:
+      draw_menu_view();
+      break;
+    case UIMode::DEBUG:
+      ui_draw_list(g_d_lines, d_page, -1);
+      break;
+    case UIMode::MSC:
+      ui_draw_debug(g_msc_lines, 0);
+      break;
+    case UIMode::QSO:
+      qso_draw_page();
+      break;
+    case UIMode::STATUS:
+      draw_status_view();
+      break;
+    case UIMode::GPS:
+      draw_gps_view(true);
+      break;
+    case UIMode::PERF:
+      draw_perf_view(true);
+      break;
+    case UIMode::BT:
+      draw_bt_view(true);
+      break;
+  }
+}
+
+static void usb_c_toast_tick() {
+  UsbCPresenceEvent ev;
+  bool showed = false;
+  while (usb_c_presence_take_event(&ev)) {
+    char title[24];
+    char body[32];
+    switch (ev.action) {
+      case UsbCPresenceAction::Attach:
+        usb_c_format_attach(ev.device, title, sizeof(title), body, sizeof(body));
+        break;
+      case UsbCPresenceAction::Detach:
+        usb_c_format_detach(ev.device, title, sizeof(title), body, sizeof(body));
+        break;
+    }
+    ui_draw_message_dialog(title, body);
+    debug_log_line(title);
+    showed = true;
+  }
+  const int64_t now = rtc_now_ms();
+  if (showed) {
+    g_usb_toast_until_ms = now + 2000;
+  } else if (g_usb_toast_until_ms != 0 && now >= g_usb_toast_until_ms) {
+    g_usb_toast_until_ms = 0;
+    redraw_after_usb_toast();
+  }
+}
+
 static void app_task_core0(void* /*param*/) {
   esp_err_t storage_err = storage_service_init();
   if (storage_err != ESP_OK) {
@@ -4835,6 +4928,10 @@ static void app_task_core0(void* /*param*/) {
   board_power_init();
   g_radio = load_station_radio_type_only();
   ui_init(radio_type_uses_display_only(g_radio));
+  if (uac_host_ensure_started() != ESP_OK) {
+    ESP_LOGW(TAG, "USB host did not start at boot");
+    debug_log_line("USB host boot fail");
+  }
   hashtable_init();
 
   // Q15 NCO LUT for UAC OUT FT8 audio synthesis. One-time table fill,
@@ -5030,6 +5127,10 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       }
     }
 
+    if (!g_startup_active && ui_mode != UIMode::MSC && !copy_to_sd_dialog_active()) {
+      usb_c_toast_tick();
+    }
+
     if (ui_mode == UIMode::MSC) {
       if (!g_msc_busy) {
         const bool attached = storage_service_usb_host_attached();
@@ -5072,6 +5173,22 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     cts_ble_poll();
     if (g_tx_active) {
       cts_ble_abort();
+    }
+    {
+      const CtsBleState cts = cts_ble_state();
+      switch (cts) {
+        case CtsBleState::Idle:
+        case CtsBleState::Success:
+        case CtsBleState::Failed:
+          restore_usb_host_after_cts();
+          break;
+        case CtsBleState::Starting:
+        case CtsBleState::Advertising:
+        case CtsBleState::Connected:
+        case CtsBleState::Reading:
+        case CtsBleState::Stopping:
+          break;
+      }
     }
     {
       struct timeval tv;

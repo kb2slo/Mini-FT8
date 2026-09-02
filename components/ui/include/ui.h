@@ -94,6 +94,8 @@ void ui_draw_debug(const std::vector<std::string>& lines, int page);
 // Wait card in the text area (waterfall stays). bar_permille is 0..1000.
 // paint_chrome draws the card and title; later ticks pass false and only refresh the bar.
 void ui_draw_busy_dialog(const char* title, int bar_permille, bool paint_chrome);
+// Two-line card in the text area (waterfall stays). Used for USB-C presence toasts.
+void ui_draw_message_dialog(const char* title, const char* body);
 // Returns the currently rendered text rows (exact strings drawn for lines 1..6).
 void ui_get_visible_text_lines(std::vector<std::string>& out);
 // Override one mirrored row for custom render paths outside ui.cpp (e.g. STATUS).

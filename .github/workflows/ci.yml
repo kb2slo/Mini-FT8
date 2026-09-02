@@ -84,6 +84,8 @@ jobs:
           ./host_test_cts_time || failed=1
           echo "===== host_test_band_config ====="
           ./host_test_band_config || failed=1
+          echo "===== host_test_usb_c_presence ====="
+          ./host_test_usb_c_presence || failed=1
           exit "$failed"
 
       - name: TX e2e (CTest)

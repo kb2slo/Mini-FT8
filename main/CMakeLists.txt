@@ -17,7 +17,7 @@ idf_component_register(
          "dds_q15.cpp"
          "resample.cpp"
     INCLUDE_DIRS "."
-    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib usb_host_uac usb_host_cdc_acm storage_service external_rtc efuse station adif qso_browse file_list cts_time cts_ble band_config
+    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib usb_host_uac usb_host_cdc_acm usb_c_presence storage_service external_rtc efuse station adif qso_browse file_list cts_time cts_ble band_config
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Werror)
 add_dependencies(${COMPONENT_LIB} minift8_build_identity)

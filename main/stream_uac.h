@@ -38,6 +38,7 @@ bool uac_is_streaming(void);
 bool uac_start(void);
 bool uac_start_with_profile(uac_stream_profile_t profile);
 void uac_stop(void);
+esp_err_t uac_host_ensure_started(void);
 esp_err_t uac_ensure_host_uninstalled(void);
 bool uac_usb_host_released(void);
 bool uac_qmx_detected(void);

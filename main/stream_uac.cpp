@@ -1,4 +1,5 @@
 #include "stream_uac.h"
+#include "usb_c_presence.h"
 #include "ft8_audio_pipeline.h"
 #include "resample.h"
 #include "dds_q15.h"
@@ -87,6 +88,7 @@ static cdc_acm_dev_hdl_t s_cdc_handle = NULL;
 static TaskHandle_t s_usb_task_handle = NULL;
 static TaskHandle_t s_uac_task_handle = NULL;
 static volatile bool s_host_installed = false;
+static volatile bool s_host_stop_requested = false;
 
 // Speaker (UAC OUT) is captured and fully allocated during enumeration.
 // QDX transmission only resumes or suspends the pre-opened endpoint.
@@ -129,6 +131,8 @@ static void uac_lib_task(void* arg);
 static void stream_uac_task(void* arg);
 static void cdc_close(void);
 static void cdc_try_open(void);
+static void cdc_driver_ensure_installed(void);
+static void cdc_driver_uninstall(void);
 static void cdc_event_cb(const cdc_acm_host_dev_event_data_t* event, void* user_ctx);
 
 // Speaker constants and event callback forward declaration. The
@@ -403,6 +407,17 @@ static void uac_device_callback(uac_host_device_handle_t handle,
     xQueueSend(s_event_queue, &evt, 0);
 }
 
+static void uac_driver_callback(uint8_t addr, uint8_t iface_num,
+                                 const uac_host_driver_event_t event,
+                                 void* arg);
+
+static void uac_existing_iface_cb(uint8_t addr, uint8_t iface, bool is_rx, void* /*arg*/)
+{
+    const uac_host_driver_event_t event =
+        is_rx ? UAC_HOST_DRIVER_EVENT_RX_CONNECTED : UAC_HOST_DRIVER_EVENT_TX_CONNECTED;
+    uac_driver_callback(addr, iface, event, NULL);
+}
+
 // UAC driver callback
 static void uac_driver_callback(uint8_t addr, uint8_t iface_num,
                                  const uac_host_driver_event_t event,
@@ -417,61 +432,70 @@ static void uac_driver_callback(uint8_t addr, uint8_t iface_num,
     xQueueSend(s_event_queue, &evt, 0);
 }
 
-// USB host library task
+static void cdc_driver_ensure_installed(void) {
+    if (s_cdc_installed) {
+        return;
+    }
+    if (s_profile != UAC_PROFILE_QMX) {
+        ESP_LOGI(TAG, "CDC-ACM driver skipped profile=%s", profile_name(s_profile));
+        return;
+    }
+    const cdc_acm_host_driver_config_t cdc_cfg = {
+        .driver_task_stack_size = 3072,
+        .driver_task_priority = 4,
+        .xCoreID = 0,
+        .new_dev_cb = cdc_new_dev_cb,
+    };
+    esp_err_t err = cdc_acm_host_install(&cdc_cfg);
+    if (err == ESP_OK) {
+        s_cdc_installed = true;
+        ESP_LOGI(TAG, "CDC-ACM driver installed");
+    } else {
+        ESP_LOGW(TAG, "CDC-ACM driver install failed: %s", esp_err_to_name(err));
+    }
+}
+
+static void cdc_driver_uninstall(void) {
+    if (!s_cdc_installed) {
+        return;
+    }
+    cdc_close();
+    cdc_acm_host_uninstall();
+    s_cdc_installed = false;
+    ESP_LOGI(TAG, "CDC-ACM driver uninstalled");
+}
+
+// USB host library task. Lifetime is independent of UAC: B18 keeps host up
+// for presence toasts; C and CTS request a full uninstall via s_host_stop_requested.
 static void usb_lib_task(void* arg) {
+    (void)arg;
     usb_host_config_t host_config = {};
     host_config.skip_phy_setup = false;
     host_config.intr_flags = ESP_INTR_FLAG_LEVEL1;
 
-    if (s_profile == UAC_PROFILE_QMX) {
-        // Custom FIFO partitioning enables simultaneous bidirectional ISO
-        // streaming with QDX or QMX hardware. ESP32-S3 has 200 FIFO lines.
-        // Built-in Kconfig biases do not cover 24-bit/48k/stereo MPS=300
-        // in both directions at once. This split reserves 364 B for RX,
-        // 364 B for PTX, and 72 B for non-periodic OUT (CDC CAT bulk-OUT).
-        host_config.fifo_settings_custom.rx_fifo_lines   = 91;   // 364 B
-        host_config.fifo_settings_custom.nptx_fifo_lines = 18;   // 72 B
-        host_config.fifo_settings_custom.ptx_fifo_lines  = 91;   // 364 B
-        ESP_LOGI(TAG, "USB FIFO profile=%s policy=qmx-custom rx=91 nptx=18 ptx=91",
-                 profile_name(s_profile));
-    } else {
-        ESP_LOGI(TAG, "USB FIFO profile=%s policy=default", profile_name(s_profile));
-    }
+    // Always the QMX ISO split so S→2 can attach UAC without reinstalling.
+    // ESP32-S3 has 200 FIFO lines. This reserves 364 B RX, 364 B PTX,
+    // and 72 B non-periodic OUT (CDC CAT bulk-OUT).
+    host_config.fifo_settings_custom.rx_fifo_lines   = 91;
+    host_config.fifo_settings_custom.nptx_fifo_lines = 18;
+    host_config.fifo_settings_custom.ptx_fifo_lines  = 91;
+    ESP_LOGI(TAG, "USB FIFO policy=qmx-custom rx=91 nptx=18 ptx=91");
 
     esp_err_t err = usb_host_install(&host_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to install USB host: %s", esp_err_to_name(err));
-        s_state = UAC_STATE_ERROR;
-        snprintf(s_status_string, sizeof(s_status_string), "USB init failed");
+        s_usb_task_handle = NULL;
         vTaskDelete(NULL);
         return;
     }
 
     s_host_installed = true;
     ESP_LOGI(TAG, "USB Host installed");
-
-    if (s_profile == UAC_PROFILE_QMX) {
-        // Install CDC-ACM driver for QMX/QDX CAT control before starting class drivers.
-        const cdc_acm_host_driver_config_t cdc_cfg = {
-            .driver_task_stack_size = 3072,
-            .driver_task_priority = 4,
-            .xCoreID = 0,
-            .new_dev_cb = cdc_new_dev_cb,
-        };
-        err = cdc_acm_host_install(&cdc_cfg);
-        if (err == ESP_OK) {
-            s_cdc_installed = true;
-            ESP_LOGI(TAG, "CDC-ACM driver installed");
-        } else {
-            ESP_LOGW(TAG, "CDC-ACM driver install failed: %s", esp_err_to_name(err));
-        }
-    } else {
-        ESP_LOGI(TAG, "CDC-ACM driver skipped profile=%s", profile_name(s_profile));
+    if (usb_c_presence_start() != ESP_OK) {
+        ESP_LOGW(TAG, "USB-C presence client failed");
     }
 
-    xTaskNotifyGive((TaskHandle_t)arg);
-
-    while (!s_stop_requested) {
+    while (!s_host_stop_requested) {
         uint32_t event_flags;
         err = usb_host_lib_handle_events(pdMS_TO_TICKS(100), &event_flags);
         if (err == ESP_OK) {
@@ -482,12 +506,8 @@ static void usb_lib_task(void* arg) {
         }
     }
 
-    if (s_cdc_installed) {
-        cdc_close();
-        cdc_acm_host_uninstall();
-        s_cdc_installed = false;
-        ESP_LOGI(TAG, "CDC-ACM driver uninstalled");
-    }
+    usb_c_presence_stop();
+    cdc_driver_uninstall();
 
     // Drain pending USB host events before uninstall. usb_host_uninstall()
     // refuses to release the PHY while client-detach/all-free events are
@@ -552,6 +572,12 @@ static void uac_lib_task(void* arg) {
     ESP_LOGI(TAG, "UAC driver installed");
     s_state = UAC_STATE_WAITING;
     snprintf(s_status_string, sizeof(s_status_string), "Waiting for device");
+
+    // UAC only handles NEW_DEV; the radio is often already enumerated.
+    // Do not power-cycle the jack — QMX firmware needs a reboot after that.
+    if (usb_c_presence_probe_uac_interfaces(uac_existing_iface_cb, NULL) != ESP_OK) {
+        ESP_LOGI(TAG, "No UAC interfaces on connected devices yet");
+    }
 
     uac_event_t evt;
     while (!s_stop_requested) {
@@ -922,6 +948,37 @@ bool uac_get_latest_waterfall_row(uint8_t* out_row, int out_len) {
     return ft8_audio_pipeline_get_latest_waterfall_row(out_row, out_len);
 }
 
+esp_err_t uac_host_ensure_started(void) {
+    if (s_host_installed && s_usb_task_handle != NULL) {
+        return ESP_OK;
+    }
+    if (s_usb_task_handle != NULL && !s_host_installed) {
+        for (int i = 0; i < 50 && !s_host_installed; ++i) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        return s_host_installed ? ESP_OK : ESP_ERR_TIMEOUT;
+    }
+
+    s_host_stop_requested = false;
+    BaseType_t ret = xTaskCreatePinnedToCore(usb_lib_task, "usb_lib",
+                                             TASK_STACK_SIZE, NULL,
+                                             USB_HOST_TASK_PRIORITY,
+                                             &s_usb_task_handle, 0);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create USB task");
+        s_usb_task_handle = NULL;
+        return ESP_FAIL;
+    }
+    for (int i = 0; i < 50 && !s_host_installed; ++i) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (!s_host_installed) {
+        ESP_LOGE(TAG, "USB host did not install");
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
 bool uac_start_with_profile(uac_stream_profile_t profile) {
     if (s_state != UAC_STATE_IDLE) {
         ESP_LOGW(TAG, "UAC already started");
@@ -937,18 +994,21 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
     s_format.channels = UAC_CHANNELS;
     ft8_audio_pipeline_clear_latest_waterfall_row();
 
-    ESP_LOGI(TAG, "Starting UAC host profile=%s", profile_name(s_profile));
+    ESP_LOGI(TAG, "Starting UAC profile=%s (host already up=%d)",
+             profile_name(s_profile), s_host_installed ? 1 : 0);
     s_stop_requested = false;
     resample_init(&s_resample_state);
 
-    // Create event queue
+    if (uac_host_ensure_started() != ESP_OK) {
+        return false;
+    }
+
     s_event_queue = xQueueCreate(10, sizeof(uac_event_t));
     if (!s_event_queue) {
         ESP_LOGE(TAG, "Failed to create event queue");
         return false;
     }
 
-    // Create UAC task first (it will wait for USB task notification)
     BaseType_t ret = xTaskCreatePinnedToCore(uac_lib_task, "uac_lib",
                                               TASK_STACK_SIZE, NULL,
                                               UAC_TASK_PRIORITY,
@@ -960,20 +1020,8 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
         return false;
     }
 
-    // Create USB host task (will notify UAC task when ready)
-    ret = xTaskCreatePinnedToCore(usb_lib_task, "usb_lib",
-                                   TASK_STACK_SIZE, (void*)s_uac_task_handle,
-                                   USB_HOST_TASK_PRIORITY,
-                                   &s_usb_task_handle, 0);
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create USB task");
-        s_stop_requested = true;
-        vTaskDelete(s_uac_task_handle);
-        s_uac_task_handle = NULL;
-        vQueueDelete(s_event_queue);
-        s_event_queue = NULL;
-        return false;
-    }
+    cdc_driver_ensure_installed();
+    xTaskNotifyGive(s_uac_task_handle);
 
     s_state = UAC_STATE_WAITING;
     snprintf(s_status_string, sizeof(s_status_string), "Waiting for %s", profile_name(s_profile));
@@ -993,24 +1041,24 @@ void uac_stop(void) {
         return;
     }
 
-    ESP_LOGI(TAG, "Stopping UAC host");
+    ESP_LOGI(TAG, "Stopping UAC (host stays up)");
     s_stop_requested = true;
     g_streaming = false;
     cdc_close();
 
-    // Send stop event
     if (s_event_queue) {
         uac_event_t evt = {};
         evt.type = UAC_EVT_STOP;
         xQueueSend(s_event_queue, &evt, pdMS_TO_TICKS(100));
     }
 
-    // Wait for tasks to finish
-    int timeout = 50;  // 5 seconds
-    while ((s_stream_task_handle || s_uac_task_handle || s_usb_task_handle) && timeout > 0) {
+    int timeout = 50;
+    while ((s_stream_task_handle || s_uac_task_handle) && timeout > 0) {
         vTaskDelay(pdMS_TO_TICKS(100));
         timeout--;
     }
+
+    cdc_driver_uninstall();
 
     if (s_event_queue) {
         vQueueDelete(s_event_queue);
@@ -1020,7 +1068,7 @@ void uac_stop(void) {
     s_state = UAC_STATE_IDLE;
     ft8_audio_pipeline_clear_latest_waterfall_row();
     snprintf(s_status_string, sizeof(s_status_string), "Idle");
-    ESP_LOGI(TAG, "UAC host stopped");
+    ESP_LOGI(TAG, "UAC stopped");
 }
 
 bool uac_usb_host_released(void) {
@@ -1030,6 +1078,7 @@ bool uac_usb_host_released(void) {
 esp_err_t uac_ensure_host_uninstalled(void) {
     uac_stop();
 
+    s_host_stop_requested = true;
     int timeout = 50;
     while (s_usb_task_handle != NULL && timeout > 0) {
         vTaskDelay(pdMS_TO_TICKS(100));

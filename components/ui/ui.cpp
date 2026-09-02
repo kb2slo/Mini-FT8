@@ -598,6 +598,35 @@ void ui_draw_list(const std::vector<std::string>& lines, int page, int highlight
     M5.Display.endWrite();
 }
 
+void ui_draw_message_dialog(const char* title, const char* body) {
+    const char* head = (title != nullptr) ? title : "";
+    const char* tail = (body != nullptr) ? body : "";
+    const int box_x = 8;
+    const int box_y = UI_START_Y + 10;
+    const int box_w = SCREEN_W - 16;
+    const int box_h = 72;
+    const uint16_t box_bg = rgb565(30, 30, 60);
+
+    DispGuard guard;
+    M5.Display.startWrite();
+    M5.Display.fillRect(0, UI_START_Y, SCREEN_W, SCREEN_H - UI_START_Y, TFT_BLACK);
+    M5.Display.fillRect(box_x, box_y, box_w, box_h, box_bg);
+    M5.Display.drawRect(box_x, box_y, box_w, box_h, TFT_WHITE);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(TFT_WHITE, box_bg);
+    M5.Display.setCursor(box_x + 8, box_y + 10);
+    M5.Display.printf("%s", head);
+    M5.Display.setCursor(box_x + 8, box_y + 36);
+    M5.Display.printf("%s", tail);
+    M5.Display.endWrite();
+
+    g_visible_rows[0] = head;
+    g_visible_rows[1] = tail;
+    for (int i = 2; i < RX_LINES; ++i) {
+        g_visible_rows[i].clear();
+    }
+}
+
 void ui_draw_busy_dialog(const char* title, int bar_permille, bool paint_chrome) {
     const char* label = (title != nullptr) ? title : "";
     const int box_x = 8;
