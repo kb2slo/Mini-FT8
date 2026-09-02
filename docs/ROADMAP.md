@@ -8,9 +8,7 @@ Ship on `origin/main`. Talk through changes before a local commit (see [README.m
 
 ## Now
 
-| ID | Item | Done when |
-|---|---|---|
-| I20 | Band config on MENU P3 | `O` then `3` opens Band config in the old ActiveBand slot. `1`–`6` toggle enable (`*` / `.`); `;` / `.` page; Enter edits kHz; last enabled band cannot be turned off. `` ` `` returns to MENU P3. `M` / `N` / `O` / `H` / `B` stay as they are (`B` is still the frequency-only list). `S` then `3` still steps the enabled set. Host: `./host_test_band_config`. Field: toggle, skip off bands on `S`→`3`, edit kHz, backtick to P3. Extract `band_config`; `main.cpp` is wiring/draw only. Not nested Settings (I22). |
+*(empty — pick the next theme from Backlog or Ideas.)*
 
 
 
@@ -81,6 +79,7 @@ Field-only (do not fake in CI): USB/CDC/QMX CAT, UAC timing/DRAM, display/SPI, f
 | RFC 0002 | Extract, style, and boundaries | [RFC 0002](rfcs/0002-extract-and-boundaries.md) §2. Slices A–H. Pin `kb2slo/ft8_lib` @ `f211146`. Remainder of §7 contributor test is Backlog B14. Was I11. |
 | B10 | See callsigns while TX HUD would cover the R list | `288948c`; host `host_test_tx_hud_banner` / `host_test_rx_list_stale`. 1-row TX banner; keys 1–5 still queue; dim after TX until a new decode. |
 | B15 | BLE CTS phone time | `d39235d` + field: iPhone nRF Connect, `0x2A2B`+`0x2A0F` → UTC (`P` vs time.is). Unplug QMX for `H → 1`; NimBLE torn down before the next slot. Not the companion (I3). |
+| I20 | Band config on MENU P3 | `718f76b` + field: `O`→`3` enable/kHz list; `S`→`3` steps enabled bands. Host `host_test_band_config`. Nested Settings parked as I22. |
 
 
 
