@@ -48,3 +48,9 @@ Testing/
 # Scratch diff/patch files
 *.diff
 *.patch
+
+# nano_companion: separate idf.py project (RFC 0001 §5.1)
+nano_companion/build/
+nano_companion/managed_components/
+nano_companion/sdkconfig
+nano_companion/sdkconfig.old
