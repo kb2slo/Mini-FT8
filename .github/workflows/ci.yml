@@ -36,6 +36,7 @@ jobs:
             firmware:
               - 'main/**'
               - 'components/**'
+              - 'nano_companion/**'
               - 'CMakeLists.txt'
               - 'sdkconfig'
               - 'sdkconfig.defaults'
@@ -95,9 +96,42 @@ jobs:
           cmake --build build -j"$(nproc)"
           ctest --test-dir build --output-on-failure
 
+  nano-firmware:
+    name: Nano companion (ESP32-C6)
+    needs: changes
+    if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.firmware == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Build nano_companion with ESP-IDF 5.5.1
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32c6
+          path: nano_companion
+          command: idf.py build
+
+      - name: Stage nano_companion outputs
+        run: |
+          mkdir -p stage
+          cp nano_companion/build/bootloader/bootloader.bin stage/bootloader.bin
+          cp nano_companion/build/partition_table/partition-table.bin stage/partition-table.bin
+          cp nano_companion/build/nano_companion.bin stage/nano_companion.bin
+
+      - name: Upload nano_companion firmware
+        uses: actions/upload-artifact@v6
+        with:
+          name: nano-companion-firmware
+          if-no-files-found: error
+          retention-days: 30
+          path: stage/
+
   firmware:
     name: Firmware (ESP32-S3)
-    needs: changes
+    needs: [changes, nano-firmware]
     if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.firmware == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -109,6 +143,21 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: true
+
+      - name: Download nano_companion firmware
+        uses: actions/download-artifact@v7
+        with:
+          name: nano-companion-firmware
+          path: components/nano_flasher/target_firmware
+
+      - name: Verify nano_companion firmware staged
+        run: |
+          for f in bootloader.bin partition-table.bin nano_companion.bin; do
+            test -s "components/nano_flasher/target_firmware/${f}" || {
+              echo "::error::missing or empty components/nano_flasher/target_firmware/${f} — the published ADV image would silently ship without Nano field-flash support"
+              exit 1
+            }
+          done
 
       - name: Build with ESP-IDF 5.5.1
         uses: espressif/esp-idf-ci-action@v1
@@ -133,6 +182,7 @@ jobs:
             echo "idf=v5.5.1"
             echo "target=esp32s3"
             echo "bin=${name}"
+            echo "nano_companion_fw=embedded"
             echo "flash=esptool.py --chip esp32s3 write_flash 0x0 ${name}"
           } > dist/BUILD.txt
           echo "BIN_FILE=${name}" >> "$GITHUB_ENV"
