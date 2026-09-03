@@ -1,6 +1,6 @@
 # RFC 0001: Optional BLE Companion (Add-on, Not a Second Radio UI)
 
-* **Status:** Draft RFC (Phase 0). **Same-chip NimBLE on ADV+QMX failed** the §4 DMA gate (2026-08-31). Companion I/O moves **off-chip** (NanoC6 UART). **Phone path is not locked:** GATT/iOS app (§5.3 / §6) vs local-only Wi-Fi page ([I19](../ROADMAP.md)). Explore I19 before locking architecture.
+* **Status:** Draft RFC (Phase 1, sequenced [I3](../ROADMAP.md) Now). **Same-chip NimBLE on ADV+QMX failed** the §4 DMA gate (2026-08-31). Companion I/O moves **off-chip** (NanoC6 UART). **Nano firmware build is embedded in this tree** (§5.1): Mini-FT8's build also builds the NanoC6 project and bundles the resulting `.bin` into the ADV image so the ADV can field-flash a factory Nano over USB-C (§5.2, §5.4) — no desk computer required for install. **Phone path is still not locked:** GATT/iOS app (§5.3 / §6) vs local-only Wi-Fi page ([I19](../ROADMAP.md)). Explore I19 before locking that part of the architecture; it is independent of the build/flash pivot.
 * **Author / Lead:** Jeff Kalikstein, KB2SLO
 * **Target File Path:** `docs/rfcs/0001-ble-companion.md`
 * **Companion Target:** iPhone first (Android later once the iOS GATT surface is stabilized)
@@ -158,7 +158,9 @@ Do not start Nano firmware that assumes only GATT until I19 is tried or explicit
 
 **First brick:** [M5Stack NanoC6](https://docs.m5stack.com/en/core/M5NanoC6) (SKU C125). ESP32-C6FH4, 4 MB flash, Grove, USB-C CDC, ~24×12×9.5 mm. A BLE-only IDF (no Wi-Fi/Thread/Matter) is expected to fit if GATT wins. I19 needs Wi-Fi + lwIP + HTTP on that 4 MB — **measure before choosing**; dual-OTA + Wi-Fi is not a promise.
 
-**Dev:** ESP-IDF 5.5.x, `idf.py set-target esp32c6`, **separate project** (not this tree’s ADV target). Hold **GPIO9**, then plug USB-C. Arduino + M5Unified is acceptable for bring-up.
+**Dev:** ESP-IDF 5.5.x, `idf.py set-target esp32c6`, **project lives in this tree** (e.g. `components/nano_companion_fw/` or a sibling `nano/` root — exact path is an implementation detail, not this RFC). Hold **GPIO9**, then plug USB-C for desk bring-up. Arduino + M5Unified is acceptable for bring-up, but the shipped build is ESP-IDF so the ADV build can invoke it.
+
+**Build integration (pivot from "separate project"):** the top-level Mini-FT8 build (CMake) runs a nested `idf.py build` for the `esp32c6` Nano project as a sub-step, then embeds the resulting `nano_companion.bin` into the ADV app image as a data asset (`EMBED_FILES` / equivalent — exact mechanism is implementation, not RFC). This is a **data payload**, not code the ADV executes: the S3 never runs C6 instructions. The embedded bytes exist only so the ADV can push them out over USB-C to a Nano's ROM serial bootloader (§5.4). Two build outputs ship from one `idf.py build`: the ADV merged image (as today) and, unchanged, a standalone Nano `.bin` for desk flash via `esptool.py` when field-flash isn't used or fails. Flash budget: the embedded `.bin` must fit the ADV's `partitions.csv` remainder — measure before merging, same discipline as §4's DIRAM measurement.
 
 **UART is enough:** compact `CALL,GRID,SNR,DT,FREQ` lines are kilobits per 15 s slot. 115200 baud is plenty. Do not `uart_write` from the decode task. Software credits if a fat `.adi` dump can overrun the Nano RX buffer (four wires, no RTS/CTS unless more EXT pins are stolen).
 
@@ -168,7 +170,9 @@ Do not start Nano firmware that assumes only GATT until I19 is tried or explicit
 
 **Boot presence (B18):** the factory Nano speaks on **its USB-C** (Espressif CDC / USB-Serial-JTAG). ADV USB-C is USB **host** — same jack as QMX. A Grove ping cannot see a factory Nano (PORTA probe field-failed 2026-09-02: silent Grove, then idle-high false positive). See §5.5.
 
-**Companion UART (I3, not B18):** PORTA Grove **G1/G2** (UART1). GPS puck and Nano are **either/or** on PORTA. Exclusive with [B11](../ROADMAP.md) (QMX+ AUX GPS into PORTA). LoRa GNSS stays UART2 and can coexist. Desk flash the Nano on **its** USB-C at a computer; do not treat ADV USB-C as the flash jack.
+**Companion UART (I3, not B18):** PORTA Grove **G1/G2** (UART1). GPS puck and Nano are **either/or** on PORTA. Exclusive with [B11](../ROADMAP.md) (QMX+ AUX GPS into PORTA). LoRa GNSS stays UART2 and can coexist. This is the **runtime** link (decode feed, once BLE is up) and is distinct from the USB-C **flash** step below — a Nano is plugged into ADV USB-C to receive firmware, then moved to PORTA Grove for the ongoing companion link.
+
+**Field flash over USB-C (pivot, §5.1):** a factory (unflashed) Nano on ADV USB-C is still recognized by B18 presence (`303A:*`). The install prompt (§5.4) drives the ADV, acting as USB host, through the Nano's ROM serial bootloader protocol (sync + flash-begin/flash-data, the same handshake `esptool.py` uses) to write the embedded `.bin`. This needs the Nano's USB-CDC lines to support the standard DTR/RTS auto-reset-into-bootloader sequence — **not yet proven on this hardware pairing**; if it does not work reliably, the fallback is desk flash on the Nano's own USB-C (unchanged from the original plan) and the field-flash prompt is dropped or gated behind a "connect via computer instead" message. Desk flash always remains available regardless of field-flash outcome.
 
 Power in the field (when UART is sequenced): PORTA 5 V / GND. ADV power switch **ON**. Desk log-bridge: power the Nano from **its** USB-C only.
 
@@ -200,7 +204,8 @@ CTS time on the Nano (read iPhone `0x2A2B`, print epoch on UART, ADV `settimeofd
 
 ### 5.4 Operator UX on the Cardputer
 
-* **B18:** 2 s toast on USB-C attach/detach (not a blocking modal). QMX/QDX, Green Nano (desk-flash on the Nano’s USB-C), or raw VID/PID. Empty jack: no toast.
+* **B18 (done):** 2 s toast on USB-C attach/detach (not a blocking modal). QMX/QDX, Green Nano, or raw VID/PID. Empty jack: no toast.
+* **Install prompt (I3 pivot, new):** on a **factory/unflashed** Green Nano (distinguishable from an already-flashed companion Nano — exact detection TBD, e.g. a version characteristic once the Nano runs companion firmware vs silence from stock Espressif firmware), the toast becomes a prompt: "Install companion firmware? Y/N". On yes, ADV parks the QMX host path the same way it does for **C** / CTS (§5.5 step 4), flashes the embedded `.bin` over the ROM bootloader, shows progress, then reinstalls the host. On no or timeout, behaves like today's toast. Never auto-flashes without confirmation. Never flashes while QMX is the attached device (VID/PID gates this).
 * Companion / Nano UART link **OFF / ON** (menu or BT screen) stays I3. Default off.
 * ADV advertising name is irrelevant; the **Nano** advertises (name TBD, e.g. `Mini-FT8-<call>`).
 * Status: Nano present / phone subscribed. Informational only.
@@ -243,19 +248,20 @@ The phone application provides **value-add helpers**, not radio controls. It con
 
 ## 7. Phased Implementation Strategy
 
-I3 stays **Ideas** until sequenced. Do not start Nano/ADV UART firmware until the roadmap says so.
+I3 is sequenced ([ROADMAP.md](../ROADMAP.md) Now). Phone path (GATT vs I19) stays open per §5.0 — this pivot only unblocks firmware build/embed/flash, not the BLE/GATT surface.
 
 | Phase | Firmware | App / RFC | Exit |
 |---|---|---|---|
 | **0 — RFC** | None | This file, including §4.1b. **I19 before locking §5.3 / §6** | Sign-off: on-chip BLE is out; Nano UART is the coprocessor; **phone path chosen** (GATT or I19 web, or both) |
 | **1a — Same-chip NimBLE** | B15 CTS probe | — | **Closed, failed** (§4.1b) |
-| **1b — USB-C presence** | B18: always-on host; attach/detach toasts; **S → 2** probes existing UAC (no bus reset); park for **C** and CTS | — | Empty = no toast; **S → 2** streams without QMX reboot; Grove ping **rejected**. |
-| **1 — UART + Nano BLE** | Separate `esp32c6` project: NimBLE + Grove UART. ADV: queue + UART TX, not `main.cpp` policy | iOS: scan Nano, pair, decode feed | QMX CAT/`TA` unchanged with Nano powered; decode lines on the phone; ADV **DM L** stays in the QMX-only ballpark |
+| **1b — USB-C presence** | B18: always-on host; attach/detach toasts; **S → 2** probes existing UAC (no bus reset); park for **C** and CTS | — | **Done.** Empty = no toast; **S → 2** streams without QMX reboot; Grove ping **rejected**. |
+| **1c — Nano build embed + field flash** | `esp32c6` Nano project in-tree (§5.1); ADV build embeds its `.bin`; install prompt (§5.4) flashes over USB-C ROM bootloader | — | Nano `.bin` fits `partitions.csv` remainder; field-flash succeeds or falls back to desk `esptool.py`; flashed Nano boots; ADV **DM L** / QMX CAT/`TA` unchanged by the added build step |
+| **1 — UART + Nano BLE** | NimBLE + Grove UART on the now-flashed Nano. ADV: queue + UART TX, not `main.cpp` policy | iOS: scan Nano, pair, decode feed | QMX CAT/`TA` unchanged with Nano powered; decode lines on the phone; ADV **DM L** stays in the QMX-only ballpark |
 | **2 — Log Sync** | `LOG_META` + blocks over UART then BLE | iOS: `.adi` pull | No slot stall; FATFS worker |
 | **3 — Helpers** | Unchanged | QRZ, grid, MapKit, PSK Reporter | Field tool |
 | **4 — Android / other bricks** | Same GATT on Nano | Android | Optional AtomS3 Lite if Nano RF is weak |
 
-*KB2SLO owns this. Public GitHub. Nano firmware is not an ADV `idf.py` target.*
+*KB2SLO owns this. Public GitHub. Nano firmware source lives in this tree and is built by the ADV build (§5.1), but ships as two artifacts: the merged ADV image (Nano `.bin` embedded for field flash) and a standalone Nano `.bin` for desk flash.*
 
 ---
 
@@ -276,12 +282,16 @@ I3 stays **Ideas** until sequenced. Do not start Nano/ADV UART firmware until th
 | **FATFS / USB Drive** | Same as before: abort log pull |
 | **Scope creep ("Phone as Radio")** | Non-goals; zero CAT/QSY/TX on GATT |
 | **DSP jitter** | Nano absorbs BLE; ADV does not wait |
+| **Embedded Nano `.bin` blows the ADV flash budget** | Measure against `partitions.csv` remainder before merging; fail the build loudly rather than silently truncate |
+| **ROM-bootloader auto-reset over USB-CDC doesn't work from ADV** | Not yet proven on this hardware pairing. Fallback: desk flash on the Nano's own USB-C (§5.2), same as originally planned; field-flash prompt is dropped or gated behind a "use a computer" message |
+| **Field-flash bricks a Nano mid-write** | ROM bootloader flash is fail-safe (the ROM stays resident until a valid app is written); worst case is retry, not a bricked board. Confirm before shipping the prompt to operators |
 
 ---
 
 ## 9. Ask of the Mini-FT8 Maintainers
 
 1. Accept §4.1b: on-chip companion BLE is **rejected** on ADV+QMX.
-2. Accept §5 hardware: **ADV + NanoC6**. Boot presence is USB-C (B18 / §5.5). Companion UART is PORTA Grove (I3). Phone path (**GATT vs I19 web**) is **not** signed off until I19 is tried or dropped. I3 stays Ideas until sequenced.
-3. Do not merge ADV NimBLE-on-while-QMX. B15 one-shot CTS is a separate product decision (ROADMAP).
-4. Field later (when I3 is Now): Nano powered, QMX streaming, ADV **DM L** and CAT/`TA` match Nano-off.
+2. Accept §5 hardware: **ADV + NanoC6**. Boot presence is USB-C (B18, done / §5.5). Companion UART is PORTA Grove (I3). Phone path (**GATT vs I19 web**) is **not** signed off until I19 is tried or dropped.
+3. Accept §5.1/§5.2/§5.4 pivot: Nano firmware source lives in this tree, the ADV build embeds its `.bin`, and the install prompt field-flashes a factory Nano over USB-C, with desk `esptool.py` flash as the documented fallback. I3 is sequenced ([ROADMAP.md](../ROADMAP.md) Now).
+4. Do not merge ADV NimBLE-on-while-QMX. B15 one-shot CTS is a separate product decision (ROADMAP).
+5. Field (I3 Now): embedded `.bin` fits flash budget; field-flash prompt installs and boots a Nano over USB-C, or falls back cleanly to desk flash; Nano powered, QMX streaming, ADV **DM L** and CAT/`TA` match Nano-off.
