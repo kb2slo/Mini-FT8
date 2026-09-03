@@ -72,6 +72,7 @@ extern "C" {
 #include "adif.h"
 #include "cts_ble.h"
 #include "band_config.h"
+#include "nano_flasher.h"
 
 static const char* STATION_FILE = "Station.txt";
 
@@ -541,6 +542,11 @@ static int64_t g_startup_start_ms = 0;    // set on the first tick we see in the
 static constexpr int64_t kStartupAutoDismissMs = 1000;
 static int64_t g_usb_toast_until_ms = 0;
 static bool g_usb_host_parked_for_cts = false;
+static bool g_usb_host_parked_for_nano_flash = false;
+static bool g_green_nano_present = false;
+static uint16_t g_green_nano_vid = 0;
+static uint16_t g_green_nano_pid = 0;
+static bool g_nano_flash_in_progress = false;
 
 static bool is_startup_direct_mode_key(char c) {
   const char k = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -3842,6 +3848,80 @@ static void cts_iphone_start_from_ui() {
   }
 }
 
+static void restore_usb_host_after_nano_flash() {
+  if (!g_usb_host_parked_for_nano_flash) {
+    return;
+  }
+  g_usb_host_parked_for_nano_flash = false;
+  if (uac_host_ensure_started() != ESP_OK) {
+    debug_log_line("Nano flash: USB host back fail");
+  }
+}
+
+// Bring-up proof only (I3 pivot): synchronous on the UI task, no progress
+// bar, no abort. Blocks the whole UI for the duration of the flash, same as
+// the USB host being parked already does to QMX/decode. Turning this into a
+// background task with progress feedback is the natural next slice once the
+// mechanism is proven on real hardware — do not mistake this for the
+// finished install-prompt UX from RFC 0001 §5.4.
+static void nano_flash_start_from_ui() {
+  if (g_tx_active) {
+    debug_log_line("Nano flash: TX busy");
+    return;
+  }
+  if (g_nano_flash_in_progress) {
+    return;
+  }
+  if (!g_green_nano_present) {
+    debug_log_line("Nano flash: no Nano attached");
+    return;
+  }
+  if (!nano_flasher_has_firmware()) {
+    debug_log_line("Nano flash: no firmware staged");
+    return;
+  }
+
+  g_nano_flash_in_progress = true;
+  debug_log_line("Nano: flashing...");
+  ui_draw_message_dialog("Nano", "Flashing...");
+  draw_bt_view();
+
+  const uint16_t vid = g_green_nano_vid;
+  const uint16_t pid = g_green_nano_pid;
+  // Unlike CTS (which parks the host and hands the PHY to BLE), nano-flash
+  // still needs a live USB host + CDC-ACM to reach the Nano. Park first to
+  // drop any QMX/UAC state cleanly, then explicitly bring the host back up
+  // — cdc_acm_host_install() below needs one already running underneath it.
+  // (2026-09-03: first hardware attempt skipped this reinstall and the
+  // yield below; cdc_acm_host_install() had nothing to attach to, so the
+  // flash never reached the Nano at all — confirmed by monitoring the Nano
+  // afterward and finding it still on stock nanoc6_factorytest firmware.)
+  if (uac_ensure_host_uninstalled() != ESP_OK) {
+    debug_log_line("Nano flash: USB host busy");
+    g_nano_flash_in_progress = false;
+    return;
+  }
+  g_usb_host_parked_for_nano_flash = true;
+  if (uac_host_ensure_started() != ESP_OK) {
+    debug_log_line("Nano flash: host restart fail");
+    restore_usb_host_after_nano_flash();
+    g_nano_flash_in_progress = false;
+    return;
+  }
+  usb_c_presence_yield_device();  // let CDC-ACM claim the Nano, same as UAC does for QMX
+
+  const esp_err_t err = nano_flasher_flash_embedded(vid, pid);
+  restore_usb_host_after_nano_flash();
+  g_nano_flash_in_progress = false;
+  debug_log_line(err == ESP_OK ? "Nano: flash OK" : "Nano: flash FAILED");
+  ui_draw_message_dialog("Nano", err == ESP_OK ? "Flash OK" : "Flash FAILED");
+  // Let the existing B18 toast-expiry timer clear this and redraw BT view
+  // after 2s (usb_c_toast_tick() -> redraw_after_usb_toast(), already run
+  // every main-loop tick) instead of overwriting it immediately with a
+  // draw_bt_view() call here, which is what ate the message last time.
+  g_usb_toast_until_ms = rtc_now_ms() + 2000;
+}
+
 static void draw_bt_view(bool force_redraw) {
   std::vector<std::string> lines;
   lines.reserve(6);
@@ -3851,7 +3931,7 @@ static void draw_bt_view(bool force_redraw) {
   char name[20];
   std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
   lines.push_back(name);
-  lines.push_back("Time only, no grid");
+  lines.push_back(g_green_nano_present ? "2: Flash Nano" : "Time only, no grid");
   {
     char lbuf[24];
     const unsigned l_k =
@@ -4894,14 +4974,21 @@ static void usb_c_toast_tick() {
     switch (ev.action) {
       case UsbCPresenceAction::Attach:
         usb_c_format_attach(ev.device, title, sizeof(title), body, sizeof(body));
+        g_green_nano_present = (ev.device.kind == UsbCKind::GreenNano);
+        g_green_nano_vid = ev.device.vid;
+        g_green_nano_pid = ev.device.pid;
         break;
       case UsbCPresenceAction::Detach:
         usb_c_format_detach(ev.device, title, sizeof(title), body, sizeof(body));
+        g_green_nano_present = false;
         break;
     }
     ui_draw_message_dialog(title, body);
     debug_log_line(title);
     showed = true;
+    if (ui_mode == UIMode::BT) {
+      draw_bt_view(true);
+    }
   }
   const int64_t now = rtc_now_ms();
   if (showed) {
@@ -5409,6 +5496,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         if (c == '1') {
           cts_iphone_start_from_ui();
           draw_bt_view();
+        } else if (c == '2') {
+          nano_flash_start_from_ui();
         }
         break;
       }

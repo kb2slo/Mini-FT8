@@ -18,7 +18,11 @@ dependencies:
   # USB Host UAC for audio streaming
   espressif/usb_host_uac: ^1.2.0
   espressif/usb: '*'
-  # USB Host CDC for CAT
-  espressif/usb_host_cdc_acm: ^2.2.0
+  # USB Host CDC for CAT. Pinned exact: nano_flasher's esp-serial-flasher
+  # dependency also wants usb_host_cdc_acm and a fresh component-manager
+  # resolve otherwise silently bumps this to the newest 2.x on the QMX CAT
+  # path (I3 pivot, 2026-09-03). Bump deliberately, with a QMX field check —
+  # not as a side effect of an unrelated dependency add.
+  espressif/usb_host_cdc_acm: 2.2.0
   # Cardputer-Adv ES8311 mic capture
   espressif/esp_codec_dev: ^1.5.9

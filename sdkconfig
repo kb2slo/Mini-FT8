@@ -2501,6 +2501,39 @@ CONFIG_CU_DIAGNOSTICS_COLOR_ALWAYS=y
 # end of CMake Utilities
 
 #
+# ESP serial flasher
+#
+CONFIG_SERIAL_FLASHER_RESET_HOLD_TIME_MS=100
+CONFIG_SERIAL_FLASHER_BOOT_HOLD_TIME_MS=50
+# CONFIG_SERIAL_FLASHER_LOG_LEVEL_NONE is not set
+# CONFIG_SERIAL_FLASHER_LOG_LEVEL_ERROR is not set
+CONFIG_SERIAL_FLASHER_LOG_LEVEL_WARN=y
+# CONFIG_SERIAL_FLASHER_LOG_LEVEL_INFO is not set
+# CONFIG_SERIAL_FLASHER_LOG_LEVEL_DEBUG is not set
+CONFIG_SERIAL_FLASHER_LOG_LEVEL=2
+CONFIG_SERIAL_FLASHER_WRITE_BLOCK_RETRIES=3
+# CONFIG_SERIAL_FLASHER_RESET_INVERT is not set
+# CONFIG_SERIAL_FLASHER_BOOT_INVERT is not set
+
+#
+# Port selection
+#
+
+#
+# Select which built-in port implementations to compile into the library.
+#
+
+#
+# Enable multiple ports to allow runtime switching between interfaces.
+#
+CONFIG_SERIAL_FLASHER_PORT_UART=y
+# CONFIG_SERIAL_FLASHER_PORT_SPI is not set
+# CONFIG_SERIAL_FLASHER_PORT_SDIO is not set
+CONFIG_SERIAL_FLASHER_PORT_USB_CDC_ACM=y
+# end of Port selection
+# end of ESP serial flasher
+
+#
 # Audio Codec Device Configuration
 #
 # CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE is not set
