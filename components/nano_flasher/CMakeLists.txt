@@ -44,7 +44,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "${CMAKE_CURRENT_BINARY_DIR}"
     EMBED_FILES ${NANO_FLASHER_EMBED}
-    REQUIRES esp-serial-flasher usb_host_cdc_acm
+    REQUIRES esp-serial-flasher usb_host_cdc_acm esp_driver_uart
 )
 
 # A plain compiler define, not a `__has_include` file-existence check: ninja

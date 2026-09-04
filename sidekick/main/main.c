@@ -67,6 +67,26 @@ static void porta_beacon_send(void) {
     uart_write_bytes(PORTA_UART, (const char *)frame, sizeof(frame));
 }
 
+// PORTA update flash (RFC 0001 §5.2c "Update flash over PORTA") — tried a
+// button-hold self-restart (hold the on-board GPIO9 button, sidekick calls
+// esp_restart() on its own), reasoning the operator's finger holding GPIO9
+// low at that exact reset would land the chip in its ROM bootloader the
+// same as a fresh cable plug-in. Bench-tested 2026-09-04: the button read
+// and the restart both worked correctly, but the reboot banner showed
+// `boot:0xd (SPI_FAST_FLASH_BOOT)` — a software (`SW_CPU`) reset does not
+// cause the ROM to re-sample GPIO9 at all, so it boots straight back into
+// the app regardless of the button. Corroborated by Espressif's own esptool
+// disabling its (different, more aggressive) watchdog-reset trick
+// specifically on ESP32-C6 for causing full system freezes — this looks
+// like a genuine chip limitation, not a timing/implementation bug. Removed
+// rather than left in as dead, misleading UI. Next real attempt: a custom
+// second-stage bootloader that checks an RTC-memory flag and, if set, runs
+// its own flash-receiver instead of the app — sidesteps ROM strap-sampling
+// entirely, needs no wiring, but is real bootloader-level engineering
+// (higher stakes: bugs there affect every boot, not just updates) — see
+// RFC 0001 §5.2's "Future phase" note. USB-C stays the only flash path
+// until that's built.
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Mini-FT8 sidekick booting (IDF %s)", esp_get_idf_version());

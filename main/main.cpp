@@ -3786,6 +3786,8 @@ static void restore_usb_host_after_nano_flash() {
 // background task with progress feedback is the natural next slice once the
 // mechanism is proven on real hardware — do not mistake this for the
 // finished install-prompt UX from RFC 0001 §5.4.
+static void report_nano_flash_result(esp_err_t err, nano_flasher_status_t status, const char* remote_version);
+
 static void nano_flash_start_from_ui() {
   if (g_tx_active) {
     debug_log_line("Nano flash: TX busy");
@@ -3853,15 +3855,28 @@ static void nano_flash_start_from_ui() {
   usb_c_presence_set_notify(true);
   g_nano_flash_in_progress = false;
 
+  report_nano_flash_result(err, status, remote_version);
+}
+
+// Shared by both flash paths (USB-C and PORTA UART) — only how the session
+// connected differs before this point. Log lines stay within
+// ui_draw_list's ~20-char/row budget (240px screen, no wrap protection —
+// a longer single line garbles into the row below it, found the hard way
+// bench-testing the PORTA companion beacon, RFC 0001 §5.2c).
+static void report_nano_flash_result(esp_err_t err, nano_flasher_status_t status, const char* remote_version) {
   const char* body = "Flash FAILED";
   if (err == ESP_OK) {
     body = (status == NANO_FLASHER_STATUS_UP_TO_DATE) ? "Up to date" : "Flash OK";
   }
-  debug_log_line(err == ESP_OK
-                      ? (status == NANO_FLASHER_STATUS_UP_TO_DATE
-                             ? std::string("Sidekick up to date (") + remote_version + ")"
-                             : std::string("Sidekick flash OK"))
-                      : std::string("Sidekick flash FAILED"));
+  if (err == ESP_OK && status == NANO_FLASHER_STATUS_UP_TO_DATE) {
+    // One line, not two — see the comment above this function; two related
+    // lines can straddle a page boundary and only the later one is shown.
+    debug_log_line(std::string("OK ") + remote_version);
+  } else if (err == ESP_OK) {
+    debug_log_line("Sidekick flash OK");
+  } else {
+    debug_log_line("Sidekick flash FAILED");
+  }
   ui_draw_message_dialog("Sidekick", body);
   // Let the existing B18 toast-expiry timer clear this and redraw BT view
   // after 2s (usb_c_toast_tick() -> redraw_after_usb_toast(), already run
@@ -3869,6 +3884,20 @@ static void nano_flash_start_from_ui() {
   // draw_bt_view() call here, which is what ate the message last time.
   g_usb_toast_until_ms = rtc_now_ms() + 2000;
 }
+
+// PORTA update flash (RFC 0001 §5.2c) — not offered on the BT screen right
+// now. Tried a button-hold self-restart trigger (operator holds sidekick's
+// on-board GPIO9 button, sidekick calls esp_restart() itself); bench-tested
+// 2026-09-04 and disproved — a software reset on ESP32-C6 does not cause
+// the ROM to re-sample GPIO9, so it always reboots straight back into the
+// app regardless of the button (see sidekick/main/main.c's comment for the
+// full finding). nano_flasher_flash_embedded_uart() itself is unaffected by
+// that finding — it correctly talks the esp_loader protocol over UART once
+// something is actually listening — so it stays as tested, reusable
+// infrastructure for whatever the real trigger mechanism ends up being
+// (see RFC 0001 §5.2's "Future phase" note: a custom second-stage
+// bootloader responder, not a button). USB-C stays the only flash path
+// until that's built.
 
 static void draw_bt_view(bool force_redraw) {
   std::vector<std::string> lines;
@@ -3881,6 +3910,9 @@ static void draw_bt_view(bool force_redraw) {
   lines.push_back(name);
   lines.push_back(g_green_nano_present ? "2: Flash Sidekick" : "Time only, no grid");
   {
+    // PORTA update (RFC 0001 §5.2c) isn't offered here — the button-hold
+    // trigger it depended on is proven not to work on ESP32-C6 (see
+    // sidekick/main/main.c). USB-C stays the only flash path.
     char lbuf[24];
     const unsigned l_k =
         (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_DMA) / 1024);

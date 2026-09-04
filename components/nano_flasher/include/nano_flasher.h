@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "driver/gpio.h"
+#include "driver/uart.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -51,6 +53,33 @@ typedef enum {
 esp_err_t nano_flasher_flash_embedded(uint16_t vid, uint16_t pid,
                                        nano_flasher_status_t* out_status,
                                        char* out_remote_version, size_t out_remote_version_size);
+
+// PORTA UART variant (RFC 0001 §5.2c "Update flash over PORTA") — same
+// read-then-decide/write logic and out_status/out_remote_version contract
+// as nano_flasher_flash_embedded(), only the transport differs. Caller must
+// have already stopped porta.cpp's normal arbitration (porta_stop()) so
+// this owns UART1 exclusively.
+//
+// Unlike the USB-C path, this cannot reset the Nano into download mode
+// itself — PORTA has no wired reset/boot control, and ESP32-C6 has no
+// software-only path into download mode (checked against Espressif's own
+// esptool docs). sidekick must already be sitting in its ROM bootloader by
+// the time this is called: it self-restarts on a sustained hold of its
+// on-board GPIO9 button, landing in download mode because the operator's
+// finger is physically holding GPIO9 low at that exact reset. This
+// function does not wait for that to happen on its own initiative beyond
+// esp_loader_connect()'s own generous retry window (~15s) — call it after
+// prompting the operator to hold the button, and be prepared to call it
+// again if that window elapses before they do.
+// Field-only — real hardware required, cannot be host-tested.
+// out_diag (nullable; keep short, ~16 chars, if the caller has a display-
+// row budget) reports which stage failed — PORTA has no serial console
+// fallback, so unlike a bring-up aid this is a lasting diagnostic.
+esp_err_t nano_flasher_flash_embedded_uart(uart_port_t uart, gpio_num_t tx_pin, gpio_num_t rx_pin,
+                                            uint32_t baud_rate,
+                                            nano_flasher_status_t* out_status,
+                                            char* out_remote_version, size_t out_remote_version_size,
+                                            char* out_diag, size_t out_diag_size);
 
 #ifdef __cplusplus
 }
