@@ -1,6 +1,6 @@
 # RFC 0002: Extract, style, and boundaries
 
-* **Status:** Done
+* **Status:** Done. Amended 2026-09-04 with §5.1 (module placement: `main/` file vs `components/` directory), which the original campaign left unstated.
 * **Author:** Jeff Kalikstein, KB2SLO
 * **Covers:** extract / style / `ft8_lib` / radio contract (pre-I5). Roadmap Done. §2 was Done-when. Remainder of §7 contributor test is Backlog B14. Was I11 / B3 / B9.
 * **Does not cover:** I3 companion, I6 multi-mode rename, I8/I9/I10 QMX product features
@@ -44,6 +44,28 @@ See [STYLE.md](../STYLE.md) (structure section). Summary:
 - Require a module, not a class. Inheritance only for a closed set of variants (radio backends, later modes).
 - Radio keeps and widens `radio_control_ops_t`; no `class Radio`.
 - No new logic in `main.cpp`. Dead code goes with the extract. Fixes that belong in an extract (B5) go with it; unrelated fixes stay out.
+- **Module placement** (added 2026-09-04, see §5.1): plain `.cpp`/`.h` in `main/` by default; `components/<name>/` only when another component's `REQUIRES`/`PRIV_REQUIRES` names it, or when more than one `idf.py` project compiles it.
+
+### 5.1 Module placement, corrected (2026-09-04)
+
+This campaign never wrote down *when* an extract becomes a `components/<name>/` directory versus a plain `.cpp`/`.h` pair in `main/`, and the slices below went both ways under the same accepted standard: `adif` (D/E), `station` (D), `qso_browse` (H), and later `band_config` and `usb_c_presence` became components, while `decode_sort.h` (F) and `radio_profile.h` (B14 groundwork) landed as plain headers in `main/` between those batches. Host-testability was not the discriminator — `host_mock/Makefile` compiles by path and already carries `-I../main`, and it host-tests `decode_sort`, `radio_profile`, and `power_hysteresis` (which lives *inside* `components/board_cardputer_adv/`, not its own component) exactly as it host-tests the standalone components.
+
+The rule now in [STYLE.md](../STYLE.md): **a component only when the build forces one** — another component names it in `REQUIRES`/`PRIV_REQUIRES`, or more than one `idf.py` project compiles it (the ADV tree and `sidekick/`).
+
+Applied 2026-09-04, verified against every component's `CMakeLists.txt`:
+
+| Component | Depended on by another component? | Action |
+|---|---|---|
+| `station` | no | **demoted** → `main/station.cpp`, `main/station_save_queue.cpp` + headers |
+| `band_config` | no | **demoted** → `main/band_config.cpp` + header |
+| `usb_c_presence` | no | **demoted** → `main/usb_c_presence.cpp`, `main/usb_c_presence_host.cpp` + header (`main` gained `usb` in `REQUIRES`) |
+| `adif` | **yes** — `storage_service` `PRIV_REQUIRES adif` | kept |
+| `qso_browse` | **yes** — `file_list` `PRIV_REQUIRES qso_browse` | kept |
+| `cts_time` | **yes** — `cts_ble` `REQUIRES cts_time` | kept |
+| `board_cardputer_adv` | **yes** — `external_rtc` `REQUIRES board_cardputer_adv` | kept |
+| `M5GFX` / `M5Unified` / `M5Cardputer` | **yes** — `ui` | kept (vendored; out of campaign scope) |
+
+**Known second-order gap, deliberately not closed here.** `adif`, `qso_browse`, `cts_time`, and `board_cardputer_adv` are forced *only* because `storage_service`, `file_list`, `cts_ble`, and `external_rtc` are themselves components — and nothing requires those four in turn. Demoting a holder would unlock demoting what it holds, cascading until almost everything outside the vendored trees collapsed into `main/`. That is a larger judgment call than a placement rule (`ui` and `board_cardputer_adv` in particular look like genuine boundaries worth keeping on cohesion grounds, not on `REQUIRES` grounds), so this pass stopped at the three unambiguous cases and left the cascade as an open question. The rule as written is satisfied by the current tree; it just does not by itself decide the second order.
 
 ## 6. Vendor boundary (`ft8_lib` first)
 
@@ -90,7 +112,7 @@ Restyle and rename only the unit you are already changing.
 | A | This RFC + `STYLE.md` + agent workflow tenant | Done (D10) |
 | B | Widen radio ops/capabilities; move power/SWR and QMX `if`s out of dispatcher/`main` | Done. ADV + QMX+ on desk. Pre-I5. |
 | C | Pin `ft8_lib`, wrappers, documented bump path; goldens gate the pin | Done. Submodule `components/ft8_lib/vendor` → `kb2slo/ft8_lib` @ `f211146`. Host goldens + `idf.py build` green. Field: QSO on ADV+QMX. Was B9. |
-| D | Station parse/serialize + `sscanf` date/time overlap; host round-trip | Done. `components/station`; `host_test_station`. Field: load/save/reboot on ADV. Was B3/B5. |
+| D | Station parse/serialize + `sscanf` date/time overlap; host round-trip | Done. `main/station.cpp` (was `components/station` until §5.1 demoted it 2026-09-04); `host_test_station`. Field: load/save/reboot on ADV. Was B3/B5. |
 | E | ADIF 10-min *logger* dedupe into `components/adif` (merge already shipped) | Done. Host: window, refresh, cap. Merge still ignores the window. Was B3 remainder. |
 | F | TA format (kill `tx_e2e` copy), decode sort, power hysteresis | Done. Shared `radio_ta_format`; host decode sort and battery hold. Field: QSO on ADV+QMX+. Was B3 remainder. |
 | G | Dead-code pass on each extracted unit | Done. D–F APIs all live; unused `#include <cstring>` dropped from Station. |

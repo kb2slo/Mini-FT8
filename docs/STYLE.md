@@ -70,6 +70,15 @@ Inheritance only when there is a closed set of variants that already exists or i
 
 No new logic in `main.cpp`. Call sites, wiring, and UI only. If it can be host-tested, it is not written in `main.cpp`.
 
+**Where an extracted module lives** (2026-09-04). Default is a plain `.cpp` / `.h` pair in `main/`, next to `gps.cpp`, `porta.cpp`, `decode_sort.h`, `radio_profile.h`. Promote it to its own `components/<name>/` directory only when the build actually forces it:
+
+- another component names it in `REQUIRES` / `PRIV_REQUIRES`, or
+- more than one `idf.py` project compiles it (today: the ADV tree and `sidekick/`).
+
+Host-testability does **not** force a component. `host_mock/Makefile` compiles sources by path and already carries `-I../main`, so a plain file in `main/` is host-tested exactly like a component is — `decode_sort.h`, `radio_profile.h`, and (since this rule landed) `station`, `band_config`, `usb_c_presence` all are.
+
+Being a component is a cost: a directory, a `CMakeLists.txt`, an `include/` level, and an entry in someone's `REQUIRES`. Pay it when the build demands it, not by default.
+
 Dead code is deleted in the unit you are extracting. No repo-wide unused-function hunt mixed with a feature.
 
 Fixes that belong inside an extract go with that extract (B5 overlapping `sscanf` with Station parse). Unrelated fixes stay out.

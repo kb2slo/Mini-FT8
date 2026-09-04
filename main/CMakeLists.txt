@@ -15,8 +15,13 @@ idf_component_register(
          "stream_uac.cpp"
          "dds_q15.cpp"
          "resample.cpp"
+         "station.cpp"
+         "station_save_queue.cpp"
+         "band_config.cpp"
+         "usb_c_presence.cpp"
+         "usb_c_presence_host.cpp"
     INCLUDE_DIRS "."
-    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib usb_host_uac usb_host_cdc_acm usb_c_presence storage_service external_rtc efuse station adif qso_browse file_list cts_time cts_ble band_config nano_flasher
+    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib usb_host_uac usb_host_cdc_acm usb storage_service external_rtc efuse adif qso_browse file_list cts_time cts_ble nano_flasher
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Werror)
 add_dependencies(${COMPONENT_LIB} minift8_build_identity)
