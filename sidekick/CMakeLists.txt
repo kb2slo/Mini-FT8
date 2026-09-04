@@ -9,30 +9,18 @@ cmake_minimum_required(VERSION 3.16)
 set(IDF_TARGET esp32c6)
 
 # Exact git SHA + dirty flag, not ESP-IDF's default `git describe` (tag-
-# relative, fuzzy). Matches the ADV's own tools/gen_build_identity.cmake
-# scheme — same repo, same commit, so "does the embedded sidekick.bin match
-# what's on the Nano" is an exact string comparison (RFC 0001 §5.2b). Must
-# be set before project() — that's the only hook ESP-IDF's build system
-# gives PROJECT_VER before it falls back to `git describe`.
-execute_process(
-    COMMAND git -C "${CMAKE_CURRENT_LIST_DIR}" rev-parse --short=7 HEAD
-    RESULT_VARIABLE _sidekick_sha_rv
-    OUTPUT_VARIABLE _sidekick_sha
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT _sidekick_sha_rv EQUAL 0 OR NOT _sidekick_sha)
-    set(_sidekick_sha "unknown")
-endif()
-execute_process(
-    COMMAND git -C "${CMAKE_CURRENT_LIST_DIR}" status --porcelain
-    RESULT_VARIABLE _sidekick_dirty_rv
-    OUTPUT_VARIABLE _sidekick_porcelain
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-set(PROJECT_VER "${_sidekick_sha}")
-if(_sidekick_dirty_rv EQUAL 0 AND _sidekick_porcelain)
+# relative, fuzzy) — via the same shared, override-aware logic
+# tools/gen_build_identity.cmake uses for the ADV, not a second copy that
+# can drift. Same repo, same commit, so "does the embedded sidekick.bin
+# match what's on the Nano" is an exact string comparison (RFC 0001 §5.2b/
+# §5.2c) — including under CI's MINIFT8_GIT_SHA pin, which a bare
+# `git rev-parse HEAD` here would not otherwise honor. Must be set before
+# project() — that's the only hook ESP-IDF's build system gives PROJECT_VER
+# before it falls back to `git describe`.
+set(GIT_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
+include("${CMAKE_CURRENT_LIST_DIR}/../tools/git_version.cmake")  # sets SHA, DIRTY
+set(PROJECT_VER "${SHA}")
+if(DIRTY)
     set(PROJECT_VER "${PROJECT_VER}-dirty")
 endif()
 

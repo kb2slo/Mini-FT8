@@ -101,6 +101,14 @@ jobs:
     needs: changes
     if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.firmware == 'true'
     runs-on: ubuntu-latest
+    env:
+      # Same pin the ADV firmware job uses, and for the same reason: CI
+      # checks out a synthesized merge commit for a PR, not
+      # github.event.pull_request.head.sha, so a bare `git rev-parse HEAD`
+      # in sidekick/CMakeLists.txt would disagree with the ADV's pinned
+      # version — defeating the exact-match comparison RFC 0001 §5.2c
+      # relies on. Must match the firmware job's value exactly.
+      MINIFT8_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -112,6 +120,7 @@ jobs:
           esp_idf_version: v5.5.1
           target: esp32c6
           path: sidekick
+          extra_docker_args: -e MINIFT8_GIT_SHA=${{ env.MINIFT8_GIT_SHA }}
           command: idf.py build
 
       - name: Stage sidekick outputs
