@@ -224,6 +224,14 @@ done:
     return result;
 }
 
+bool nano_flasher_embedded_version(char* out, size_t out_size) {
+    if (!out || out_size < kFieldLen + 1) {
+        return false;
+    }
+    local_version(out);
+    return true;
+}
+
 #else  // !NANO_FLASHER_HAVE_FIRMWARE
 
 esp_err_t nano_flasher_flash_embedded(uint16_t /*vid*/, uint16_t /*pid*/,
@@ -234,6 +242,10 @@ esp_err_t nano_flasher_flash_embedded(uint16_t /*vid*/, uint16_t /*pid*/,
     }
     ESP_LOGE(TAG, "No Nano firmware staged — run tools/stage_nano_firmware.sh before building");
     return ESP_ERR_NOT_FOUND;
+}
+
+bool nano_flasher_embedded_version(char* /*out*/, size_t /*out_size*/) {
+    return false;
 }
 
 #endif

@@ -7,6 +7,7 @@ idf_component_register(
          "audio_source.cpp"
          "core_api.cpp"
          "gps.cpp"
+         "porta.cpp"
          "radio_control.cpp"
          "radio_control_qmx.cpp"
          "radio_control_qdx.cpp"

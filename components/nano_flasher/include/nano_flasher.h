@@ -15,6 +15,14 @@ extern "C" {
 // configured. See RFC 0001 §5.1.
 bool nano_flasher_has_firmware(void);
 
+// Copies the embedded sidekick build's own version string (up to 32 bytes
+// plus NUL) into `out` — the same value nano_flasher_flash_embedded()
+// compares a connected Nano against, and what a PORTA companion beacon
+// (RFC 0001 §5.2c) should be compared against too, without needing a USB-C
+// session. False if no firmware is embedded (nano_flasher_has_firmware()
+// false) or `out_size` is too small; `out` is left empty either way.
+bool nano_flasher_embedded_version(char* out, size_t out_size);
+
 typedef enum {
     NANO_FLASHER_STATUS_UNKNOWN = 0,    // connect/read itself failed
     NANO_FLASHER_STATUS_NOT_INSTALLED,  // esp_app_desc project_name != "sidekick"

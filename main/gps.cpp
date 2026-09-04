@@ -26,6 +26,7 @@ const char* kTag = "GPS";
 
 gps_state_t s_state = {};
 gps_pins_t s_pins = {kGpsUartNum, kGpsRxPin, kGpsTxPin, kGpsBaudFast, true, false};
+bool s_owns_uart = false;
 std::string s_line_buffer;
 uint32_t s_probe_start_ms = 0;
 uint32_t s_probe_rx_bytes = 0;
@@ -295,6 +296,7 @@ void gps_start(const gps_pins_t& pins) {
     return;
   }
 
+  s_owns_uart = true;
   s_state = {};
   s_state.running = true;
   s_state.active_baud = preload_baud;
@@ -308,11 +310,39 @@ void gps_start(const gps_pins_t& pins) {
            s_pins.auto_baud ? 1 : 0, s_pins.casic_baud_recover ? 1 : 0);
 }
 
+void gps_start_fed(int active_baud) {
+  if (s_state.running) return;
+
+  s_owns_uart = false;
+  s_pins.auto_baud = false;  // caller (porta.cpp) already resolved baud
+  s_state = {};
+  s_state.running = true;
+  s_state.active_baud = normalize_baud(active_baud);
+  s_state.baud_locked = false;
+  s_reported_good_baud = s_state.active_baud;
+  s_pending_baud_update = false;
+  s_pending_baud_value = 0;
+  s_line_buffer.clear();
+  ESP_LOGI(kTag, "GPS started (fed) baud=%d", s_state.active_baud);
+}
+
+void gps_ingest(const uint8_t* data, int len) {
+  if (!s_state.running) return;
+  ingest_uart_bytes(data, len);
+}
+
+bool gps_is_valid_nmea_line(const std::string& line) {
+  return nmea_checksum_ok(line, nullptr);
+}
+
 void gps_stop() {
   if (!s_state.running) return;
-  uart_flush_input(s_pins.uart);
-  uart_driver_delete(s_pins.uart);
+  if (s_owns_uart) {
+    uart_flush_input(s_pins.uart);
+    uart_driver_delete(s_pins.uart);
+  }
   s_state = {};
+  s_owns_uart = false;
   s_pending_baud_update = false;
   s_pending_baud_value = 0;
   s_line_buffer.clear();
@@ -325,18 +355,21 @@ void gps_stop() {
 void gps_tick() {
   if (!s_state.running) return;
 
-  uint8_t buf[256];
-  int len = uart_read_bytes(s_pins.uart, buf, sizeof(buf), 0);
-  if (len > 0) ingest_uart_bytes(buf, len);
+  if (s_owns_uart) {
+    uint8_t buf[256];
+    int len = uart_read_bytes(s_pins.uart, buf, sizeof(buf), 0);
+    if (len > 0) ingest_uart_bytes(buf, len);
 
-  if (s_pins.auto_baud && !s_state.baud_locked) {
-    uint32_t now = now_ms();
-    if (s_probe_rx_bytes > 0 &&
-        (now - s_probe_start_ms) >= kProbeWindowMs &&
-        !s_probe_decodable) {
-      switch_baud_internal(other_baud(s_state.active_baud));
+    if (s_pins.auto_baud && !s_state.baud_locked) {
+      uint32_t now = now_ms();
+      if (s_probe_rx_bytes > 0 &&
+          (now - s_probe_start_ms) >= kProbeWindowMs &&
+          !s_probe_decodable) {
+        switch_baud_internal(other_baud(s_state.active_baud));
+      }
     }
   }
+  // Fed mode: bytes arrive via gps_ingest() from porta.cpp instead.
 }
 
 gps_state_t gps_get_state() {

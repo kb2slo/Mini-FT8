@@ -66,6 +66,7 @@ extern "C" {
 #include "radio_ta_format.h"
 #include "decode_sort.h"
 #include "gps.h"
+#include "porta.h"
 #include "external_rtc.h"
 
 #include "storage_service.h"
@@ -662,6 +663,10 @@ static bool storage_reject_active_log_user_mutation(const std::string& name_or_p
 }
 
 static int menu_page = 0;
+// Perf screen (UIMode::PERF) sub-page: 0 = performance stats, 1 = on-screen
+// debug log (g_debug_lines). Reached via 'p'/'P' again or '.' from stats;
+// ';' from the log returns to stats. See UIMode::PERF in the key handler.
+static int perf_page = 0;
 static int menu_edit_idx = -1;
 // Tracks the protocol mode that has been saved to Station.txt and will take
 // effect on next reboot.  Initialised from g_protocol after load_station_data().
@@ -1567,7 +1572,13 @@ void apply_radio_profile_binding() {
   g_gps_baud = normalize_gps_baud_value(g_gps_baud);
   const RadioProfile& profile = radio_profile_get(g_radio);
 
-  gps_start(gps_pins_for_current_source());
+  if (g_gnss_lora_enabled) {
+    gps_start(gps_pins_for_current_source());
+  } else {
+    // PORTA is either/or with a companion Nano (RFC 0001 §5.2); arbitrate
+    // by listening rather than assuming GPS.
+    porta_start(g_gps_baud);
+  }
   audio_source_set_backend(profile.audio_backend);
   radio_control_set_backend(profile.radio_backend);
   if (audio_source_is_streaming() && prev_audio != profile.audio_backend) {
@@ -1700,7 +1711,11 @@ static void gps_runtime_tick() {
   static bool s_gps_grid_logged = false;
   static int s_last_time_sync_hour_key = -1;
 
-  gps_tick();
+  if (g_gnss_lora_enabled) {
+    gps_tick();
+  } else {
+    porta_tick();
+  }
 
   int detected_baud = 0;
   if (gps_take_baud_update(&detected_baud)) {
@@ -4742,6 +4757,7 @@ static void enter_mode(UIMode new_mode) {
       draw_gps_view(true);
       break;
     case UIMode::PERF:
+      perf_page = 0;
       draw_perf_view(true);
       break;
     case UIMode::BT:
@@ -4883,7 +4899,11 @@ static void redraw_after_usb_toast() {
       draw_gps_view(true);
       break;
     case UIMode::PERF:
-      draw_perf_view(true);
+      if (perf_page == 1) {
+        ui_draw_list(g_debug_lines, debug_page, -1);
+      } else {
+        draw_perf_view(true);
+      }
       break;
     case UIMode::BT:
       draw_bt_view(true);
@@ -5093,7 +5113,22 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       debug_update_app_core0_stack_hud(true);
       perf_monitor_sample(now_ticks);
       if (ui_mode == UIMode::PERF) {
-        draw_perf_view(false);
+        if (perf_page == 0) {
+          draw_perf_view(false);
+        } else {
+          // Log page: debug_log_line() already re-points debug_page at
+          // whatever page the newest line landed on (auto-follow, like
+          // `tail -f`) even while this screen is up, but nothing was
+          // redrawing to match — found live, screen only updated on
+          // re-entry. Redraw only when something actually changed.
+          static size_t s_log_last_size = 0;
+          static int s_log_last_page = -1;
+          if (g_debug_lines.size() != s_log_last_size || debug_page != s_log_last_page) {
+            s_log_last_size = g_debug_lines.size();
+            s_log_last_page = debug_page;
+            ui_draw_list(g_debug_lines, debug_page, -1);
+          }
+        }
       }
       low_batt_policy_tick();
     }
@@ -5409,14 +5444,53 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       else if (c == 's' || c == 'S') { cancel_status_edit(); enter_mode(ui_mode == UIMode::STATUS ? UIMode::RX : UIMode::STATUS); switched = true; }
       else if (c == 'g' || c == 'G') { cancel_status_edit(); enter_mode(ui_mode == UIMode::GPS ? UIMode::RX : UIMode::GPS); switched = true; }
       else if (c == 'h' || c == 'H') { cancel_status_edit(); enter_mode(ui_mode == UIMode::BT ? UIMode::RX : UIMode::BT); switched = true; }
-      else if (c == 'p' || c == 'P') { cancel_status_edit(); enter_mode(ui_mode == UIMode::PERF ? UIMode::RX : UIMode::PERF); switched = true; }
+      else if (c == 'p' || c == 'P') {
+        cancel_status_edit();
+        // Perf screen doubles as the log viewer's second page (perf_page):
+        // 'p' cycles RX -> stats -> log -> RX, matching how 'n'/'o' already
+        // cycle through MENU's own pages elsewhere in this block.
+        if (ui_mode == UIMode::PERF) {
+          if (perf_page == 0) {
+            perf_page = 1;
+            debug_page = g_debug_lines.empty() ? 0 : (int)((g_debug_lines.size() - 1) / 6);
+            ui_draw_list(g_debug_lines, debug_page, -1);
+          } else {
+            enter_mode(UIMode::RX);
+          }
+        } else {
+          enter_mode(UIMode::PERF);
+        }
+        switched = true;
+      }
     }
 
   if (!switched && c) {
     // Mode-specific handling
     switch (ui_mode) {
       case UIMode::GPS: break;
-      case UIMode::PERF: break;
+      case UIMode::PERF: {
+        // Perf screen's second page: the on-screen debug log (g_debug_lines,
+        // previously write-only — nothing drew it before this). '.' (this
+        // codebase's "next/down") from the stats page reaches it; ';' ("up")
+        // from the log page returns to stats. Top-level 'p'/'P' reaches the
+        // log page too (see the mode-switch-keys block above).
+        if (perf_page == 0 && c == '.') {
+          perf_page = 1;
+          debug_page = g_debug_lines.empty() ? 0 : (int)((g_debug_lines.size() - 1) / 6);
+          ui_draw_list(g_debug_lines, debug_page, -1);
+        } else if (perf_page == 1) {
+          if (c == ';') {
+            perf_page = 0;
+            draw_perf_view(true);
+          } else if (c == '.') {
+            if ((debug_page + 1) * 6 < (int)g_debug_lines.size()) {
+              debug_page++;
+              ui_draw_list(g_debug_lines, debug_page, -1);
+            }
+          }
+        }
+        break;
+      }
       case UIMode::BT: {
         if (c == '1') {
           cts_iphone_start_from_ui();
@@ -5983,6 +6057,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 enter_mode(UIMode::BAND);
               } else if (c == '4') {
                 gps_stop();
+                porta_stop();
                 g_gnss_lora_enabled = !g_gnss_lora_enabled;
                 apply_debug_uart_pin_policy();
                 save_station_data();
