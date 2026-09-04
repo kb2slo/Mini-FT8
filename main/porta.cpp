@@ -169,15 +169,17 @@ void try_complete_companion_frame() {
   lock_role(PortaRole::kCompanion);
   if (s_companion_version_matches) {
     ESP_LOGI(kTag, "Companion version matches: %s", s_companion_version);
-    // Split across rows — see the width note in rearm_unknown().
-    debug_log_line_public("PORTA: Sidekick OK");
-    debug_log_line_public(s_companion_version);
+    // One line, not two — g_debug_lines' viewer always jumps to whichever
+    // page the newest line landed on (debug_log_line()'s own behavior), so
+    // two related lines can straddle a page boundary and only the second
+    // one is ever seen. Bench-confirmed 2026-09-04. Keep row-budget related
+    // messages to a single debug_log_line() call each.
+    debug_log_line_public(std::string("OK ") + s_companion_version);
   } else {
     ESP_LOGW(kTag, "Companion version MISMATCH: remote=%s local=%s",
              s_companion_version, local_version);
-    debug_log_line_public("PORTA: Sidekick STALE");
-    debug_log_line_public(std::string("R:") + s_companion_version);
-    debug_log_line_public(std::string("L:") + local_version);
+    debug_log_line_public(std::string("X R:") + s_companion_version);
+    debug_log_line_public(std::string("X L:") + local_version);
   }
 }
 
