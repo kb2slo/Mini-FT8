@@ -152,13 +152,9 @@ OffsetSrc map_in(CoreOffsetSrc s) {
 }
 
 CoreRadioType map_out(RadioType r) {
-  if (r == RadioType::KH1_USBC || r == RadioType::KH1_MIC) {
-    return CoreRadioType::KH1;
-  }
   return (r == RadioType::QDX) ? CoreRadioType::QDX : CoreRadioType::QMX;
 }
 RadioType map_in(CoreRadioType r) {
-  if (r == CoreRadioType::KH1) return RadioType::KH1;
   return (r == CoreRadioType::QDX) ? RadioType::QDX : RadioType::QMX;
 }
 
@@ -464,9 +460,9 @@ bool core_cmd_set_band(int band_idx) {
   if (band_idx < 0 || band_idx >= (int)g_bands.size()) return false;
   if (!apply_config_write([&]{ g_band_sel = band_idx; })) return false;
   // The Cardputer defers the CAT push to STATUS exit because S->3 is a
-  // tap-cycle through bands (each press would otherwise click the KH1
-  // antenna relay). External clients pick a band in one operation, so
-  // intentional change — so commit to the radio immediately.
+  // tap-cycle through bands (avoid pushing CAT on every press). External
+  // clients pick a band in one operation — an intentional, one-shot
+  // change — so commit to the radio immediately.
   sync_radio_to_current_band("core set_band");
   return true;
 }

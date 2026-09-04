@@ -28,6 +28,13 @@ struct UsbCPresenceEvent {
 static constexpr uint16_t kUsbCQmxVid = 0x0483;
 static constexpr uint16_t kUsbCQmxPid = 0xA34C;
 static constexpr uint16_t kUsbCEspressifVid = 0x303A;
+// Fixed USB Serial/JTAG descriptor PID shared by ESP32-C6 (and other
+// USB-Serial/JTAG-capable Espressif chips left at default config) — not
+// unique to the Nano C6, but narrower than VID alone (other Espressif VID
+// devices, e.g. an AtomS3 running its own TinyUSB firmware with a custom
+// PID, don't match this). Still a heuristic, not proof: a genuine identity
+// check needs the ROM bootloader's own chip-ID (see nano_flasher).
+static constexpr uint16_t kUsbCNanoJtagPid = 0x1001;
 
 UsbCKind usb_c_classify(uint16_t vid, uint16_t pid);
 void usb_c_format_attach(const UsbCDevice& dev, char* title, size_t title_n, char* body, size_t body_n);

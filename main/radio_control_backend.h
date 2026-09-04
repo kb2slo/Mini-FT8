@@ -28,7 +28,3 @@ typedef struct {
 
 const radio_control_ops_t* radio_control_qmx_get_ops(void);
 const radio_control_ops_t* radio_control_qdx_get_ops(void);
-const radio_control_ops_t* radio_control_kh1_get_ops(void);
-void radio_control_kh1_set_enabled(bool enabled);
-bool radio_control_kh1_is_enabled(void);
-esp_err_t radio_control_kh1_diag_test(char test_key, int freq_hz, int offset_hz, bool* out_fa_sent);

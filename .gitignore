@@ -49,8 +49,15 @@ Testing/
 *.diff
 *.patch
 
-# nano_companion: separate idf.py project (RFC 0001 §5.1)
-nano_companion/build/
-nano_companion/managed_components/
-nano_companion/sdkconfig
-nano_companion/sdkconfig.old
+# sidekick: separate idf.py project (RFC 0001 §5.1)
+sidekick/build/
+sidekick/managed_components/
+sidekick/sdkconfig
+sidekick/sdkconfig.old
+
+# Per-device full-flash backups of a physical Nano's factory state
+# (tools/restore_nano_stock.sh). Vendor firmware (M5Stack), not ours to
+# redistribute, and a snapshot of one specific unit besides — already caught
+# by the blanket *.bin rule above, called out explicitly so the exclusion is
+# a decision, not an accident.
+sidekick/stock_backup/

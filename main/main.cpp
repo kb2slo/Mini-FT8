@@ -625,7 +625,6 @@ int g_time_osr = 2;
 int g_freq_osr = 1;
 OffsetSrc g_offset_src = OffsetSrc::RANDOM;  // visible to core_api.cpp
 RadioType g_radio = RadioType::QMX;          // visible to core_api.cpp
-static bool g_manual_cat_connected = false;
 static int g_gps_baud = 115200;
 static bool g_gnss_lora_enabled = false;
 static constexpr size_t kIgnorePrefixTextMaxLen = 64;
@@ -1122,7 +1121,7 @@ static void poll_uart_inject_keys() {
   // Read directly from the console UART FIFO — no driver needed.
   // sdkconfig configures ESP console on UART0 peripheral with custom
   // pins TX=G4, RX=G5 (see CONFIG_ESP_CONSOLE_UART_CUSTOM_NUM_0
-  // and CONFIG_ESP_CONSOLE_UART_TX_GPIO / _RX_GPIO). KH1 CAT uses
+  // and CONFIG_ESP_CONSOLE_UART_TX_GPIO / _RX_GPIO). PORTA GPS uses
   // UART1 peripheral on GPIO1 — no conflict.
   uart_dev_t *hw = UART_LL_GET_HW(0);
   while (true) {
@@ -1553,10 +1552,10 @@ static const char* offset_name(OffsetSrc o) {
 
 static bool radio_type_uses_display_only(RadioType r) {
   // Always use display-only board init (upstream design): audio input is owned
-  // exclusively by the selected backend (UAC for QMX/KH1-USBC, native I2S mic
-  // for KH1-MIC), so general M5Unified startup must not claim speaker/mic/audio
-  // resources. The keyboard still works because beginDisplayOnly() initializes
-  // it via Keyboard.begin() (auto-detects board type) — see
+  // exclusively by the selected radio backend's UAC stream, so general
+  // M5Unified startup must not claim speaker/mic/audio resources. The
+  // keyboard still works because beginDisplayOnly() initializes it via
+  // Keyboard.begin() (auto-detects board type) — see
   // components/M5Cardputer/src/M5Cardputer.cpp.
   (void)r;
   return true;
@@ -1568,19 +1567,7 @@ void apply_radio_profile_binding() {
   g_gps_baud = normalize_gps_baud_value(g_gps_baud);
   const RadioProfile& profile = radio_profile_get(g_radio);
 
-  // STATUS-2 CAT latch for radios with needs_manual_connect. Leaving those
-  // radios must drop it, or the next pick looks already linked.
-  if (profile.needs_manual_connect) {
-    radio_control_kh1_set_enabled(g_manual_cat_connected);
-  } else {
-    g_manual_cat_connected = false;
-    radio_control_kh1_set_enabled(false);
-  }
-  if (radio_profile_porta_gps_should_run(g_radio, g_manual_cat_connected, g_gnss_lora_enabled)) {
-    gps_start(gps_pins_for_current_source());
-  } else {
-    gps_stop();
-  }
+  gps_start(gps_pins_for_current_source());
   audio_source_set_backend(profile.audio_backend);
   radio_control_set_backend(profile.radio_backend);
   if (audio_source_is_streaming() && prev_audio != profile.audio_backend) {
@@ -1595,12 +1582,6 @@ void apply_radio_profile_binding() {
 }
 
 static bool notify_radio_control_audio_start_if_allowed(const char* reason) {
-  if (radio_profile_needs_manual_connect(g_radio) && !g_manual_cat_connected) {
-    ESP_LOGI(TAG, "Skip CAT audio start for %s: not connected",
-             radio_profile_name(g_radio));
-    return false;
-  }
-
   esp_err_t rc = radio_control_on_audio_start();
   const bool ok = (rc == ESP_OK);
   ESP_LOGI(TAG, "CAT audio start %s radio=%s reason=%s rc=%d",
@@ -1654,59 +1635,6 @@ static bool start_rx_audio_for_current_radio(const char* reason, bool notify_cat
 
   if (notify_cat_if_allowed) {
     notify_radio_control_audio_start_if_allowed(reason);
-  }
-  return true;
-}
-
-static bool handle_kh1_diag_key(char c) {
-  char key = (char)std::tolower((unsigned char)c);
-  if (key != 'u' && key != 'i' && key != 'j' && key != 'k' && key != 'l') {
-    return false;
-  }
-
-  if (!radio_profile_shares_porta_uart(g_radio) || !radio_control_kh1_is_enabled() || !radio_control_ready()) {
-    ESP_LOGW(TAG, "KH1 CAT diagnostic %c skipped: not ready", key);
-    debug_log_line("KH1 CAT not ready");
-    return true;
-  }
-
-  int freq_hz = (int)(g_bands[g_band_sel].freq * 1000.0f);
-  int rx_fa = (freq_hz + 5) / 10;
-  int tx_fa = rx_fa + ((g_offset_hz + 5) / 10);
-
-  char seq[128];
-  switch (key) {
-    case 'u':
-      snprintf(seq, sizeof(seq), "u FA%07d if changed; wait; repeat;", tx_fa);
-      break;
-    case 'i':
-      snprintf(seq, sizeof(seq), "i HK1; wait; HK0;");
-      break;
-    case 'j':
-      snprintf(seq, sizeof(seq), "j FA%07d if changed; HK1; wait; HK0; FA%07d if changed;", tx_fa, rx_fa);
-      break;
-    case 'k':
-      snprintf(seq, sizeof(seq), "k FA%07d if changed; HK1; FO00; wait; HK0; FA%07d if changed; FO99;", tx_fa, rx_fa);
-      break;
-    case 'l':
-      snprintf(seq, sizeof(seq), "l FA%07d if changed; HK1; 79xFO; HK0; FA%07d if changed; FO99;", tx_fa, rx_fa);
-      break;
-    default:
-      return true;
-  }
-
-  ESP_LOGI(TAG, "KH1 diag %s", seq);
-  debug_log_line(std::string("KH1 diag ") + seq);
-  bool fa_sent = false;
-  esp_err_t err = radio_control_kh1_diag_test(key, freq_hz, g_offset_hz, &fa_sent);
-  if (err == ESP_OK) {
-    if (key == 'u') {
-      debug_log_line(fa_sent ? "KH1 diag FA sent" : "KH1 diag FA skipped");
-    }
-    debug_log_line("KH1 diag OK");
-  } else {
-    ESP_LOGW(TAG, "KH1 diagnostic %c failed: %s", key, esp_err_to_name(err));
-    debug_log_line(std::string("KH1 diag fail ") + esp_err_to_name(err));
   }
   return true;
 }
@@ -1771,8 +1699,6 @@ static void gps_runtime_tick() {
   static bool s_time_synced_once = false;
   static bool s_gps_grid_logged = false;
   static int s_last_time_sync_hour_key = -1;
-
-  if (!radio_profile_porta_gps_should_run(g_radio, g_manual_cat_connected, g_gnss_lora_enabled)) return;
 
   gps_tick();
 
@@ -2233,8 +2159,7 @@ static void enter_charge_mode() {
   ui_draw_waterfall();
   redraw_countdown_now();
   if (was_streaming) {
-    const bool defer_cat = radio_profile_defer_cat_on_audio_start(g_radio);
-    start_rx_audio_for_current_radio("charge mode exit", !defer_cat);
+    start_rx_audio_for_current_radio("charge mode exit", true);
     g_decode_enabled = true;
   }
   draw_menu_view();
@@ -2591,9 +2516,7 @@ bool sync_radio_to_current_band(const char* reason) {
 // don't have to press anything after plugging in QMX. Called from the main
 // loop every iteration (before early-exit branches). Fires at most once
 // per CDC open — cleared on successful sync, retries on later iterations
-// until CAT becomes ready and we're not TXing. For KH1 (UART CAT, no USB
-// enumeration event), this flag is never set; the STATUS-exit auto-sync
-// and S->3 handler cover KH1.
+// until CAT becomes ready and we're not TXing.
 static void consume_cdc_initial_sync() {
   if (!g_cdc_initial_sync_pending) return;
   if (sync_radio_to_current_band("initial QMX connect")) {
@@ -3748,22 +3671,6 @@ static void draw_menu_view() {
 static std::string status_sync_line() {
   const bool streaming = audio_source_is_streaming();
   const RadioType radio = radio_profile_canonical(g_radio);
-  if (radio_profile_needs_manual_connect(radio)) {
-    const char* name = radio_profile_name(radio);
-    if (!g_manual_cat_connected) {
-      return std::string("Connect ") + name;
-    }
-    const bool cat_ready = radio_control_ready();
-    if (radio_profile_defer_cat_on_audio_start(radio) && !streaming) {
-      const std::string rx_status = audio_source_get_status_string();
-      if (rx_status == "No 48k UAC mic format") {
-        return head_trim(rx_status, 19);
-      }
-    }
-    if (cat_ready && streaming) return std::string("Sync ") + name + "(RX+TX)";
-    if (cat_ready && !streaming) return std::string("Sync ") + name + "(TX)";
-    return std::string("Connect ") + name;
-  }
   if (streaming) return std::string("Sync to ") + radio_profile_name(radio);
   return std::string("Connect to ") + radio_profile_name(radio);
 }
@@ -3883,11 +3790,22 @@ static void nano_flash_start_from_ui() {
 
   g_nano_flash_in_progress = true;
   debug_log_line("Nano: flashing...");
-  ui_draw_message_dialog("Nano", "Flashing...");
+  ui_draw_message_dialog("Sidekick", "Flashing...");
   draw_bt_view();
 
   const uint16_t vid = g_green_nano_vid;
   const uint16_t pid = g_green_nano_pid;
+  // Tearing the USB host down and back up (below) makes it re-enumerate the
+  // very same physical Nano, which queues a synthetic Attach event for a
+  // device that never moved. Left alone, usb_c_toast_tick() drains that
+  // event on the next main-loop tick and draws an unconditional "Green Nano
+  // attached" dialog right over our result dialog — that's B14, the final
+  // "Flash OK"/"Up to date" screen never being visible. Suppress presence
+  // notifications for the whole host-disruptive window; re-enabling also
+  // resets the event queue, so nothing queued during our own reinstall
+  // leaks out afterward.
+  usb_c_presence_set_notify(false);
+
   // Unlike CTS (which parks the host and hands the PHY to BLE), nano-flash
   // still needs a live USB host + CDC-ACM to reach the Nano. Park first to
   // drop any QMX/UAC state cleanly, then explicitly bring the host back up
@@ -3898,6 +3816,7 @@ static void nano_flash_start_from_ui() {
   // afterward and finding it still on stock nanoc6_factorytest firmware.)
   if (uac_ensure_host_uninstalled() != ESP_OK) {
     debug_log_line("Nano flash: USB host busy");
+    usb_c_presence_set_notify(true);
     g_nano_flash_in_progress = false;
     return;
   }
@@ -3905,16 +3824,41 @@ static void nano_flash_start_from_ui() {
   if (uac_host_ensure_started() != ESP_OK) {
     debug_log_line("Nano flash: host restart fail");
     restore_usb_host_after_nano_flash();
+    usb_c_presence_set_notify(true);
     g_nano_flash_in_progress = false;
     return;
   }
   usb_c_presence_yield_device();  // let CDC-ACM claim the Nano, same as UAC does for QMX
 
-  const esp_err_t err = nano_flasher_flash_embedded(vid, pid);
+  nano_flasher_status_t status = NANO_FLASHER_STATUS_UNKNOWN;
+  char remote_version[33] = {};
+  char diag[48] = {};
+  const esp_err_t err =
+      nano_flasher_flash_embedded(vid, pid, &status, remote_version, sizeof(remote_version), diag, sizeof(diag));
   restore_usb_host_after_nano_flash();
+  usb_c_presence_set_notify(true);
   g_nano_flash_in_progress = false;
-  debug_log_line(err == ESP_OK ? "Nano: flash OK" : "Nano: flash FAILED");
-  ui_draw_message_dialog("Nano", err == ESP_OK ? "Flash OK" : "Flash FAILED");
+
+  // Temporary bench-debug step (B14, no G4/G5 UART capture available):
+  // show what the read-back check actually found before the final result,
+  // since the ADV's own USB-C is busy being host during this whole call and
+  // its usual console output isn't reachable. Remove once that's resolved.
+  if (diag[0] != '\0') {
+    debug_log_line(std::string("Sidekick check: ") + diag);
+    ui_draw_message_dialog("Sidekick check", diag);
+    vTaskDelay(pdMS_TO_TICKS(2500));
+  }
+
+  const char* body = "Flash FAILED";
+  if (err == ESP_OK) {
+    body = (status == NANO_FLASHER_STATUS_UP_TO_DATE) ? "Up to date" : "Flash OK";
+  }
+  debug_log_line(err == ESP_OK
+                      ? (status == NANO_FLASHER_STATUS_UP_TO_DATE
+                             ? std::string("Sidekick up to date (") + remote_version + ")"
+                             : std::string("Sidekick flash OK"))
+                      : std::string("Sidekick flash FAILED"));
+  ui_draw_message_dialog("Sidekick", body);
   // Let the existing B18 toast-expiry timer clear this and redraw BT view
   // after 2s (usb_c_toast_tick() -> redraw_after_usb_toast(), already run
   // every main-loop tick) instead of overwriting it immediately with a
@@ -3931,7 +3875,7 @@ static void draw_bt_view(bool force_redraw) {
   char name[20];
   std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
   lines.push_back(name);
-  lines.push_back(g_green_nano_present ? "2: Flash Nano" : "Time only, no grid");
+  lines.push_back(g_green_nano_present ? "2: Flash Sidekick" : "Time only, no grid");
   {
     char lbuf[24];
     const unsigned l_k =
@@ -4756,8 +4700,7 @@ static void enter_mode(UIMode new_mode) {
     // changes (band advance via S->3, etc.) without needing a manual
     // "Sync to QMX" button press. Idempotent — safe even if the same
     // sync already fired (e.g. from S->3 in-menu push, or from the
-    // initial-connect path for QMX). For KH1 this is the primary sync
-    // path (UART CAT has no discrete "first connect" event).
+    // initial-connect path for QMX).
     sync_radio_to_current_band("STATUS exit");
   }
   ui_mode = new_mode;
@@ -4894,8 +4837,7 @@ static void exit_msc_mode() {
 }
 
 // Perform the STATUS -> '2' action: start the UAC audio source that feeds
-// the QMX (or KH1) into the decoder, and sync CAT to the currently selected
-// band.
+// the radio into the decoder, and sync CAT to the currently selected band.
 static void begin_usb_host_mode() {
   // The status-view feedback only makes sense on the STATUS page.
   const bool on_status_page = (ui_mode == UIMode::STATUS);
@@ -4903,14 +4845,9 @@ static void begin_usb_host_mode() {
     status_edit_idx = 1;
     draw_status_view();
   }
-  if (radio_profile_needs_manual_connect(g_radio) && !g_manual_cat_connected) {
-    g_manual_cat_connected = true;
-    apply_radio_profile_binding();
-  }
-  const bool defer_cat = radio_profile_defer_cat_on_audio_start(g_radio);
   if (!audio_source_is_streaming()) {
-    start_rx_audio_for_current_radio("status key 2", !defer_cat);
-  } else if (!defer_cat) {
+    start_rx_audio_for_current_radio("status key 2", true);
+  } else {
     notify_radio_control_audio_start_if_allowed("status key 2");
   }
   int freq_hz = (int)(g_bands[g_band_sel].freq * 1000.0f);
@@ -4986,9 +4923,6 @@ static void usb_c_toast_tick() {
     ui_draw_message_dialog(title, body);
     debug_log_line(title);
     showed = true;
-    if (ui_mode == UIMode::BT) {
-      draw_bt_view(true);
-    }
   }
   const int64_t now = rtc_now_ms();
   if (showed) {
@@ -5288,7 +5222,14 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         debug_log_line("CTS: time set");
       }
     }
-    if (cts_ble_ui_dirty() && ui_mode == UIMode::BT) {
+    // Don't consume/redraw while a toast or result dialog is up (B18 attach,
+    // Sidekick flash result, ...) — g_usb_toast_until_ms is the same "is
+    // something showing right now" signal usb_c_toast_tick() already uses.
+    // Check it *before* calling cts_ble_ui_dirty() (which clears the flag on
+    // read) so a suppressed update isn't lost, just deferred to the next
+    // tick once the toast's own expiry redraw (redraw_after_usb_toast())
+    // has run.
+    if (g_usb_toast_until_ms == 0 && cts_ble_ui_dirty() && ui_mode == UIMode::BT) {
       draw_bt_view();
     }
 
@@ -5373,11 +5314,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
   static std::string last_status_sync_text;
   int cur_status_sync_sig = audio_source_is_streaming() ? 1 : 0;
   cur_status_sync_sig |= ((int)radio_profile_canonical(g_radio) << 4);
-  if (radio_profile_needs_manual_connect(g_radio)) {
-    cur_status_sync_sig |= 2;
-    if (g_manual_cat_connected) cur_status_sync_sig |= 8;
-    if (g_manual_cat_connected && radio_control_ready()) cur_status_sync_sig |= 4;
-  }
   std::string cur_status_sync_text;
   if (ui_mode == UIMode::STATUS) {
     cur_status_sync_text = status_sync_line();
@@ -5621,8 +5557,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         }
         case UIMode::STATUS: {
         if (status_edit_idx == -1) {
-          if (handle_kh1_diag_key(c)) { draw_status_view(); }
-          else if (c == '1') {
+          if (c == '1') {
             if (board_power_halted()) {
               g_status_beacon_temp = BeaconMode::OFF;
             } else {
@@ -5643,8 +5578,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
             //   - QMX initial-connect (consume_cdc_initial_sync reads
             //     current g_band_sel at sync time, so band edits made
             //     while QMX was still enumerating get picked up).
-            // Why deferred: KH1 band change engages a physical antenna
-            // relay, and we don't want to click it on every S->3 press.
+            // Why deferred: avoid pushing CAT on every S->3 press.
           }
               else if (c == '4') {
                 g_tune = !g_tune;

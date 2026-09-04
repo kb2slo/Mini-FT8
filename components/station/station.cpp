@@ -105,10 +105,6 @@ int parse_radio_value(const char* raw)
     long as_int = strtol(raw, &end, 10);
     if (end != raw) {
         switch (static_cast<int>(as_int)) {
-            case 3:
-                return 3;
-            case 4:
-                return 4;
             case 5:
                 return 5;
             case 2:
@@ -126,12 +122,6 @@ int parse_radio_value(const char* raw)
         token.push_back(static_cast<char>(std::toupper(ch)));
     }
 
-    if (token == "KH1" || token == "KH1-USBC" || token == "KH1_USBC" || token == "KH1USB") {
-        return 3;
-    }
-    if (token == "KH1-MIC" || token == "KH1_MIC" || token == "KH1MIC") {
-        return 4;
-    }
     if (token == "QDX") {
         return 5;
     }

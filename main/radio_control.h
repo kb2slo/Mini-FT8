@@ -12,8 +12,7 @@ extern "C" {
 
 typedef enum {
     RADIO_CONTROL_QMX = 0,
-    RADIO_CONTROL_KH1_CAT = 1,
-    RADIO_CONTROL_QDX = 2,
+    RADIO_CONTROL_QDX = 1,
 } radio_control_backend_t;
 
 typedef struct {

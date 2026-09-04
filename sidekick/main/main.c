@@ -5,11 +5,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char *TAG = "nano_companion";
+static const char *TAG = "sidekick";
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Mini-FT8 Nano companion booting (IDF %s)", esp_get_idf_version());
+    ESP_LOGI(TAG, "Mini-FT8 sidekick booting (IDF %s)", esp_get_idf_version());
 
     uint32_t heartbeat = 0;
     while (1) {

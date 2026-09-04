@@ -7,11 +7,11 @@
 #
 # Capture a backup once, before ever field-flashing a given Nano, with:
 #   esptool.py --chip esp32c6 -p PORT -b 460800 read_flash 0x0 0x400000 \
-#       nano_companion/stock_backup/nano_stock_backup.bin
+#       sidekick/stock_backup/nano_stock_backup.bin
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BACKUP="$ROOT/nano_companion/stock_backup/nano_stock_backup.bin"
+BACKUP="$ROOT/sidekick/stock_backup/nano_stock_backup.bin"
 PORT="${1:-}"
 
 if [[ -z "$PORT" ]]; then

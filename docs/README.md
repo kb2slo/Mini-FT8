@@ -49,6 +49,10 @@ git clone --recurse-submodules https://github.com/kb2slo/Mini-FT8.git
 
 Existing trees: `git submodule update --init`. Pin and bump path: [RFC 0002](rfcs/0002-extract-and-boundaries.md) §6.
 
+### Reproducibility
+
+The full dev environment — build, test, and the sidekick field-flash workflow — must be reproducible from a fresh `git clone` (submodules included) plus a capable agent, with no dependency on state that exists only on one operator's machine. When a step genuinely needs a one-time physical-hardware action (e.g. capturing a Nano's factory-state backup before it is ever field-flashed), document the exact command in the relevant README/script rather than committing a derived artifact whose redistribution terms aren't ours to decide. `sidekick/README.md`'s stock-backup section is the current example of this pattern.
+
 ### Chat gates
 
 The operator reviews in chat, then green-lights each step. A good previous turn is not permission to skip a gate.
@@ -123,6 +127,6 @@ idf.py -p /dev/cu.usbmodemXXXX build flash
 
 Do not split into separate `build` then `flash` unless the user asks.
 
-**`monitor`:** The Cardputer USB-C is either ESP USB Serial/JTAG (Mac ↔ firmware logs) **or** USB host for the radio (QMX / KH1-USBC) — not both. So `idf.py … flash monitor` works with the **radio unplugged** from USB-C. Live logs while the radio is connected need the console UART on **G4 (TX) / G5 (RX)** (USB–TTL adapter), not PORTA/Grove (`G1`/`G2`, GPS/CAT). That G4/G5 path is off when `GNSS_LoRa:ON`.
+**`monitor`:** The Cardputer USB-C is either ESP USB Serial/JTAG (Mac ↔ firmware logs) **or** USB host for the radio (QMX / QDX) — not both. So `idf.py … flash monitor` works with the **radio unplugged** from USB-C. Live logs while the radio is connected need the console UART on **G4 (TX) / G5 (RX)** (USB–TTL adapter), not PORTA/Grove (`G1`/`G2`, GPS/CAT). That G4/G5 path is off when `GNSS_LoRa:ON`.
 
 Loader stubs (`AGENTS.md`, `.cursor/rules/`, and similar) exist only so a given tool loads this agreement. They point here. Do not duplicate the plan in those files.

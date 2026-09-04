@@ -1,11 +1,11 @@
-# Nano firmware is staged by tools/stage_nano_firmware.sh from a
-# `nano_companion` build (RFC 0001 §5.1). Absent that step this component
-# still builds and links, but nano_flasher_flash_embedded() returns
-# ESP_ERR_NOT_FOUND — CI and a fresh clone stay buildable without it.
+# Nano firmware is staged by tools/stage_nano_firmware.sh from a `sidekick`
+# build (RFC 0001 §5.1). Absent that step this component still builds and
+# links, but nano_flasher_flash_embedded() returns ESP_ERR_NOT_FOUND — CI
+# and a fresh clone stay buildable without it.
 set(NANO_FW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/target_firmware")
 set(NANO_FW_BOOTLOADER "${NANO_FW_DIR}/bootloader.bin")
 set(NANO_FW_PARTTABLE "${NANO_FW_DIR}/partition-table.bin")
-set(NANO_FW_APP "${NANO_FW_DIR}/nano_companion.bin")
+set(NANO_FW_APP "${NANO_FW_DIR}/sidekick.bin")
 
 set(NANO_FLASHER_EMBED)
 set(NANO_FLASHER_HEADER "${CMAKE_CURRENT_BINARY_DIR}/nano_target_firmware.h")
@@ -14,7 +14,7 @@ if(EXISTS "${NANO_FW_BOOTLOADER}" AND EXISTS "${NANO_FW_PARTTABLE}" AND EXISTS "
     set(NANO_FLASHER_EMBED
         "target_firmware/bootloader.bin"
         "target_firmware/partition-table.bin"
-        "target_firmware/nano_companion.bin"
+        "target_firmware/sidekick.bin"
     )
     # IDF's EMBED_FILES names each symbol after the file's basename with
     # non-alnum characters replaced by `_`. Bind readable identifiers to
@@ -28,9 +28,9 @@ if(EXISTS "${NANO_FW_BOOTLOADER}" AND EXISTS "${NANO_FW_PARTTABLE}" AND EXISTS "
         "extern const uint8_t nano_partition_table_bin[] asm(\"_binary_partition_table_bin_start\");\n"
         "extern const uint8_t nano_partition_table_bin_end_[] asm(\"_binary_partition_table_bin_end\");\n"
         "#define nano_partition_table_bin_len ((uint32_t)(nano_partition_table_bin_end_ - nano_partition_table_bin))\n\n"
-        "extern const uint8_t nano_companion_bin[] asm(\"_binary_nano_companion_bin_start\");\n"
-        "extern const uint8_t nano_companion_bin_end_[] asm(\"_binary_nano_companion_bin_end\");\n"
-        "#define nano_companion_bin_len ((uint32_t)(nano_companion_bin_end_ - nano_companion_bin))\n"
+        "extern const uint8_t sidekick_bin[] asm(\"_binary_sidekick_bin_start\");\n"
+        "extern const uint8_t sidekick_bin_end_[] asm(\"_binary_sidekick_bin_end\");\n"
+        "#define sidekick_bin_len ((uint32_t)(sidekick_bin_end_ - sidekick_bin))\n"
     )
 else()
     message(STATUS "nano_flasher: no staged firmware in target_firmware/ — run tools/stage_nano_firmware.sh")

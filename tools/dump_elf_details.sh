@@ -2,7 +2,7 @@
 # Dumps details about the last ADV build: identity (git SHA/dirty), size vs
 # flash budget, DIRAM/IRAM usage (the resource RFC 0001 §4 gates the whole
 # companion feature on), and whether the built binary actually embedded the
-# currently-staged nano_companion firmware (RFC 0001 §5.1) rather than
+# currently-staged sidekick firmware (RFC 0001 §5.1) rather than
 # trusting a stale or no-firmware build silently.
 set -euo pipefail
 
@@ -71,7 +71,7 @@ else
 fi
 
 echo
-echo "== nano_companion embed (RFC 0001 §5.1) =="
+echo "== sidekick embed (RFC 0001 §5.1) =="
 check_one() {
     local label="$1" symbol="$2" staged_file="$3"
     local start end embedded_size staged_size
@@ -101,6 +101,6 @@ check_one() {
 status=0
 check_one "bootloader"      "bootloader_bin"      "$STAGE/bootloader.bin"      || status=1
 check_one "partition-table" "partition_table_bin" "$STAGE/partition-table.bin" || status=1
-check_one "nano_companion"  "nano_companion_bin"   "$STAGE/nano_companion.bin" || status=1
+check_one "sidekick"        "sidekick_bin"         "$STAGE/sidekick.bin"       || status=1
 
 exit "$status"

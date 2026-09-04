@@ -26,7 +26,7 @@ int main()
 {
     expect_kind(usb_c_classify(0x0483, 0xA34C), UsbCKind::QmxQdx, "QMX/QDX");
     expect_kind(usb_c_classify(0x303A, 0x1001), UsbCKind::GreenNano, "Nano JTAG");
-    expect_kind(usb_c_classify(0x303A, 0x4001), UsbCKind::GreenNano, "Nano other PID");
+    expect_kind(usb_c_classify(0x303A, 0x4001), UsbCKind::Other, "Espressif VID, non-Nano PID (e.g. AtomS3)");
     expect_kind(usb_c_classify(0x1234, 0x5678), UsbCKind::Other, "unknown");
     expect_kind(usb_c_classify(0x0483, 0x0001), UsbCKind::Other, "STM32 not QMX");
 

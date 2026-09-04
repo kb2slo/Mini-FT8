@@ -7,7 +7,7 @@ UsbCKind usb_c_classify(uint16_t vid, uint16_t pid)
     if (vid == kUsbCQmxVid && pid == kUsbCQmxPid) {
         return UsbCKind::QmxQdx;
     }
-    if (vid == kUsbCEspressifVid) {
+    if (vid == kUsbCEspressifVid && pid == kUsbCNanoJtagPid) {
         return UsbCKind::GreenNano;
     }
     return UsbCKind::Other;

@@ -5,8 +5,13 @@
 #include "station_types.h"
 
 // Product radio picker. Add a radio by appending a row (and a radio_control
-// ops file). MENU cycle, Station radio= integers, audio/CAT bind, and PORTA
-// UART vs GPS policy read this table. No ESP-IDF. Host tests share it.
+// ops file). MENU cycle, Station radio= integers, and audio/CAT bind read
+// this table. No ESP-IDF. Host tests share it.
+//
+// I21 (2026-09-04): dropped KH1-USBC/KH1-MIC — untestable without hardware
+// (none owned) and the only PORTA/UART1 sharer, which no longer applies now
+// that every remaining radio uses USB UAC exclusively. Open to reintroducing
+// KH1 later if someone picks it up with real hardware to verify against.
 
 struct RadioProfile {
     RadioType type;
@@ -14,18 +19,11 @@ struct RadioProfile {
     audio_source_backend_t audio_backend;
     radio_control_backend_t radio_backend;
     bool audio_is_uac;
-    bool shares_porta_uart;
-    bool needs_manual_connect;
-    bool defer_cat_on_audio_start;
 };
 
 inline const RadioProfile kRadioProfiles[] = {
-    {RadioType::QMX, "QMX", AUDIO_SOURCE_QMX_UAC, RADIO_CONTROL_QMX, true, false, false, false},
-    {RadioType::QDX, "QDX", AUDIO_SOURCE_QMX_UAC, RADIO_CONTROL_QDX, true, false, false, false},
-    {RadioType::KH1_USBC, "KH1-USBC", AUDIO_SOURCE_USB_UAC_GENERIC, RADIO_CONTROL_KH1_CAT,
-     true, true, true, true},
-    {RadioType::KH1_MIC, "KH1-MIC", AUDIO_SOURCE_KH1_MIC, RADIO_CONTROL_KH1_CAT,
-     false, true, true, false},
+    {RadioType::QMX, "QMX", AUDIO_SOURCE_QMX_UAC, RADIO_CONTROL_QMX, true},
+    {RadioType::QDX, "QDX", AUDIO_SOURCE_QMX_UAC, RADIO_CONTROL_QDX, true},
 };
 
 inline constexpr int kRadioProfileCount =
@@ -86,30 +84,4 @@ inline const char* radio_profile_name(RadioType type)
 inline bool radio_profile_audio_is_uac(RadioType type)
 {
     return radio_profile_get(type).audio_is_uac;
-}
-
-inline bool radio_profile_shares_porta_uart(RadioType type)
-{
-    return radio_profile_get(type).shares_porta_uart;
-}
-
-inline bool radio_profile_needs_manual_connect(RadioType type)
-{
-    return radio_profile_get(type).needs_manual_connect;
-}
-
-inline bool radio_profile_defer_cat_on_audio_start(RadioType type)
-{
-    return radio_profile_get(type).defer_cat_on_audio_start;
-}
-
-inline bool radio_profile_porta_gps_should_run(RadioType type, bool cat_connected, bool gnss_lora)
-{
-    if (!radio_profile_shares_porta_uart(type)) {
-        return true;
-    }
-    if (!cat_connected) {
-        return true;
-    }
-    return gnss_lora;
 }

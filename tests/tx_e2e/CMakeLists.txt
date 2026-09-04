@@ -112,13 +112,6 @@ if(NOT WIN32)
     target_link_libraries(test_ta_format PRIVATE m)
 endif()
 
-# KH1 FOxx tone-offset mapping test
-add_executable(test_kh1_tone_map test_kh1_tone_map.cpp)
-target_include_directories(test_kh1_tone_map PRIVATE ${CMAKE_SOURCE_DIR}/../../main)
-if(NOT WIN32)
-    target_link_libraries(test_kh1_tone_map PRIVATE m)
-endif()
-
 # L4 TX Timer-Isolation test
 add_executable(test_l4 test_l4_tx_timer_isolation.cpp decode_helper.cpp)
 target_include_directories(test_l4 PRIVATE ${CMAKE_SOURCE_DIR})
@@ -148,4 +141,3 @@ add_test(NAME l3_poll_timing     COMMAND test_l3)
 add_test(NAME l4_timer_isolation COMMAND test_l4)
 add_test(NAME golden_rx          COMMAND test_golden_rx)
 add_test(NAME ta_format          COMMAND test_ta_format)
-add_test(NAME kh1_tone_map       COMMAND test_kh1_tone_map)

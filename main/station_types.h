@@ -26,9 +26,9 @@ enum class RadioType {
     NONE = 0,
     TRUSDX = 1,
     QMX = 2,
-    KH1_USBC = 3,
-    KH1 = KH1_USBC, // Backward-compatible alias for old KH1 USB-C mode.
-    KH1_MIC = 4,
+    // 3, 4 retired (I21, 2026-09-04): KH1_USBC / KH1_MIC. Not in
+    // kRadioProfiles any more — radio_profile_from_saved_int() falls back
+    // an old Station.txt radio=3/4 to QMX. Values kept unused, not reused.
     QDX = 5,
 };
 
