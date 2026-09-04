@@ -3832,22 +3832,11 @@ static void nano_flash_start_from_ui() {
 
   nano_flasher_status_t status = NANO_FLASHER_STATUS_UNKNOWN;
   char remote_version[33] = {};
-  char diag[48] = {};
   const esp_err_t err =
-      nano_flasher_flash_embedded(vid, pid, &status, remote_version, sizeof(remote_version), diag, sizeof(diag));
+      nano_flasher_flash_embedded(vid, pid, &status, remote_version, sizeof(remote_version));
   restore_usb_host_after_nano_flash();
   usb_c_presence_set_notify(true);
   g_nano_flash_in_progress = false;
-
-  // Temporary bench-debug step (B14, no G4/G5 UART capture available):
-  // show what the read-back check actually found before the final result,
-  // since the ADV's own USB-C is busy being host during this whole call and
-  // its usual console output isn't reachable. Remove once that's resolved.
-  if (diag[0] != '\0') {
-    debug_log_line(std::string("Sidekick check: ") + diag);
-    ui_draw_message_dialog("Sidekick check", diag);
-    vTaskDelay(pdMS_TO_TICKS(2500));
-  }
 
   const char* body = "Flash FAILED";
   if (err == ESP_OK) {

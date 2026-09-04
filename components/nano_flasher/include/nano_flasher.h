@@ -35,19 +35,14 @@ typedef enum {
 //   - recognized, version differs           -> flash (update path)
 //   - recognized, version matches           -> skip the write entirely
 // out_status and out_remote_version (if non-NULL; pass a buffer of at least
-// 33 bytes) report what was found, even on the skip-write path. out_diag
-// (if non-NULL; ~48 bytes is enough), is a one-line human-readable summary
-// of the read-back step specifically — added to debug the check itself on
-// a bench with no G4/G5 UART capture available; fine to trim once that's
-// no longer needed.
+// 33 bytes) report what was found, even on the skip-write path.
 // Caller must have already parked any other USB host client
 // (usb_c_presence_yield_device()) and must not touch the USB host from
 // another task while this runs. Blocking; runs on the calling task.
 // Field-only — real hardware required, cannot be host-tested.
 esp_err_t nano_flasher_flash_embedded(uint16_t vid, uint16_t pid,
                                        nano_flasher_status_t* out_status,
-                                       char* out_remote_version, size_t out_remote_version_size,
-                                       char* out_diag, size_t out_diag_size);
+                                       char* out_remote_version, size_t out_remote_version_size);
 
 #ifdef __cplusplus
 }

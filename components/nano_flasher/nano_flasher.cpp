@@ -102,16 +102,12 @@ void local_version(char* out) {
 
 esp_err_t nano_flasher_flash_embedded(uint16_t vid, uint16_t pid,
                                        nano_flasher_status_t* out_status,
-                                       char* out_remote_version, size_t out_remote_version_size,
-                                       char* out_diag, size_t out_diag_size) {
+                                       char* out_remote_version, size_t out_remote_version_size) {
     if (out_status) {
         *out_status = NANO_FLASHER_STATUS_UNKNOWN;
     }
     if (out_remote_version && out_remote_version_size) {
         out_remote_version[0] = '\0';
-    }
-    if (out_diag && out_diag_size) {
-        out_diag[0] = '\0';
     }
 
     esp_err_t err = cdc_acm_host_install(nullptr);
@@ -155,7 +151,6 @@ esp_err_t nano_flasher_flash_embedded(uint16_t vid, uint16_t pid,
             // chip family — and it gates the write, not just the dialog:
             // never flash sidekick firmware onto anything but a real C6.
             ESP_LOGW(TAG, "Not an ESP32-C6 (chip=%d) — refusing to flash", (int)target);
-            if (out_diag) snprintf(out_diag, out_diag_size, "Not a C6 (chip=%d)", (int)target);
             result = ESP_FAIL;
             goto deinit;
         }
@@ -173,18 +168,14 @@ esp_err_t nano_flasher_flash_embedded(uint16_t vid, uint16_t pid,
         esp_loader_error_t name_err = read_field(&loader, kAppFlashBase + kProjectNameFieldOffset, remote_project_name);
         if (name_err != ESP_LOADER_SUCCESS) {
             ESP_LOGW(TAG, "project_name read failed: err=%d", name_err);
-            if (out_diag) snprintf(out_diag, out_diag_size, "PN read fail:%d", name_err);
         } else if (strcmp(remote_project_name, kExpectedProjectName) != 0) {
             ESP_LOGI(TAG, "project_name read OK but not ours: '%s'", remote_project_name);
-            if (out_diag) snprintf(out_diag, out_diag_size, "PN='%.16s'", remote_project_name);
         } else {
             esp_loader_error_t ver_err = read_field(&loader, kAppFlashBase + kVersionFieldOffset, remote_version);
             if (ver_err != ESP_LOADER_SUCCESS) {
                 ESP_LOGW(TAG, "version read failed: err=%d (project_name matched)", ver_err);
-                if (out_diag) snprintf(out_diag, out_diag_size, "PN ok VER fail:%d", ver_err);
             } else {
                 ESP_LOGI(TAG, "project_name='%s' version='%s'", remote_project_name, remote_version);
-                if (out_diag) snprintf(out_diag, out_diag_size, "VER=%.20s", remote_version);
                 recognized = true;
             }
         }
@@ -237,8 +228,7 @@ done:
 
 esp_err_t nano_flasher_flash_embedded(uint16_t /*vid*/, uint16_t /*pid*/,
                                        nano_flasher_status_t* out_status,
-                                       char* /*out_remote_version*/, size_t /*out_remote_version_size*/,
-                                       char* /*out_diag*/, size_t /*out_diag_size*/) {
+                                       char* /*out_remote_version*/, size_t /*out_remote_version_size*/) {
     if (out_status) {
         *out_status = NANO_FLASHER_STATUS_UNKNOWN;
     }
