@@ -33,7 +33,16 @@ We will **not**:
 * Block QMX USB-host CAT
 * Turn on SPIRAM / PSRAM on the ADV to “make room” for NimBLE. USB CDC and UAC need **internal DMA-capable** RAM. External RAM does not fix the V2.0.4 / 2026-08-31 failure mode.
     * **Scope clarification (2026-09-04):** this non-goal is about **DMA buffers**, and for those it is correct — external RAM cannot back USB CDC/UAC descriptors or the contiguous DMA block §4.1b measures. It has since been read more broadly than it should be. It does **not** say that no data may live in external RAM. The ft8_lib waterfall in particular (`waterfall_static_buf`, 80,538 B — the single largest DIRAM object in the build) is plain CPU-swept data, never a DMA target, and would be a legitimate PSRAM candidate on hardware that had PSRAM, subject to measuring candidate-search sweep cost against the ~13 s slot budget.
-    * **Moot on this board, and that is the actual blocker:** the Stamp-S3A is an **ESP32-S3FN8** (`F` = embedded flash, `N8` = 8 MB; an `R2`/`R8` suffix would indicate embedded PSRAM). There is no PSRAM die to move anything into. `CONFIG_SOC_SPIRAM_SUPPORTED=y` in `sdkconfig` is chip-*family* capability, not a statement about this board, and `CONFIG_SPIRAM` is unset. Confirm on hardware with `esptool.py flash_id` — the `Features:` line names embedded PSRAM when present. So “move the waterfall to slower RAM” fails for want of hardware, not for want of a sound idea.
+    * **Moot on this board, and that is the actual blocker:** the Stamp-S3A is an **ESP32-S3FN8** (`F` = embedded flash, `N8` = 8 MB; an `R2`/`R8` suffix would indicate embedded PSRAM). There is no PSRAM die to move anything into. `CONFIG_SOC_SPIRAM_SUPPORTED=y` in `sdkconfig` is chip-*family* capability, not a statement about this board, and `CONFIG_SPIRAM` is unset.
+    * **Confirmed on hardware 2026-09-04** (`esptool.py -p <port> flash_id`), so this no longer rests on a part-number inference — and checked on *both* S3 boards, because if either had PSRAM it would have reordered I24/I26:
+
+        | Board | `Features:` | Flash vendor | MAC |
+        |---|---|---|---|
+        | Cardputer ADV (Stamp-S3A) | `WiFi, BLE, Embedded Flash 8MB` | XMC (0x20) | `28:84:85:76:83:0c` |
+        | AtomS3 Lite | `WiFi, BLE, Embedded Flash 8MB` | GigaDevice (0xc8) | `50:78:7d:cd:04:cc` |
+
+        Neither reports `Embedded PSRAM`. Both are ESP32-S3 QFN56 rev v0.2, 8 MB flash, `USB mode: USB-Serial/JTAG`. So “move the waterfall to slower RAM” fails for want of hardware on *every board this project owns*, not for want of a sound idea.
+    * **Aside, since these boards are indistinguishable over USB:** `flash_id` reports the chip, and both are the same part; in USB-Serial/JTAG mode both enumerate as Espressif's generic `303A:1001` with no board string. The **MAC** is the only reliable discriminator (recorded above). The differing flash vendor is a production-batch artifact, not a model identifier — do not key anything off it.
 * Ship on-chip `ENABLE_BLE` in official `dev` / tagged binaries
 * Treat two ATOMs/Nanos (no USB-host brain) as a QMX radio
 * Use a Morserino-32 or M32 Pocket as the BLE coprocessor (classic 4-pin header or Pocket USB). Leave those boxes as CW. I17 (Pocket as a Mini-FT8 *host*) is Ideas, not this path.
