@@ -46,6 +46,11 @@ bool storage_service_usb_drive_enabled();
 size_t storage_service_open_stream_count();
 esp_err_t storage_service_set_usb_drive_enabled(bool enabled);
 bool storage_service_usb_host_attached();
+// B23 diagnostic: last TinyUSB gadget event id (-1 until one arrives) and a
+// sequence counter that bumps on every event. A sequence that never moves
+// while the MSC gadget is up means the host is not talking to us at all.
+int storage_service_usb_last_event();
+uint32_t storage_service_usb_event_seq();
 
 bool storage_file_exists(const std::string& name);
 bool storage_file_remove(const std::string& name);

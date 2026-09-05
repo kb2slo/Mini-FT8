@@ -54,6 +54,8 @@ wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 tinyusb_msc_storage_handle_t s_msc_storage;
 bool s_tinyusb_installed;
 volatile bool s_usb_host_attached;
+volatile int s_usb_last_event = -1;      // last tinyusb_event_t id, -1 = none yet (B23 diagnostic)
+volatile uint32_t s_usb_event_seq = 0;   // bumped on every gadget event
 char s_usb_serial[13];
 const char kUsbLangId[] = {0x09, 0x04};
 const char* s_usb_strings[] = {
@@ -841,6 +843,16 @@ void usb_gadget_event_cb(tinyusb_event_t* event, void* /*arg*/) {
     if (!event) {
         return;
     }
+    // Diagnostic (B23): this callback used to record attach/detach and drop
+    // everything else silently, so "Waiting for computer..." could not tell
+    // "the host never spoke" apart from "the host spoke and enumeration
+    // failed" — two different bugs. Record every event so the UI can surface
+    // it; a bus that stays completely silent is itself the finding.
+    s_usb_last_event = static_cast<int>(event->id);
+    // Not `++`: C++20 deprecates compound increment on a volatile, and this
+    // tree builds with -Werror.
+    s_usb_event_seq = s_usb_event_seq + 1;
+
     if (event->id == TINYUSB_EVENT_ATTACHED) {
         s_usb_host_attached = true;
     } else if (event->id == TINYUSB_EVENT_DETACHED) {
@@ -939,6 +951,14 @@ bool storage_service_usb_drive_enabled() {
 
 bool storage_service_usb_host_attached() {
     return s_usb_host_attached;
+}
+
+int storage_service_usb_last_event() {
+    return s_usb_last_event;
+}
+
+uint32_t storage_service_usb_event_seq() {
+    return s_usb_event_seq;
 }
 
 size_t storage_service_open_stream_count() {

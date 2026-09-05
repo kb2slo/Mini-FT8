@@ -5209,6 +5209,26 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     }
 
     if (ui_mode == UIMode::MSC) {
+      // B23 diagnostic: surface every TinyUSB gadget event on the P log.
+      // "Waiting for computer..." on its own cannot distinguish a host that
+      // never spoke from one that spoke and failed to enumerate. If this
+      // sequence never moves while the gadget is up, the bus is silent.
+      {
+        static uint32_t s_seen_usb_event_seq = 0;
+        const uint32_t seq = storage_service_usb_event_seq();
+        if (seq != s_seen_usb_event_seq) {
+          s_seen_usb_event_seq = seq;
+          const char* name = "?";
+          switch (storage_service_usb_last_event()) {
+            case 0: name = "ATTACH"; break;
+            case 1: name = "DETACH"; break;
+            case 2: name = "SUSPEND"; break;
+            case 3: name = "RESUME"; break;
+            default: break;
+          }
+          debug_log_line(std::string("USB evt ") + name);
+        }
+      }
       if (!g_msc_busy) {
         const bool attached = storage_service_usb_host_attached();
         if (attached && !g_msc_host_attached_ui) {
