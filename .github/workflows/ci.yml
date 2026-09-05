@@ -46,6 +46,64 @@ jobs:
               - 'tools/**/*.cmake'
               - '.github/workflows/ci.yml'
 
+  readme-audit:
+    name: README audit
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # docs/README.md "Fork README stays current": operator-visible work must
+      # audit the fork section of README.md in the same change. Removal is the
+      # easy case to miss -- a README documenting a key that now does nothing is
+      # worse than one that never mentioned it. This checks the mechanical
+      # signals only; judgement still belongs to the author.
+      - name: Operator-visible change must touch README.md
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          diff=$(git diff "$BASE...$HEAD" -- main/ || true)
+
+          # A UIMode enumerator or case disappearing, or a key-dispatch line
+          # being added/removed/changed, is operator-visible by definition.
+          hits=""
+          if printf '%s\n' "$diff" | grep -qE "^-.*UIMode::[A-Z_]+"; then
+            hits="${hits}  - a UIMode enumerator or case was removed\n"
+          fi
+          if printf '%s\n' "$diff" | grep -qE "^[-+].*c == '[a-zA-Z]' \|\| c == '[a-zA-Z]'"; then
+            hits="${hits}  - a key binding was added, removed or changed\n"
+          fi
+
+          if [ -z "$hits" ]; then
+            echo "No operator-visible signals in main/. Nothing to audit."
+            exit 0
+          fi
+
+          if git diff --name-only "$BASE...$HEAD" | grep -qx "README.md"; then
+            echo "Operator-visible change and README.md was updated. OK."
+            exit 0
+          fi
+
+          # Mirrors the chat rule: saying "no README change needed" out loud is
+          # what makes a skipped audit distinguishable from a performed one.
+          if printf '%s' "$PR_BODY" | grep -qiE "README-audit:[[:space:]]*(none|not needed)"; then
+            echo "README audit explicitly waived in the PR body. OK."
+            exit 0
+          fi
+
+          echo "::error::Operator-visible change without a README.md update."
+          printf "Signals found:\n$hits"
+          echo ""
+          echo "Either update the fork section of README.md (above the Wei delimiter"
+          echo "-- do not rewrite Wei's original below it), or state in the PR body:"
+          echo ""
+          echo "    README-audit: none - <why this is not operator-visible>"
+          exit 1
+
   host-tests:
     name: Host tests
     runs-on: ubuntu-latest
