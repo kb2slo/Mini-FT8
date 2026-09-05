@@ -23,12 +23,9 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdmmc_cmd.h"
-#include "tinyusb.h"
-#include "tinyusb_default_config.h"
 #include "tinyusb_msc.h"
 #include "wear_levelling.h"
 #include "esp_mac.h"
-#include "tusb.h"
 
 namespace {
 
@@ -52,17 +49,6 @@ SemaphoreHandle_t s_mutex;
 StorageOwner s_owner = StorageOwner::UNAVAILABLE;
 wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 tinyusb_msc_storage_handle_t s_msc_storage;
-bool s_tinyusb_installed;
-volatile bool s_usb_host_attached;
-char s_usb_serial[13];
-const char kUsbLangId[] = {0x09, 0x04};
-const char* s_usb_strings[] = {
-    kUsbLangId,
-    "N6HAN",
-    "USB DISK",
-    s_usb_serial,
-    "USB DISK",
-};
 size_t s_open_streams;
 bool s_station_sync_attempted;
 sdmmc_card_t* s_sd_card;
@@ -160,8 +146,6 @@ const char* storage_owner_name(StorageOwner owner) {
             return "unavailable";
         case StorageOwner::FIRMWARE:
             return "firmware";
-        case StorageOwner::USB_HOST:
-            return "usb_host";
         case StorageOwner::TRANSITION:
             return "transition";
     }
@@ -828,26 +812,6 @@ esp_err_t set_storage_mount_point_locked(tinyusb_msc_mount_point_t mount_point) 
     return ESP_OK;
 }
 
-void fill_usb_serial() {
-    uint8_t mac[6] = {};
-    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
-        memset(mac, 0, sizeof(mac));
-    }
-    snprintf(s_usb_serial, sizeof(s_usb_serial), "%02X%02X%02X%02X%02X%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-}
-
-void usb_gadget_event_cb(tinyusb_event_t* event, void* /*arg*/) {
-    if (!event) {
-        return;
-    }
-    if (event->id == TINYUSB_EVENT_ATTACHED) {
-        s_usb_host_attached = true;
-    } else if (event->id == TINYUSB_EVENT_DETACHED) {
-        s_usb_host_attached = false;
-    }
-}
-
 }  // namespace
 
 struct StorageStream {
@@ -932,99 +896,9 @@ bool storage_service_firmware_available() {
     return guard.held() && firmware_owns_storage_locked();
 }
 
-bool storage_service_usb_drive_enabled() {
-    StorageGuard guard;
-    return guard.held() && s_owner == StorageOwner::USB_HOST;
-}
-
-bool storage_service_usb_host_attached() {
-    return s_usb_host_attached;
-}
-
 size_t storage_service_open_stream_count() {
     StorageGuard guard;
     return guard.held() ? s_open_streams : 0;
-}
-
-esp_err_t storage_service_set_usb_drive_enabled(bool enabled) {
-    StorageGuard guard;
-    if (!guard.held() || !s_msc_storage) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (enabled) {
-        if (s_owner == StorageOwner::USB_HOST) {
-            return ESP_OK;
-        }
-        if (s_owner != StorageOwner::FIRMWARE) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        if (s_open_streams != 0) {
-            ESP_LOGW(TAG, "USB Drive blocked by %u open storage stream(s)",
-                     static_cast<unsigned>(s_open_streams));
-            return ESP_ERR_INVALID_STATE;
-        }
-
-        (void)flush_all_locked();
-
-        s_owner = StorageOwner::TRANSITION;
-        esp_err_t err = set_storage_mount_point_locked(TINYUSB_MSC_STORAGE_MOUNT_USB);
-        if (err != ESP_OK) {
-            s_owner = s_mount_transition_result == MountTransitionResult::NONE
-                          ? StorageOwner::FIRMWARE
-                          : StorageOwner::UNAVAILABLE;
-            return err;
-        }
-
-        fill_usb_serial();
-        s_usb_host_attached = false;
-        tinyusb_config_t tinyusb_config = TINYUSB_DEFAULT_CONFIG(usb_gadget_event_cb);
-        tinyusb_config.descriptor.string = s_usb_strings;
-        tinyusb_config.descriptor.string_count =
-            static_cast<int>(sizeof(s_usb_strings) / sizeof(s_usb_strings[0]));
-        err = tinyusb_driver_install(&tinyusb_config);
-        if (err != ESP_OK) {
-            const esp_err_t rollback =
-                set_storage_mount_point_locked(TINYUSB_MSC_STORAGE_MOUNT_APP);
-            s_owner = rollback == ESP_OK ? StorageOwner::FIRMWARE : StorageOwner::UNAVAILABLE;
-            return err;
-        }
-
-        tud_disconnect();
-        vTaskDelay(pdMS_TO_TICKS(120));
-        tud_connect();
-
-        s_tinyusb_installed = true;
-        s_owner = StorageOwner::USB_HOST;
-        ESP_LOGI(TAG, "USB Drive ON: serial=%s waiting for host attach", s_usb_serial);
-        return ESP_OK;
-    }
-
-    if (s_owner == StorageOwner::FIRMWARE) {
-        return ESP_OK;
-    }
-    if (s_owner != StorageOwner::USB_HOST || !s_tinyusb_installed) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    s_owner = StorageOwner::TRANSITION;
-    esp_err_t err = tinyusb_driver_uninstall();
-    if (err != ESP_OK) {
-        s_owner = StorageOwner::USB_HOST;
-        return err;
-    }
-    s_tinyusb_installed = false;
-    s_usb_host_attached = false;
-
-    err = set_storage_mount_point_locked(TINYUSB_MSC_STORAGE_MOUNT_APP);
-    if (err != ESP_OK) {
-        s_owner = StorageOwner::UNAVAILABLE;
-        return err;
-    }
-
-    s_owner = StorageOwner::FIRMWARE;
-    ESP_LOGI(TAG, "USB Drive OFF: firmware owns FATFS");
-    return ESP_OK;
 }
 
 bool storage_file_exists(const std::string& name) {
@@ -1369,9 +1243,9 @@ StorageCopyResult storage_copy_all_to_sd(const std::string& priority_file,
     StorageCopyResult result {};
     StorageGuard guard;
     ESP_LOGI(COPY_TAG,
-             "begin owner=%s open_streams=%u tinyusb=%d sd_mounted=%d source_base=%s sd_base=%s",
+             "begin owner=%s open_streams=%u sd_mounted=%d source_base=%s sd_base=%s",
              storage_owner_name(s_owner), static_cast<unsigned>(s_open_streams),
-             s_tinyusb_installed, s_sd_mounted, kBasePath, kSdBasePath);
+             s_sd_mounted, kBasePath, kSdBasePath);
 
     if (!guard.held()) {
         result.err = ESP_ERR_INVALID_STATE;
@@ -1463,15 +1337,3 @@ StorageCopyResult storage_copy_all_to_sd(const std::string& priority_file,
     return result;
 }
 
-extern "C" void __wrap_tud_msc_inquiry_cb(uint8_t lun,
-                                          uint8_t vendor_id[8],
-                                          uint8_t product_id[16],
-                                          uint8_t product_rev[4]) {
-    (void)lun;
-    const char vid[] = "N6HAN   ";
-    const char pid[] = "USB DISK        ";
-    const char rev[] = "1.0 ";
-    memcpy(vendor_id, vid, 8);
-    memcpy(product_id, pid, 16);
-    memcpy(product_rev, rev, 4);
-}

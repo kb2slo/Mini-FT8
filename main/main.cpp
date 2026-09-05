@@ -360,7 +360,7 @@ static bool rewrite_dxpedition_for_mycall(const std::string& raw_text,
 }
 
 static const char* TAG = "FT8";
-enum class UIMode { RX, TX, BAND, MENU, MSC, DEBUG, STATUS, QSO, GPS, PERF, BT };
+enum class UIMode { RX, TX, BAND, MENU, DEBUG, STATUS, QSO, GPS, PERF, BT };
 enum class RtcTimeSource : uint8_t {
   SAVED = 0,
   ESP_RTC,
@@ -442,8 +442,6 @@ static TickType_t g_app_core0_stack_last_sample_tick = 0;
 static uint32_t g_app_core0_stack_cur_free_bytes = 0;
 static uint32_t g_app_core0_stack_min_free_bytes = 0;
 
-static void enter_msc_mode(const char* reason);
-static void exit_msc_mode();
 static void host_handle_line(const std::string& line);
 void save_station_data();  // visible to core_api.cpp
 
@@ -481,50 +479,6 @@ static bool g_rx_dirty = false;
 
 
 
-static std::vector<std::string> g_msc_lines = {
-    "Mini-FT8 USB drive",
-    "Waiting for computer...",
-    "",
-    "Eject in Finder,",
-    "then press C."
-};
-static bool g_msc_host_attached_ui = false;
-static bool g_msc_busy = false;
-
-static void msc_set_waiting_lines() {
-  g_msc_busy = false;
-  g_msc_host_attached_ui = false;
-  g_msc_lines = {
-      "Mini-FT8 USB drive",
-      "Waiting for computer...",
-      "",
-      "Then eject in Finder,",
-      "and press C."
-  };
-}
-
-static void msc_set_attached_lines() {
-  g_msc_busy = false;
-  g_msc_host_attached_ui = true;
-  g_msc_lines = {
-      "Mini-FT8 USB drive",
-      "Computer connected.",
-      "",
-      "Eject in Finder,",
-      "then press C."
-  };
-}
-
-static void msc_set_busy_lines() {
-  g_msc_busy = true;
-  g_msc_host_attached_ui = false;
-  g_msc_lines = {
-      "USB busy,",
-      "unplug radio.",
-      "",
-      "Then press C."
-  };
-}
 
 static std::vector<std::string> g_startup_lines = {
     "** Mini-FT8 V" MINIFT8_PRODUCT_VER " **",
@@ -899,7 +853,6 @@ static const char* storage_owner_label(StorageOwner owner) {
   switch (owner) {
     case StorageOwner::UNAVAILABLE: return "unavailable";
     case StorageOwner::FIRMWARE:    return "firmware";
-    case StorageOwner::USB_HOST:    return "usb_host";
     case StorageOwner::TRANSITION:  return "transition";
   }
   return "unknown";
@@ -1189,7 +1142,6 @@ static const char* uart_mirror_mode_label(UIMode mode) {
     case UIMode::TX:      return "TX";
     case UIMode::BAND:    return "BAND";
     case UIMode::MENU:    return "MENU";
-    case UIMode::MSC:     return "MSC";
     case UIMode::DEBUG:   return "DEBUG";
     case UIMode::STATUS:  return "STATUS";
     case UIMode::QSO:     return "QSO";
@@ -4359,7 +4311,7 @@ static void host_handle_line(const std::string& line_in) {
     send("Heap: " + std::to_string(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)));
     send("OK");
   } else if (cmd_up == "HELP") {
-    for (auto& l : g_msc_lines) send(l);
+    send("Commands: INFO, LIST, READ <file>, HELP, EXIT");
   } else if (cmd_up == "EXIT") {
     send("OK: exit host");
     enter_mode(UIMode::RX);
@@ -4770,9 +4722,6 @@ static void enter_mode(UIMode new_mode) {
       delete_load_file_list();
       ui_draw_list(g_d_lines, d_page, -1);
       break;
-    case UIMode::MSC:
-      ui_draw_debug(g_msc_lines, 0);
-      break;
     case UIMode::QSO:
       g_q_show_entries = false;
       q_page = 0;
@@ -4798,80 +4747,6 @@ static void enter_mode(UIMode new_mode) {
   }
 }
 
-
-static void enter_msc_mode(const char* reason) {
-  if (storage_writes_blocked()) {
-    ESP_LOGW(TAG, "USB Drive blocked: low battery halt");
-    debug_log_line("USB Drive blocked");
-    return;
-  }
-  ESP_LOGI(TAG, "Entering MSC mode: %s", reason);
-  debug_log_line("Entering MSC mode");
-
-  if (g_config_save_pending) {
-    g_config_save_pending = false;
-    save_station_data();
-  }
-
-  core_cmd_cancel_tx();
-  if (g_tx_active) {
-    tx_tick();
-  }
-  g_tx_cancel_requested = false;
-  g_qso_xmit = false;
-  g_pending_tx_valid = false;
-  g_decode_enabled = false;
-  ui_set_paused(true);
-  audio_source_stop();
-  vTaskDelay(pdMS_TO_TICKS(200));
-
-  station_save_worker_flush();
-  file_list_worker_flush();
-  (void)storage_service_flush_all();
-
-  if (uac_ensure_host_uninstalled() != ESP_OK) {
-    ESP_LOGE(TAG, "USB Drive blocked: USB host still owns the PHY");
-    debug_log_line("USB busy, unplug radio");
-    msc_set_busy_lines();
-    enter_mode(UIMode::MSC);
-    return;
-  }
-
-  const esp_err_t err = storage_service_set_usb_drive_enabled(true);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "USB Drive enable failed: %s", esp_err_to_name(err));
-    debug_log_line(std::string("USB Drive fail: ") + esp_err_to_name(err));
-    return;
-  }
-
-  msc_set_waiting_lines();
-  ESP_LOGI(TAG, "MSC gadget up; waiting for computer attach");
-  enter_mode(UIMode::MSC);
-}
-
-static void exit_msc_mode() {
-  ESP_LOGI(TAG, "Leaving MSC mode");
-  const esp_err_t err = storage_service_set_usb_drive_enabled(false);
-  if (err != ESP_OK) {
-    ESP_LOGE(TAG, "USB Drive disable failed: %s", esp_err_to_name(err));
-    debug_log_line(std::string("USB Drive off fail: ") + esp_err_to_name(err));
-    if (storage_service_owner() == StorageOwner::UNAVAILABLE) {
-      enter_mode(UIMode::RX);
-      ui_force_redraw_rx();
-      ui_draw_rx();
-    }
-    if (uac_host_ensure_started() != ESP_OK) {
-      debug_log_line("USB host back fail");
-    }
-    return;
-  }
-  enter_mode(UIMode::RX);
-  ui_force_redraw_rx();
-  ui_draw_rx();
-  if (uac_host_ensure_started() != ESP_OK) {
-    debug_log_line("USB host back fail");
-  }
-}
 
 // Perform the STATUS -> '2' action: start the UAC audio source that feeds
 // the radio into the decoder, and sync CAT to the currently selected band.
@@ -4917,9 +4792,6 @@ static void redraw_after_usb_toast() {
       break;
     case UIMode::DEBUG:
       ui_draw_list(g_d_lines, d_page, -1);
-      break;
-    case UIMode::MSC:
-      ui_draw_debug(g_msc_lines, 0);
       break;
     case UIMode::QSO:
       qso_draw_page();
@@ -5204,27 +5076,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       }
     }
 
-    if (!g_startup_active && ui_mode != UIMode::MSC && !copy_to_sd_dialog_active()) {
+    if (!g_startup_active && !copy_to_sd_dialog_active()) {
       usb_c_toast_tick();
-    }
-
-    if (ui_mode == UIMode::MSC) {
-      if (!g_msc_busy) {
-        const bool attached = storage_service_usb_host_attached();
-        if (attached && !g_msc_host_attached_ui) {
-          msc_set_attached_lines();
-          ui_draw_debug(g_msc_lines, 0);
-        } else if (!attached && g_msc_host_attached_ui) {
-          msc_set_waiting_lines();
-          ui_draw_debug(g_msc_lines, 0);
-        }
-      }
-      if ((c == 'c' || c == 'C') && c != last_key) {
-        exit_msc_mode();
-      }
-      last_key = c;
-      vTaskDelay(pdMS_TO_TICKS(20));
-      continue;
     }
 
     if (copy_to_sd_dialog_active()) {
@@ -5463,15 +5316,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         switched = true;
       }
       else if (c == 'q' || c == 'Q') { cancel_status_edit(); enter_mode(ui_mode == UIMode::QSO ? UIMode::RX : UIMode::QSO); switched = true; }
-      else if (c == 'c' || c == 'C') {
-        {
-          cancel_status_edit();
-          if (ui_mode != UIMode::MSC) {
-            enter_msc_mode("user pressed C");
-          }
-          switched = true;
-        }
-      }
       else if (c == 'd' || c == 'D') { cancel_status_edit(); enter_mode(ui_mode == UIMode::DEBUG ? UIMode::RX : UIMode::DEBUG); switched = true; }
       else if (c == 's' || c == 'S') { cancel_status_edit(); enter_mode(ui_mode == UIMode::STATUS ? UIMode::RX : UIMode::STATUS); switched = true; }
       else if (c == 'g' || c == 'G') { cancel_status_edit(); enter_mode(ui_mode == UIMode::GPS ? UIMode::RX : UIMode::GPS); switched = true; }
@@ -5829,8 +5673,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
           }
           break;
         }
-        case UIMode::MSC:
-          break;
         case UIMode::MENU: {
           if (ui_mode == UIMode::MENU) {
             if (menu_long_edit) {
@@ -6102,8 +5944,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 in.decode_active = g_decode_in_progress;
                 in.audio_streaming = audio_source_is_streaming();
                 in.host_bin_active = host_bin_active;
-                in.ui_msc = (ui_mode == UIMode::MSC);
-                in.usb_drive = storage_service_usb_drive_enabled();
                 in.firmware_owns = (storage_service_owner() == StorageOwner::FIRMWARE);
                 in.open_streams = storage_service_open_stream_count();
                 if (copy_to_sd_press(in, today_qso_file_name(), today_rt_file_name(),

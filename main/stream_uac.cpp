@@ -1085,7 +1085,7 @@ esp_err_t uac_ensure_host_uninstalled(void) {
         timeout--;
     }
     if (s_usb_task_handle != NULL) {
-        ESP_LOGE(TAG, "USB host task still running; cannot start USB Drive");
+        ESP_LOGE(TAG, "USB host task still running; cannot release the PHY");
         return ESP_ERR_INVALID_STATE;
     }
     if (!s_host_installed) {

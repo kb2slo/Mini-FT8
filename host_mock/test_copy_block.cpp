@@ -43,10 +43,6 @@ int main()
     expect_reason(copy_block_reason(in), CopyBlockReason::StorageBusy, "open stream");
 
     in = {};
-    in.usb_drive = true;
-    expect_reason(copy_block_reason(in), CopyBlockReason::StorageBusy, "usb drive");
-
-    in = {};
     in.firmware_owns = false;
     expect_reason(copy_block_reason(in), CopyBlockReason::StorageBusy, "not owner");
 
@@ -57,10 +53,6 @@ int main()
     in = {};
     in.host_bin_active = true;
     expect_reason(copy_block_reason(in), CopyBlockReason::StorageBusy, "host bin");
-
-    in = {};
-    in.ui_msc = true;
-    expect_reason(copy_block_reason(in), CopyBlockReason::StorageBusy, "msc ui");
 
     {
         CopyMenuState s;
