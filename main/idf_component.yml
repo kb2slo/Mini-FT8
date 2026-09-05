@@ -15,14 +15,30 @@ dependencies:
   #   # All dependencies of `main` are public by default.
   #   public: true
   lvgl/lvgl: ^8.3.9
-  # USB Host UAC for audio streaming
-  espressif/usb_host_uac: ^1.2.0
-  espressif/usb: '*'
+  # USB Host UAC for audio streaming. Pinned exact for the same reason as
+  # usb_host_cdc_acm below: moving storage_service's manifest into this file
+  # (RFC 0002 §5.1) re-resolves every range here, and these two drifted on the
+  # first cascade build — usb_host_uac 1.3.3 -> 1.5.0, usb 1.1.0 -> 1.4.1.
+  # Both are on the QMX UAC audio path, which RFC 0002 §2.5 requires stay
+  # unchanged and which only a field session can check. These are the versions
+  # the lock already held; bump them deliberately, not by moving a file.
+  espressif/usb_host_uac: 1.3.3
+  espressif/usb: 1.1.0
   # USB Host CDC for CAT. Pinned exact: nano_flasher's esp-serial-flasher
   # dependency also wants usb_host_cdc_acm and a fresh component-manager
   # resolve otherwise silently bumps this to the newest 2.x on the QMX CAT
   # path (I3 pivot, 2026-09-03). Bump deliberately, with a QMX field check —
   # not as a side effect of an unrelated dependency add.
   espressif/usb_host_cdc_acm: 2.2.0
-  # Cardputer-Adv ES8311 mic capture
-  espressif/esp_codec_dev: ^1.5.9
+  # Cardputer-Adv ES8311 mic capture. Pinned exact — drifted 1.5.9 -> 1.6.2 on
+  # the same re-resolve; mic capture is a field-only path.
+  espressif/esp_codec_dev: 1.5.9
+  # USB Drive (`C`) MSC gadget. Came here from components/storage_service's own
+  # manifest when that component was demoted into main/ (RFC 0002 §5.1).
+  # Pinned exact, and deliberately narrower than the `^2.1.0` it was declared
+  # with there: moving a manifest re-resolves it, and a caret range silently
+  # bumped this 2.1.1 -> 2.2.1 on the first cascade build. 2.1.1 is what the
+  # lock held before this refactor, and USB Drive is a field-only path CI
+  # cannot check. Same rule as usb_host_cdc_acm above — bump deliberately,
+  # with a field check, not as a side effect of moving a file.
+  espressif/esp_tinyusb: 2.1.1

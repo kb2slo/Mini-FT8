@@ -70,14 +70,24 @@ Inheritance only when there is a closed set of variants that already exists or i
 
 No new logic in `main.cpp`. Call sites, wiring, and UI only. If it can be host-tested, it is not written in `main.cpp`.
 
-**Where an extracted module lives** (2026-09-04). Default is a plain `.cpp` / `.h` pair in `main/`, next to `gps.cpp`, `porta.cpp`, `decode_sort.h`, `radio_profile.h`. Promote it to its own `components/<name>/` directory only when the build actually forces it:
+**Where an extracted module lives** (2026-09-04). Default is a plain `.cpp` / `.h` pair in `main/`, next to `gps.cpp`, `porta.cpp`, `decode_sort.h`, `radio_profile.h`. A module earns its own `components/<name>/` directory only one of two ways:
 
-- another component names it in `REQUIRES` / `PRIV_REQUIRES`, or
-- more than one `idf.py` project compiles it (today: the ADV tree and `sidekick/`).
+**1. The build forces it.** Another component names it in `REQUIRES` / `PRIV_REQUIRES`, or more than one `idf.py` project compiles it (the ADV tree, `sidekick/`, `test_apps/`).
 
-Host-testability does **not** force a component. `host_mock/Makefile` compiles sources by path and already carries `-I../main`, so a plain file in `main/` is host-tested exactly like a component is — `decode_sort.h`, `radio_profile.h`, and (since this rule landed) `station`, `band_config`, `usb_c_presence` all are.
+**2. It is a boundary we are deliberately holding.** This is a closed list, and adding to it means saying why here:
 
-Being a component is a cost: a directory, a `CMakeLists.txt`, an `include/` level, and an entry in someone's `REQUIRES`. Pay it when the build demands it, not by default.
+| Component | Why it stays |
+|---|---|
+| `M5Cardputer`, `M5GFX`, `M5Unified`, `ft8_lib` | Vendored third-party. RFC 0002 §6 vendor boundary — do not format, do not restructure. |
+| `board_cardputer_adv` | Also forced (prong 1): `test_apps/cardputer_adv_audio_keyboard` requires it. Board/HAL seam [RFC 0001](rfcs/0001-ble-companion.md) I24 needs for a headless host. |
+| `ui` | The display seam I24 needs to run headless. Demoting it would remove the abstraction that work depends on. 4200+ lines, 8 files. |
+| `nano_flasher` | `EMBED_FILES` packaging of the `sidekick` image, a generated header, and conditional compile defines. That machinery is about shipping a payload, not about source layout. |
+
+Anything not covered by prong 1 or listed above is a plain file in `main/`.
+
+Host-testability does **not** force a component. `host_mock/Makefile` compiles sources by path and already carries `-I../main`, so a plain file in `main/` is host-tested exactly like a component is — `decode_sort.h`, `radio_profile.h`, and (since this rule landed) `station`, `band_config`, `usb_c_presence`, `adif`, `qso_browse`, `cts_time`, `file_list` all are.
+
+Being a component is a cost: a directory, a `CMakeLists.txt`, an `include/` level, a possible `idf_component.yml`, and an entry in someone's `REQUIRES`. Pay it for one of the two reasons above, not by default.
 
 Dead code is deleted in the unit you are extracting. No repo-wide unused-function hunt mixed with a feature.
 
