@@ -1463,15 +1463,41 @@ StorageCopyResult storage_copy_all_to_sd(const std::string& priority_file,
     return result;
 }
 
-extern "C" void __wrap_tud_msc_inquiry_cb(uint8_t lun,
-                                          uint8_t vendor_id[8],
-                                          uint8_t product_id[16],
-                                          uint8_t product_rev[4]) {
+// SCSI INQUIRY identity reported by USB Drive (`C`).
+//
+// This is deliberately the **v2** callback. TinyUSB declares both v1 and v2
+// weak in msc_device.c and calls v2 first (msc_device.c:796), falling back to
+// v1 only when v2 returns 0. v1 already has a competing strong definition
+// inside esp_tinyusb (tinyusb_msc.c:1181) reporting "TinyUSB / TEST MSC
+// Storage / 0.1", so an app-side v1 override loses to it. v2 has no strong
+// definition anywhere in the tree, so this one wins and v1 never runs.
+//
+// This replaces a `-Wl,--wrap=tud_msc_inquiry_cb` link option plus a
+// `__wrap_tud_msc_inquiry_cb` function that never executed: GNU ld's --wrap
+// only replaces *undefined* references, and msc_device.c calls its own weak
+// definition from the same translation unit, so there was nothing to
+// intercept and --gc-sections dropped the wrap. The device therefore
+// advertised esp_tinyusb's placeholder identity, never ours. See ROADMAP B23.
+//
+// SCSI wants left-justified, space-padded ASCII in these fields — not
+// NUL-terminated strings.
+extern "C" uint32_t tud_msc_inquiry2_cb(uint8_t lun,
+                                        scsi_inquiry_resp_t* inquiry_resp,
+                                        uint32_t bufsize) {
     (void)lun;
-    const char vid[] = "N6HAN   ";
-    const char pid[] = "USB DISK        ";
-    const char rev[] = "1.0 ";
-    memcpy(vendor_id, vid, 8);
-    memcpy(product_id, pid, 16);
-    memcpy(product_rev, rev, 4);
+    if (inquiry_resp == nullptr || bufsize < sizeof(scsi_inquiry_resp_t)) {
+        return 0;  // Too small to fill; let TinyUSB take its own fallback path.
+    }
+
+    auto pad_copy = [](uint8_t* dst, size_t dst_len, const char* src) {
+        memset(dst, ' ', dst_len);
+        const size_t n = strlen(src);
+        memcpy(dst, src, n < dst_len ? n : dst_len);
+    };
+
+    pad_copy(inquiry_resp->vendor_id, sizeof(inquiry_resp->vendor_id), "Mini-FT8");
+    pad_copy(inquiry_resp->product_id, sizeof(inquiry_resp->product_id), "Log Storage");
+    pad_copy(inquiry_resp->product_rev, sizeof(inquiry_resp->product_rev), "1.0");
+
+    return sizeof(scsi_inquiry_resp_t);
 }
