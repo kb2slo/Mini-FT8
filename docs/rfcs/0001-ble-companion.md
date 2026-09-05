@@ -32,6 +32,17 @@ We will **not**:
 * Make BLE or the Nano mandatory at boot
 * Block QMX USB-host CAT
 * Turn on SPIRAM / PSRAM on the ADV to “make room” for NimBLE. USB CDC and UAC need **internal DMA-capable** RAM. External RAM does not fix the V2.0.4 / 2026-08-31 failure mode.
+    * **Scope clarification (2026-09-04):** this non-goal is about **DMA buffers**, and for those it is correct — external RAM cannot back USB CDC/UAC descriptors or the contiguous DMA block §4.1b measures. It has since been read more broadly than it should be. It does **not** say that no data may live in external RAM. The ft8_lib waterfall in particular (`waterfall_static_buf`, 80,538 B — the single largest DIRAM object in the build) is plain CPU-swept data, never a DMA target, and would be a legitimate PSRAM candidate on hardware that had PSRAM, subject to measuring candidate-search sweep cost against the ~13 s slot budget.
+    * **Moot on this board, and that is the actual blocker:** the Stamp-S3A is an **ESP32-S3FN8** (`F` = embedded flash, `N8` = 8 MB; an `R2`/`R8` suffix would indicate embedded PSRAM). There is no PSRAM die to move anything into. `CONFIG_SOC_SPIRAM_SUPPORTED=y` in `sdkconfig` is chip-*family* capability, not a statement about this board, and `CONFIG_SPIRAM` is unset.
+    * **Confirmed on hardware 2026-09-04** (`esptool.py -p <port> flash_id`), so this no longer rests on a part-number inference — and checked on *both* S3 boards, because if either had PSRAM it would have reordered I24/I26:
+
+        | Board | `Features:` | Flash vendor | MAC |
+        |---|---|---|---|
+        | Cardputer ADV (Stamp-S3A) | `WiFi, BLE, Embedded Flash 8MB` | XMC (0x20) | `28:84:85:76:83:0c` |
+        | AtomS3 Lite | `WiFi, BLE, Embedded Flash 8MB` | GigaDevice (0xc8) | `50:78:7d:cd:04:cc` |
+
+        Neither reports `Embedded PSRAM`. Both are ESP32-S3 QFN56 rev v0.2, 8 MB flash, `USB mode: USB-Serial/JTAG`. So “move the waterfall to slower RAM” fails for want of hardware on *every board this project owns*, not for want of a sound idea.
+    * **Aside, since these boards are indistinguishable over USB:** `flash_id` reports the chip, and both are the same part; in USB-Serial/JTAG mode both enumerate as Espressif's generic `303A:1001` with no board string. The **MAC** is the only reliable discriminator (recorded above). The differing flash vendor is a production-batch artifact, not a model identifier — do not key anything off it.
 * Ship on-chip `ENABLE_BLE` in official `dev` / tagged binaries
 * Treat two ATOMs/Nanos (no USB-host brain) as a QMX radio
 * Use a Morserino-32 or M32 Pocket as the BLE coprocessor (classic 4-pin header or Pocket USB). Leave those boxes as CW. I17 (Pocket as a Mini-FT8 *host*) is Ideas, not this path.
@@ -90,6 +101,20 @@ PERF **P** screen, **DM** line, **L** = largest DMA block (KiB). Same session fa
 Both init orders fail. Leftover arithmetic (BLE keeps ~18K of the big block, QMX ~13K, 18+13 < 44) does **not** describe *start*: each stack wants a ~40K-class contiguous hole. QMX after BLE and BLE after QMX both lose.
 
 B15 one-shot CTS is “unplug QMX, sync, tear NimBLE down, **then** plug in and **S → 2**.” That is not a companion, and it is not NimBLE beside a live USB host. Parking UAC around CTS (cable stays in) is [ROADMAP B17](../ROADMAP.md), after B15; it is not this RFC. Contract: [ROADMAP B15](../ROADMAP.md).
+
+### 4.1c The §4.1b numbers are stale — always-on host costs ~6K (2026-09-04)
+
+**§4.1b was measured 2026-08-31. B18's always-on USB host (`80b9ebe`) landed 2026-09-02.** Its 44K "boot floor" therefore describes firmware that did *not* hold the USB host from boot, and no longer describes this tree. Anyone planning CTS headroom against 44K is planning against a number that no longer exists.
+
+Re-measured on hardware 2026-09-04, same PERF **DM** **L** method, boot with nothing pressed: **38K**. So the always-on host costs roughly **6K of the largest contiguous DMA block**, held continuously from power-on.
+
+Three things follow, and the third is the one that matters:
+
+- **CTS still starts.** `H → 1` was re-confirmed working at 38K the same day. B18 did not break CTS; it ate part of the margin.
+- **The cost lands only when the radio is idle.** `S → 2` installs the host anyway, so B18 changes *when*, not *whether*. Its 6K is spent precisely in the state CTS needs.
+- **6K does not scale the wall.** §4.1b's finding is that each stack wants a ~40K-class *contiguous* hole to start, and `S → 2` then `H → 1` failed at ~29K. Recovering 6K does not turn 29K into 40K. **Going on-demand will not unlock B17**, and should not be justified on memory grounds. Its real justifications are correctness (see §5.5) and matching the intended design.
+
+Attribution caveat: four days and several commits (`nano_flasher`, PORTA work) separate the two measurements, so B18 is the prime suspect, not a proven cause. The clean A/B is one build with the boot-time `uac_host_ensure_started()` removed — boot, read **L**. 44K confirms it.
 
 ### 4.2 What “fits” means
 
@@ -267,6 +292,12 @@ ADV USB-C is one PHY. Hub is off. Host is the default owner of that PHY.
 5. UI per §5.4. Do not start NimBLE.
 
 Operator path: Nano or QMX on ADV USB-C at boot → toast → unplug/plug → toast. Radio session is still **S → 2**.
+
+**Presence requires the USB host stack — there is no cheaper detection path (confirmed 2026-09-04).** `usb_c_presence_start()` (`main/usb_c_presence_host.cpp`) calls `usb_host_client_register()`: it is a USB Host Library *client*, receiving attach/detach through `client_event_cb` and then opening the device to read VID/PID. That requires `usb_host_install()` to have already run. There is no VBUS or D+ sense line in firmware — a grep for VBUS/boost/5V-enable across `main/` and `board_cardputer_adv` finds nothing — and the ADV *sources* VBUS in host mode rather than sensing it.
+
+**Consequence:** boot-time presence toasts (B18) and an on-demand USB host are mutually exclusive as designed. Presence can stay and the host is held from boot (today), or the host comes up only when something needs it (**S → 2**, nano flash, USB Drive) and plug/unplug toasts are lost. There is no third option on this hardware without a schematic-level sense line.
+
+**This is also why USB Drive (`C`) cannot enumerate (field-proven 2026-09-04).** Because the host is installed at boot and never released until `C` asks for it, the OTG core has been in host mode since power-on on every attempt. Instrumented firmware showed the failure precisely: `uac_ensure_host_uninstalled()` returns OK, `tinyusb_driver_install()` returns OK, `tud_connect()` runs, the screen shows "Waiting for computer..." — and **zero** TinyUSB gadget events ever arrive, while `system_profiler SPUSBDataType` on the host stays empty in both plug orders. The Mac never sees a device at all, so MSC, SCSI INQUIRY and descriptors are all downstream of the real fault. See [ROADMAP B23](../ROADMAP.md).
 
 ---
 
