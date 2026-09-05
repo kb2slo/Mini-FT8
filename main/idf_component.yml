@@ -33,12 +33,16 @@ dependencies:
   # Cardputer-Adv ES8311 mic capture. Pinned exact — drifted 1.5.9 -> 1.6.2 on
   # the same re-resolve; mic capture is a field-only path.
   espressif/esp_codec_dev: 1.5.9
-  # USB Drive (`C`) MSC gadget. Came here from components/storage_service's own
-  # manifest when that component was demoted into main/ (RFC 0002 §5.1).
-  # Pinned exact, and deliberately narrower than the `^2.1.0` it was declared
-  # with there: moving a manifest re-resolves it, and a caret range silently
-  # bumped this 2.1.1 -> 2.2.1 on the first cascade build. 2.1.1 is what the
-  # lock held before this refactor, and USB Drive is a field-only path CI
-  # cannot check. Same rule as usb_host_cdc_acm above — bump deliberately,
-  # with a field check, not as a side effect of moving a file.
+  # NOT the USB Drive gadget -- that was removed in B23. This is still
+  # required because storage_service mounts the *internal* FATFS through
+  # esp_tinyusb's MSC storage API (tinyusb_msc_install_driver +
+  # tinyusb_msc_new_storage_spiflash), which is how /storage is mounted for
+  # the firmware's own log writes. Do not delete this thinking it is dead:
+  # removing it means re-implementing that mount on plain esp_vfs_fat + wl_*,
+  # which B23 measured as worth ~3.4 KB flash and 16 B DIRAM -- not worth
+  # touching the path that holds the QSO logs. The USB *device* stack is
+  # already gone: with nothing calling tinyusb_driver_install(), the linker
+  # garbage-collects libespressif__tinyusb.a entirely.
+  # Pinned exact for the same reason as the entries above -- a manifest edit
+  # re-resolves every range here, and this drifted 2.1.1 -> 2.2.1 once already.
   espressif/esp_tinyusb: 2.1.1

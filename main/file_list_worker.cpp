@@ -30,7 +30,6 @@ uint32_t s_fallback_gen = 0;
 FileListFail fail_from_owner(StorageOwner owner)
 {
     switch (owner) {
-        case StorageOwner::USB_HOST:
         case StorageOwner::TRANSITION:
             return FileListFail::Busy;
         case StorageOwner::UNAVAILABLE:

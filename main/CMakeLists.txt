@@ -35,8 +35,5 @@ idf_component_register(
              driver esp_driver_i2c fatfs sdmmc wear_levelling
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Werror)
-# Moved here with storage_service.cpp (RFC 0002 §5.1). LINK_OPTIONS is a global
-# build property, so it works from `main` exactly as it did from the component.
-idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=tud_msc_inquiry_cb" APPEND)
 add_dependencies(${COMPONENT_LIB} minift8_build_identity)
 target_include_directories(${COMPONENT_LIB} PRIVATE ${CMAKE_BINARY_DIR}/generated)

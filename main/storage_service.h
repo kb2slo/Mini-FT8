@@ -10,7 +10,6 @@
 enum class StorageOwner : uint8_t {
     UNAVAILABLE,
     FIRMWARE,
-    USB_HOST,
     TRANSITION,
 };
 
@@ -42,10 +41,7 @@ struct StorageCopyResult {
 esp_err_t storage_service_init();
 StorageOwner storage_service_owner();
 bool storage_service_firmware_available();
-bool storage_service_usb_drive_enabled();
 size_t storage_service_open_stream_count();
-esp_err_t storage_service_set_usb_drive_enabled(bool enabled);
-bool storage_service_usb_host_attached();
 
 bool storage_file_exists(const std::string& name);
 bool storage_file_remove(const std::string& name);

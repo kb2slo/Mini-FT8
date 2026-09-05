@@ -163,14 +163,12 @@ CopyToSdPress copy_to_sd_press(const CopyBlockInputs& in,
                                std::int64_t now_ms)
 {
     ESP_LOGI(kTag,
-             "request streams=%u tx=%d decode=%d audio=%d host_bin=%d msc=%d usb=%d owns=%d",
+             "request streams=%u tx=%d decode=%d audio=%d host_bin=%d owns=%d",
              static_cast<unsigned>(in.open_streams),
              in.tx_active,
              in.decode_active,
              in.audio_streaming,
              in.host_bin_active,
-             in.ui_msc,
-             in.usb_drive,
              in.firmware_owns);
 
     const CopyBlockReason why = copy_block_reason(in);
