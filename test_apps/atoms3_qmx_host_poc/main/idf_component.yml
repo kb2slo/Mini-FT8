@@ -1,0 +1,7 @@
+dependencies:
+  idf:
+    version: '>=5.0.0'
+  # Pinned to the same version as the main project's main/idf_component.yml
+  # for no better reason than consistency; this POC doesn't share a build
+  # with that project so there's no drift risk here either way.
+  espressif/usb_host_cdc_acm: 2.2.0

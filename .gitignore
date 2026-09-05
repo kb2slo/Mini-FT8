@@ -53,6 +53,12 @@ Testing/
 sidekick/build/
 sidekick/managed_components/
 sidekick/sdkconfig
+
+# test_apps/atoms3_qmx_host_poc: separate idf.py project (RFC 0001 §4.6 evidence)
+test_apps/atoms3_qmx_host_poc/build/
+test_apps/atoms3_qmx_host_poc/managed_components/
+test_apps/atoms3_qmx_host_poc/sdkconfig
+test_apps/atoms3_qmx_host_poc/dependencies.lock
 sidekick/sdkconfig.old
 
 # Per-device full-flash backups of a physical Nano's factory state

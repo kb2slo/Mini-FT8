@@ -10,7 +10,7 @@ Human- and tool-readable project memory. Prefer this tree over editor-specific r
 | [AUTOSEQ_ARCHITECTURE.md](AUTOSEQ_ARCHITECTURE.md) | Sequencer design (slot events, tick vs decode). |
 | [AUTOSEQ_INACTIVE_QUEUE.md](AUTOSEQ_INACTIVE_QUEUE.md) | Retry exhaustion / reincarnation / inactive zone. |
 | [FT8 Free-Text Reference Extension.md](FT8%20Free-Text%20Reference%20Extension.md) | Free-text / SOTA-style payload notes. |
-| `rfcs/` | Long specs. Extract/style/boundaries: [0002](rfcs/0002-extract-and-boundaries.md). Companion: [0001](rfcs/0001-ble-companion.md) (on-chip NimBLE failed the DMA gate; UART + NanoC6; Nano firmware now built + embedded by the ADV build and field-flashed over USB-C; **phone path not locked**, see I19). [0003](rfcs/0003-m32-pocket-port-and-ble-time.md) **rejected** (Pocket+CTS bundle). B15 CTS is ROADMAP; I17 is Ideas (own RFC if sequenced). Roadmap only links them. |
+| `rfcs/` | Long specs. Extract/style/boundaries: [0002](rfcs/0002-extract-and-boundaries.md). Companion: [0001](rfcs/0001-ble-companion.md) (on-chip NimBLE failed the DMA gate; sidekick over UART, retargeting NanoC6 → AtomS3 Lite; **headless-Atom-as-main closed, hardware-confirmed**, §4.6; **phone path decided**: WiFi + plain browser, no app, §5.0 — BLE/GATT parked). [0003](rfcs/0003-m32-pocket-port-and-ble-time.md) **rejected** (Pocket+CTS bundle). B15 CTS is ROADMAP; I17 is Ideas (own RFC if sequenced). Roadmap only links them. |
 
 Git history is the changelog. Do not keep a narrative log in these files.
 

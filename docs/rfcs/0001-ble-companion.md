@@ -1,11 +1,11 @@
-# RFC 0001: Optional BLE Companion (Add-on, Not a Second Radio UI)
+# RFC 0001: Companion Sidekick (Add-on, Not a Second Radio UI)
 
-* **Status:** Draft RFC (Phase 1, sequenced [I3](../ROADMAP.md) Now). **Same-chip NimBLE on ADV+QMX failed** the §4 DMA gate (2026-08-31). Companion I/O moves **off-chip** (NanoC6 UART). **Nano firmware build is embedded in this tree** (§5.1): Mini-FT8's build also builds the NanoC6 project and bundles the resulting `.bin` into the ADV image so the ADV can field-flash a factory Nano over USB-C (§5.2, §5.4) — no desk computer required for install. **Phone path is still not locked:** GATT/iOS app (§5.3 / §6) vs local-only Wi-Fi page ([I19](../ROADMAP.md)). Explore I19 before locking that part of the architecture; it is independent of the build/flash pivot.
+* **Status:** Draft RFC. **Major pivot 2026-09-05 — read this before anything below.** Same-chip NimBLE on ADV+QMX failed the §4 DMA gate (2026-08-31, unchanged). Two things changed since: (1) **headless-Atom-as-main is closed, hardware-confirmed** — an AtomS3 Lite bench-tested as a QMX USB host (§4.6) failed to enumerate the radio even with independent Grove 5V power; Phase 1 is **not** headless, the ADV remains the main FT8 processor exactly as it is today. (2) **The sidekick chip pivots from NanoC6 to AtomS3 Lite** (§5.1) — same ADV-hosts-and-flashes mechanism, different target, chosen for the dual-core headroom a WiFi+HTTP companion needs. **Phone path also pivots**: WiFi + a plain browser is now the primary transport (§5.0) — no app on either iPhone or Android — with BLE parked, not deleted, as a possible later addition once a native app phase exists. Internet-routability is explicitly **out of scope**; if reached from off the local network at all, that is the operator's own VPN/tunnel setup, not this project's problem. §5.2 onward below (field-flash mechanics, PORTA arbitration, version identity) was built and proven **for NanoC6** — it is the reference design for retargeting to AtomS3 Lite, not a description of what's built today for that chip. §5.3/§6 (GATT, companion app) are **parked**, kept for a possible future BLE/native-app phase, not the current plan.
 * **Author / Lead:** Jeff Kalikstein, KB2SLO
 * **Target File Path:** `docs/rfcs/0001-ble-companion.md`
-* **Companion Target:** iPhone first (Android later once the iOS GATT surface is stabilized)
-* **Radio:** Cardputer ADV + QMX (USB host). First BLE brick: **M5Stack NanoC6** on ADV UART. Distinct from one-shot CTS on the ADV ([B15](../ROADMAP.md)).
-* **Ask:** Keep this document as the companion plan. Do not land NimBLE-on-ADV for a live QMX session. Do not lock GATT-vs-web until [I19](../ROADMAP.md) is tried or rejected.
+* **Companion Target:** iPhone and Android, day one, via a plain browser — no native app required for the MVP.
+* **Radio:** Cardputer ADV + QMX (USB host, unchanged). Sidekick: **AtomS3 Lite** on ADV UART (PORTA), replacing NanoC6. Distinct from one-shot CTS on the ADV ([B15](../ROADMAP.md)).
+* **Ask:** Keep this document as the companion plan. Do not land NimBLE-on-ADV for a live QMX session. Do not attempt headless-Atom-as-main again without first sourcing a board that's a *proven* USB host (§4.6) — not another untested Atom SKU. Do not build BLE/GATT (§5.3/§6) as the primary transport; WiFi+browser is primary until a native-app phase is explicitly opened.
 
 ---
 
@@ -13,9 +13,9 @@
 
 The Cardputer ADV is the right place to decode, autoseq, CAT, and TX. A phone is the right place for maps, QRZ lookups, grid helpers, and PSK Reporter spots. Those auxiliary tasks compete heavily with the 240×135 screen and the ESP32-S3 internal DRAM budget if attempted on-device.
 
-While USB Drive mode (`C`) moves `.adi` log files to a computer, it is awkward on iOS via Apple Files. Operators in the field frequently have cellular connectivity on their phone but no laptop. A low-overhead link from a coprocessor (not the ADV) lets the phone pull logs and monitor live decodes while Mini-FT8 continues uninterrupted. **How the phone talks to the Nano is open** ([I19](../ROADMAP.md)): BLE GATT was the first sketch; a Nano AP that DHCP-leases **without a default gateway** (so iOS may keep LTE) is in scope to try before this RFC locks.
+USB Drive mode (`C`) is gone (ROADMAP B23 — it never actually enumerated on a host, see RFC history). Copy Files to SD remains, but B23 removed the last non-companion way to get logs off the ADV over a cable. That raises the stakes on the sidekick actually working, not lowers them. Operators in the field frequently have cellular connectivity on their phone but no laptop. A low-overhead link from a coprocessor (not the ADV) lets the phone pull logs and monitor live decodes while Mini-FT8 continues uninterrupted. **How the phone talks to the sidekick is WiFi + a plain browser** (§5.0) — settled 2026-09-05, not open. iOS Safari has no Web Bluetooth support at all (a long-standing, Apple-wide platform limitation), so a genuine "no app, works on iPhone or Android" companion cannot use BLE as its transport regardless of any other tradeoff; that fact alone decides §5.0, it isn't a preference.
 
-**How the Nano attaches:** the ADV does **not** run NimBLE while the QMX is up. A second MCU (NanoC6) owns the phone link. The ADV talks TTL UART. KB2SLO will lead the UART framing and the Nano firmware. The phone UI (native app vs Safari) waits on I19.
+**How the sidekick attaches:** the ADV does **not** run NimBLE while the QMX is up, and does not run WiFi/lwIP on the ADV either (unchanged non-goal, §2). A second MCU (AtomS3 Lite, replacing NanoC6 — §5.1) owns the phone link. The ADV talks TTL UART to it over PORTA, exactly as designed for the Nano. The phone UI is a browser page the sidekick itself serves; no native app, no App Store review, no separate iOS/Android codebases for the MVP.
 
 ---
 
@@ -49,6 +49,8 @@ We will **not**:
 * Use IR or the headphone jack as the companion pipe
 
 The Cardputer remains the single source of truth and operation. The phone acts strictly as a **spectator and librarian**.
+
+**Reaffirmed, not merely carried over, 2026-09-05:** a chat-only detour explored a headless Atom *replacing* the ADV as the main processor, which would have made this non-goal incoherent (there'd be no Cardputer left to be "the" operator surface, so the phone/browser would have had to become one — a genuine, un-shipped scope change, not a wording problem). §4.6 closes that detour on hardware grounds. With the ADV confirmed as remaining the main processor, this non-goal is back in force exactly as written, unconditionally, no asterisk. If headless-as-main is ever revisited on different, proven hardware, this non-goal is the first thing that would need a real, deliberate rewrite — not an assumption to carry over quietly.
 
 ---
 
@@ -126,8 +128,8 @@ Attribution caveat: four days and several commits (`nano_flasher`, PORTA work) s
 | Wi-Fi + lwIP on the ADV to replace BLE | Worse internal RAM, not better |
 | USB hub on ADV (`CONFIG_USB_HOST_HUBS_SUPPORTED` is off) | More host DMA; not enabled |
 | Another ESP32-S3 / PSRAM board | Same ~512 KB **internal** SRAM; USB still needs DIRAM |
-| CoreS3 OTG + proto + ATOM | Same UART architecture; new UI + unproven QMX host. Later, not the first brick |
-| UART to a second MCU; that MCU runs NimBLE | **The path.** First brick: NanoC6. ADV heap stays the QMX heap |
+| CoreS3 OTG + proto + ATOM | Same UART architecture; "unproven QMX host" flagged here **confirmed false for AtomS3 Lite**, 2026-09-05 — see §4.6. Not revisited without a different, proven-host board |
+| UART to a second MCU; that MCU runs WiFi + browser-served HTTP (was: NimBLE) | **The path**, pivoted 2026-09-05. Sidekick: AtomS3 Lite (was NanoC6). ADV heap stays the QMX heap either way — the second MCU's radio choice doesn't touch it |
 | Morserino / M32 Pocket as that second MCU | **Rejected.** Not a companion brick. |
 
 The number that killed QMX TX was not DIRAM remain. It was **no contiguous DMA block left for CDC**.
@@ -158,32 +160,54 @@ The number that killed QMX TX was not DIRAM remain. It was **no contiguous DMA b
 
 §4.1b is the filled-in field answer (PERF **L** only).
 
+### 4.6 Headless-Atom-as-main: closed on hardware, 2026-09-05
+
+A chat-only exploration (never landed in this file, so no revert needed elsewhere) asked whether an AtomS3-family board could *replace* the ADV as the main FT8 processor, with the Nano/sidekick unchanged — "headless": no screen, no keyboard, an ordinary smartphone browser as the only operator surface. The single hard requirement for that to work at all is the main board acting as USB **host** to a QMX/QDX, exactly as the ADV already does.
+
+**Before any bench test**, the specific candidate — AtomS3 Lite — was checked against its own vendor documentation (`docs.m5stack.com`, fetched directly): *"The onboard USB Type-C port enables program download and serial communication"* — a description limited entirely to device-mode uses — plus a power circuit described as *"5V to 3.3V"*, one-directional step-down with no mentioned boost/VBUS-source path. USB host mode requires sourcing VBUS out to the hosted device; nothing in that description suggests this board can. This matched a gap already on record: this RFC's own §4.2 table has carried *"CoreS3 + proto + ATOM ... new board + OTG proof"* since before this pivot — Atom-class USB-host capability was flagged as unverified, not assumed, from the start.
+
+**Bench-tested 2026-09-05, and it failed.** A minimal POC (`test_apps/atoms3_qmx_host_poc/`, not shipped) installed the USB Host Library on an AtomS3 Lite and attempted the exact CAT sequence `main/radio_control_qmx.cpp` already uses and has proven on the ADV: `MD6; FR0; FT0; FA00007074000;` — entirely receive-side, no `TX;`, safe with no antenna. Pass condition was the QMX's **own screen** showing the new frequency (chosen specifically because this operator's bench has no way to watch UART/serial logs while the AtomS3's one USB-C port is busy being a host — the same port can't simultaneously present a debug console). The QMX's display never changed. Retested with the AtomS3 Lite additionally powered independently via its Grove 5V pin (ruling out "it just needed its own power rail" as an explanation) — same result. **Confirmed, not inferred: this specific board cannot act as a USB host for a QMX.**
+
+**Scope of what this closes.** It is not narrowly about flashing a sidekick over USB — that would be a minor, recoverable loss (the existing desk-flash-over-its-own-USB-C fallback, already documented and proven, covers it). It is the same underlying capability, and the same shared software path (`nano_flasher`'s field-flash and `stream_uac.cpp`'s QMX CAT hosting both depend on `usb_host_cdc_acm`) — so this closes **any** use of this specific board as a USB host, which is the one thing "headless-as-main" cannot do without.
+
+**What this does not close.** The ADV's own USB-host capability (Stamp-S3A module) is unaffected and remains fully proven — this finding is about a *different* chip carrier, not about ESP32-S3 USB-OTG host mode in general. A board built on the exact same Stamp-S3A module the ADV already uses would inherit that proven behavior; whether one is sourceable standalone (screen-less, keyboard-less) is a separate, open, ongoing thread — track it before reopening headless-as-main, and do not substitute another untested Atom SKU for it without repeating this same bench test first.
+
+**What this pivots to instead:** Phase 1 is not headless. The ADV remains the main processor, unchanged. The sidekick chip itself still moves — to AtomS3 Lite (§5.1) — but as a *companion* to the ADV, never as its USB host replacement. AtomS3 Lite's device-mode USB-C (proven all session, via ordinary `esptool.py` flashing) is exactly what a sidekick needs; its host-mode absence is irrelevant to that role, since a sidekick never hosts anything over USB.
+
 ---
 
 ## 5. Proposed Firmware Architecture
 
-### 5.0 Phone path (not locked)
+### 5.0 Phone path — WiFi + browser is primary, decided 2026-09-05
 
-Hardware split is locked: **ADV (QMX + Mini-FT8) + NanoC6 (UART)**. What the **phone** uses is not.
+Hardware split is locked: **ADV (QMX + Mini-FT8, unchanged) + sidekick (AtomS3 Lite) on UART**. What the phone uses is now decided for the MVP:
 
 | Path | Status |
 |---|---|
-| BLE GATT + iOS app (§5.3 / §6) | Working hypothesis. Do not treat as signed-off. |
-| Nano Wi-Fi AP + HTTP, DHCP **no Option 3 / no Option 6** ([I19](../ROADMAP.md)) | **Explore before locking.** Community reports iOS then keeps LTE and can still hit a local IP. Not Apple-documented. Field: LTE icon + Safari to Nano IP + QRZ on cellular. Fail → stay on GATT or reject web. |
-| HTTP-over-BLE, iPhone Personal Hotspot STA, Wi-Fi on the ADV | Out. |
+| **WiFi + plain browser (no app), sidekick-hosted** | **Primary, decided.** Decisive, not just preferred: iOS Safari has no Web Bluetooth support at all — a long-standing Apple-wide limitation, not a bug that might be fixed — so a genuine no-app companion working on *both* iPhone and Android cannot use BLE regardless of any other tradeoff. |
+| Sidekick-as-AP (I19's original shape, phone joins it) | In scope, mode TBD vs STA below. No credential bootstrap needed — the sidekick's own network is fixed/known, nothing to configure. |
+| Sidekick-as-STA joining phone Personal Hotspot or home WiFi | In scope, real reason to prefer it over AP-only for the field case: joining a Personal Hotspot means the *phone* is the one sharing its own cellular connection — standard, Apple-documented behavior — rather than the phone trying to be a WiFi client of the sidekick while hoping iOS keeps LTE (I19's original, undocumented DHCP-based risk). Credential bootstrap for this direction: SoftAP provisioning (below), not BLE. |
+| BLE GATT + native app (§5.3 / §6) | **Parked, not deleted.** No role in the MVP given the Safari constraint above. Revisit only if a native-app phase is explicitly opened later; the GATT design in §5.3 stays as reference for that. |
+| Credential bootstrap for STA modes | **SoftAP provisioning** (ESP-IDF's `wifi_provisioning`, `scheme_softap.h` — verified present in this project's IDF 5.5.1 install): sidekick temporarily becomes its own setup AP, operator's browser (phone *or* Mac, device-agnostic) joins it, submits the real target SSID/password via a plain page, sidekick reboots as STA. No app, no BLE. Reuses AP-mode capability the sidekick needs anyway for the row above — not new radio work. |
+| Internet-routable (port-forward/DDNS, cloud tunnel, VPN mesh) | **Out of scope for this project entirely**, decided 2026-09-05, not just deferred. Local-network reachability only. If an operator wants remote/internet access, that is their own VPN/tunnel to set up — Mini-FT8 does not attempt it, and does not take on the auth/exposure risk of a licensed station's control surface being internet-reachable by default. |
+| HTTP-over-BLE, Wi-Fi on the ADV | Out (unchanged). |
 
-Do not start Nano firmware that assumes only GATT until I19 is tried or explicitly dropped.
+I19's original DHCP-no-gateway field test was never actually run — superseded by the Safari/Web-Bluetooth finding above before it became necessary, since AP-vs-STA-vs-hotspot is now a mode choice within the WiFi path, not a competing candidate against GATT.
 
-### 5.1 Split: ADV + NanoC6
+### 5.1 Split: ADV + AtomS3 Lite (pivoted 2026-09-05, was NanoC6)
 
 | Piece | Role |
 |---|---|
-| **ADV** | Mini-FT8, QMX USB host, decode, CAT, UI. **No NimBLE** for companion. UART TX of decode/log bytes from a low-priority task (never the DSP task). |
-| **NanoC6** | Phone link (GATT and/or I19 HTTP). USB-C CDC for desk flash and optional ADV-log bridge. UART from ADV. |
+| **ADV** | Mini-FT8, QMX USB host, decode, CAT, UI. **No NimBLE**, no WiFi/lwIP for companion (unchanged non-goal). UART TX of decode/log bytes from a low-priority task (never the DSP task). |
+| **AtomS3 Lite** | Phone link: WiFi (AP and/or STA, §5.0) + a browser-served HTTP UI. USB-C CDC for desk flash and optional ADV-log bridge. UART from ADV over PORTA, unchanged mechanism from the Nano design. |
 
-**First brick:** [M5Stack NanoC6](https://docs.m5stack.com/en/core/M5NanoC6) (SKU C125). ESP32-C6FH4, 4 MB flash, Grove, USB-C CDC, ~24×12×9.5 mm. A BLE-only IDF (no Wi-Fi/Thread/Matter) is expected to fit if GATT wins. I19 needs Wi-Fi + lwIP + HTTP on that 4 MB — **measure before choosing**; dual-OTA + Wi-Fi is not a promise.
+**Why AtomS3 Lite over NanoC6, specifically:** dual-core ESP32-S3 (240 MHz ×2) vs the C6's single core (160 MHz) is real, not marginal, headroom for running WiFi + lwIP + an HTTP server concurrently with PORTA UART parsing — a common ESP-IDF pattern pins the network stack to one core, leaving the other free. NanoC6's WiFi 6 / 802.15.4 extras buy nothing for a local HTTP server at FT8 data rates. **What did *not* change the decision:** AtomS3 Lite cannot act as a USB host (§4.6) — irrelevant here, since a sidekick never hosts anything over USB; its own USB-C only needs device mode (flashing), already proven all session via plain `esptool.py`.
 
-**Dev:** ESP-IDF 5.5.x, `idf.py set-target esp32c6`, project lives in this tree at `sidekick/` (a sibling root next to `main/`, `components/`, `test_apps/` — matches the `test_apps/cardputer_adv_audio_keyboard/` precedent for a second, independent `idf.py` project). Hold **GPIO9**, then plug USB-C for desk bring-up. Arduino + M5Unified is acceptable for bring-up, but the shipped build is ESP-IDF so the ADV build can invoke it.
+**Board:** M5Stack AtomS3 Lite. ESP32-S3FN8 (per `esptool flash_id`, confirmed 2026-09-04: no embedded PSRAM), 8 MB flash, HY2.0-4P Grove (`GND/5V/G2/G1` — identical pinout to the Nano's, confirmed against both boards' schematics, so the existing PORTA cable and wiring need no change), USB-C (device mode only), 24.0×24.0×9.5 mm. 8 MB gives real headroom for a WiFi+lwIP+HTTP binary, which will be meaningfully larger than the Nano's ~100-line beacon-only firmware; the Nano's 4 MB budget concerns in the historical section below no longer apply.
+
+**Dev:** ESP-IDF 5.5.x, `idf.py set-target esp32s3` (was `esp32c6`), same `sidekick/` project location (sibling root next to `main/`, `components/`, `test_apps/`). Strap pin for download mode is **GPIO0** on ESP32-S3 (not the C6's GPIO9) — same family as the ADV's own Stamp-S3A, so the same desk bring-up procedure the ADV itself uses applies, not the Nano-specific GPIO9 instructions in the historical section below.
+
+**Retargeting work, tracked as its own item ([ROADMAP I3](../ROADMAP.md), amended):** `sidekick/`'s `sdkconfig`/`CMakeLists.txt` need the target change; `components/nano_flasher/nano_flasher.cpp:116`'s `if (target != ESP32C6_CHIP)` needs to also accept `ESP32S3_CHIP` (the ADV remains the proven host in that relationship — this is a small, well-scoped widening, not a redesign); the WiFi/HTTP application logic itself is new work, not a port of anything that existed for the Nano (which never had WiFi at all). §5.2 onward below is the **Nano-era reference design** for the mechanics that do carry over unchanged in shape (ADV hosts and flashes the sidekick over USB-C, then the sidekick moves to PORTA for the ongoing link) — re-verify each specific fact against the new chip rather than assuming it, the same discipline this project has applied to every other hardware claim.
 
 **Build integration (pivot from "separate project"):** `tools/stage_nano_firmware.sh` builds the `esp32c6` `sidekick` project and stages its outputs into `components/nano_flasher/target_firmware/`; the ADV build then embeds the resulting `sidekick.bin` (plus bootloader and partition table) into the ADV app image via `EMBED_FILES`, and CI's `nano-firmware` job does the equivalent before the ADV job runs. This is a **data payload**, not code the ADV executes: the S3 never runs C6 instructions. The embedded bytes exist only so the ADV can push them out over USB-C to a Nano's ROM serial bootloader (§5.4). Two build outputs ship from one `idf.py build`: the ADV merged image (as today) and, unchanged, a standalone Nano `.bin` for desk flash via `esptool.py` when field-flash isn't used or fails. Flash budget: the embedded `.bin` must fit the ADV's `partitions.csv` remainder — measure before merging, same discipline as §4's DIRAM measurement.
 
@@ -191,7 +215,9 @@ Do not start Nano firmware that assumes only GATT until I19 is tried or explicit
 
 **I4 / `core_api`:** still a facade. A real UART consumer is part of sequencing I3, not a hand-wave in `main.cpp`.
 
-### 5.2 Physical (ADV + Nano)
+### 5.2 Physical (ADV + Nano) — NANO-ERA REFERENCE DESIGN, not yet re-verified for AtomS3 Lite
+
+**Everything from here through the end of §5.2c was built and proven on real hardware for NanoC6.** It's kept in full, not deleted, because the mechanism it describes (ADV hosts and field-flashes the sidekick over USB-C, sidekick then moves to PORTA for the ongoing UART link, version identity via the shared `esp_app_desc_t` scheme) is the intended shape for AtomS3 Lite too. But it has not been re-verified on that chip. Known specific facts below that are **known to change** on ESP32-S3: the strap pin is GPIO0, not GPIO9 (§5.1); the button-hold disproof (§5.2 below) is a C6-specific finding about C6's ROM behavior and should not be assumed to apply or not apply to S3 without checking; flash size is 8 MB not 4 MB. Treat every other specific claim below (VID/PID handling aside — that's ADV-side and chip-agnostic) as needing the same "verify, don't assume" pass before relying on it for AtomS3 Lite.
 
 **Boot presence (B18):** the factory Nano speaks on **its USB-C** (Espressif CDC / USB-Serial-JTAG). ADV USB-C is USB **host** — same jack as QMX. A Grove ping cannot see a factory Nano (PORTA probe field-failed 2026-09-02: silent Grove, then idle-high false positive). See §5.5.
 
@@ -248,7 +274,9 @@ Both transports funnel into one shared version-compare function on the ADV side;
 
 **Other known, accepted gaps:** trailing bytes in the same UART read past a role-lock point are dropped, not re-routed (self-heals on the next second's GPS sentence or companion beacon); PORTA-arbitrated GPS baud isn't persisted back to station config the way GPS's own self-owned auto-baud is (worst case, one extra probe-flip cycle at next boot); the 10s re-arm window is a first guess, not yet field-tuned; the companion role doesn't re-validate subsequent beacons while already locked (liveness alone keeps the re-arm timer honest, but a mid-session sidekick reflash without a PORTA disconnect wouldn't be noticed until the next re-arm).
 
-### 5.3 GATT Specification (on the Nano, if GATT is the phone path)
+### 5.3 GATT Specification — PARKED 2026-09-05, not the current plan
+
+WiFi + browser is the primary phone path (§5.0); iOS Safari's lack of Web Bluetooth support rules BLE out for a no-app MVP on iPhone specifically, not just deprioritizes it. Kept below as reference for a possible future native-app phase, not something to build now.
 
 Hypothesis only until I19 is resolved. One minimalist service with notify and pull semantics. No remote execution. The ADV never exposes these characteristics.
 
@@ -301,7 +329,9 @@ Operator path: Nano or QMX on ADV USB-C at boot → toast → unplug/plug → to
 
 ---
 
-## 6. Companion App Scope (iOS First — if GATT wins)
+## 6. Companion App Scope (iOS First — if GATT wins) — PARKED 2026-09-05
+
+Superseded for the MVP: the browser page the sidekick serves (§5.0) covers "value-add helpers" without a native app on either platform. Kept below only as reference should a native-app phase be explicitly opened later.
 
 Skip this section’s App Store app if I19’s Safari path passes and we lock that instead. The phone still provides **value-add helpers**, not radio controls. It talks to the **Nano**, not to the ADV.
 
@@ -320,20 +350,21 @@ The phone application provides **value-add helpers**, not radio controls. It con
 
 ## 7. Phased Implementation Strategy
 
-I3 is sequenced ([ROADMAP.md](../ROADMAP.md) Now). Phone path (GATT vs I19) stays open per §5.0 — this pivot only unblocks firmware build/embed/flash, not the BLE/GATT surface.
+I3 is sequenced ([ROADMAP.md](../ROADMAP.md) Now), amended 2026-09-05 for the chip pivot. Phone path is **decided** (§5.0, WiFi + browser) — no longer an open branch this table needs to carry.
 
 | Phase | Firmware | App / RFC | Exit |
 |---|---|---|---|
-| **0 — RFC** | None | This file, including §4.1b. **I19 before locking §5.3 / §6** | Sign-off: on-chip BLE is out; Nano UART is the coprocessor; **phone path chosen** (GATT or I19 web, or both) |
+| **0 — RFC** | None | This file, including §4.1b, §4.6 | Sign-off: on-chip BLE is out; sidekick UART is the coprocessor; **phone path decided** (WiFi + browser, §5.0) |
 | **1a — Same-chip NimBLE** | B15 CTS probe | — | **Closed, failed** (§4.1b) |
-| **1b — USB-C presence** | B18: always-on host; attach/detach toasts; **S → 2** probes existing UAC (no bus reset); park for **C** and CTS | — | **Done.** Empty = no toast; **S → 2** streams without QMX reboot; Grove ping **rejected**. |
-| **1c — Nano build embed + field flash** | `esp32c6` Nano project in-tree (§5.1); ADV build embeds its `.bin`; install prompt (§5.4) flashes over USB-C ROM bootloader | — | Nano `.bin` fits `partitions.csv` remainder; field-flash succeeds or falls back to desk `esptool.py`; flashed Nano boots; ADV **DM L** / QMX CAT/`TA` unchanged by the added build step |
-| **1 — UART + Nano BLE** | NimBLE + Grove UART on the now-flashed Nano. ADV: queue + UART TX, not `main.cpp` policy | iOS: scan Nano, pair, decode feed | QMX CAT/`TA` unchanged with Nano powered; decode lines on the phone; ADV **DM L** stays in the QMX-only ballpark |
-| **2 — Log Sync** | `LOG_META` + blocks over UART then BLE | iOS: `.adi` pull | No slot stall; FATFS worker |
-| **3 — Helpers** | Unchanged | QRZ, grid, MapKit, PSK Reporter | Field tool |
-| **4 — Android / other bricks** | Same GATT on Nano | Android | Optional AtomS3 Lite if Nano RF is weak |
+| **1a′ — Headless Atom-as-main** | AtomS3 Lite USB-host bench POC | — | **Closed, failed, hardware-confirmed** (§4.6). Not revisited without a different, proven-host board. |
+| **1b — USB-C presence** | B18: always-on host; attach/detach toasts; **S → 2** probes existing UAC (no bus reset); park for CTS | — | **Done.** Empty = no toast; **S → 2** streams without QMX reboot; Grove ping **rejected**. |
+| **1c — Sidekick build embed + field flash (retarget in progress)** | `esp32s3` sidekick project in-tree (§5.1, was `esp32c6`); ADV build embeds its `.bin`; install prompt (§5.4) flashes over USB-C ROM bootloader | — | Was proven for NanoC6 (2026-09-03); needs re-verification on AtomS3 Lite: `.bin` fits `partitions.csv` remainder (8 MB now, easier), field-flash succeeds or falls back to desk `esptool.py`, `nano_flasher.cpp:116`'s chip-type check widened to accept `ESP32S3_CHIP` |
+| **1 — UART + sidekick WiFi/HTTP** | Grove UART on the now-flashed sidekick, feeding a WiFi AP/STA + browser-served HTTP UI. ADV: queue + UART TX, not `main.cpp` policy | None — plain browser, iPhone or Android | QMX CAT/`TA` unchanged with sidekick powered; decode lines visible in a browser with no app installed; ADV **DM L** stays in the QMX-only ballpark |
+| **2 — Log Sync** | `LOG_META`-equivalent + blocks over UART then HTTP | Browser: `.adi` pull | No slot stall; FATFS worker |
+| **3 — Helpers** | Unchanged | QRZ, grid, mapping, PSK Reporter — web-rendered, not native | Field tool |
+| **4 — Native app (parked)** | Same sidekick, GATT added if opened later (§5.3) | iOS/Android native app | Only pursued if browser UX proves insufficient in the field |
 
-*KB2SLO owns this. Public GitHub. Nano firmware source lives in this tree and is built by the ADV build (§5.1), but ships as two artifacts: the merged ADV image (Nano `.bin` embedded for field flash) and a standalone Nano `.bin` for desk flash.*
+*KB2SLO owns this. Public GitHub. Sidekick firmware source lives in this tree and is built by the ADV build (§5.1), but ships as two artifacts: the merged ADV image (sidekick `.bin` embedded for field flash) and a standalone sidekick `.bin` for desk flash.*
 
 ---
 
@@ -344,15 +375,16 @@ I3 is sequenced ([ROADMAP.md](../ROADMAP.md) Now). Phone path (GATT vs I19) stay
 | **NimBLE vs CDC-ACM on ADV** | Do not run NimBLE on the ADV with QMX up. Nano owns BLE. |
 | **Treating 94 KB DIRAM remain as BLE headroom** | §4.2 / §4.1b |
 | **UART in the decode task** | Queue; low-priority drain |
-| **Nano 4 MB + Wi-Fi/OTA** | BLE-only if GATT; I19 must **measure** Wi-Fi+lwIP+UI before lock |
-| **Nano ceramic antenna** | Face out of the sled; AtomS3 Lite fallback |
+| **Sidekick 8 MB + Wi-Fi/HTTP** | AtomS3 Lite's 8 MB gives real headroom over the Nano's 4 MB; measure the actual binary before assuming, same discipline as everywhere else in this RFC |
+| **AtomS3 Lite antenna** | Datasheet-described as larger/stronger than the Nano's ceramic antenna; unmeasured for this specific WiFi-AP/STA use, verify in the field |
 | **PORTA vs LoRa GNSS** | Companion UART is PORTA; LoRa GNSS is UART2 and can coexist. Don’t put GPS puck and Nano on PORTA together. |
 | **Grove ping as presence** | **Rejected.** Factory Nano is silent on Grove; PORTA has idle-high pull-ups. Presence is USB-C VID/PID (B18). |
 | **B18 host vs later UAC** | Host up from boot with QMX FIFO. **S → 2** attaches UAC/CDC only. Fail if that second `usb_host_install` is required. |
 | **B18 vs C / CTS** | Park host (uninstall) for Drive and CTS start; reinstall host after, not UAC. |
 | **5VOUT vs Nano USB-C** | One 5 V source |
 | **FATFS / USB Drive** | Same as before: abort log pull |
-| **Scope creep ("Phone as Radio")** | Non-goals; zero CAT/QSY/TX on GATT |
+| **Scope creep ("Phone as Radio")** | Non-goals (§2), reaffirmed 2026-09-05 after the headless detour closed: ADV stays the single source of truth, phone/browser is spectator + librarian only, zero CAT/QSY/TX from the sidekick's WiFi UI |
+| **Assuming an unverified Atom SKU can USB-host a QMX** | **Rejected, hardware-confirmed** (§4.6). Any future headless-as-main attempt repeats this exact bench test on the specific candidate board before writing application code, not after |
 | **DSP jitter** | Nano absorbs BLE; ADV does not wait |
 | **Embedded Nano `.bin` blows the ADV flash budget** | Measure against `partitions.csv` remainder before merging; fail the build loudly rather than silently truncate |
 | **ROM-bootloader auto-reset over USB-CDC doesn't work from ADV** | **Resolved.** Proven on real hardware 2026-09-03 (`components/nano_flasher/`): field-flashed a factory M5NanoC6, confirmed booting `sidekick` via monitor on its own USB-C afterward. Fallback (desk flash, §5.2) stays available regardless. |
@@ -363,7 +395,9 @@ I3 is sequenced ([ROADMAP.md](../ROADMAP.md) Now). Phone path (GATT vs I19) stay
 ## 9. Ask of the Mini-FT8 Maintainers
 
 1. Accept §4.1b: on-chip companion BLE is **rejected** on ADV+QMX.
-2. Accept §5 hardware: **ADV + NanoC6**. Boot presence is USB-C (B18, done / §5.5). Companion UART is PORTA Grove (I3). Phone path (**GATT vs I19 web**) is **not** signed off until I19 is tried or dropped.
-3. Accept §5.1/§5.2/§5.4 pivot: Nano firmware source lives in this tree, the ADV build embeds its `.bin`, and the install prompt field-flashes a factory Nano over USB-C, with desk `esptool.py` flash as the documented fallback. I3 is sequenced ([ROADMAP.md](../ROADMAP.md) Now).
-4. Do not merge ADV NimBLE-on-while-QMX. B15 one-shot CTS is a separate product decision (ROADMAP).
-5. Field (I3 Now): embedded `.bin` fits flash budget; field-flash prompt installs and boots a Nano over USB-C, or falls back cleanly to desk flash; Nano powered, QMX streaming, ADV **DM L** and CAT/`TA` match Nano-off.
+2. Accept §4.6: headless-Atom-as-main is **closed, hardware-confirmed** — AtomS3 Lite cannot USB-host a QMX. Phase 1 is not headless. The ADV remains the main FT8 processor, unchanged, indefinitely unless a *different*, proven-USB-host board is sourced and separately bench-tested.
+3. Accept §5.1/§5.0 pivot: sidekick chip moves from **NanoC6 to AtomS3 Lite**, chosen for dual-core WiFi+HTTP headroom. Phone path is **decided**: WiFi + a plain browser, no app, iPhone and Android from day one — decisive because iOS Safari has no Web Bluetooth support, not merely preferred. GATT/native-app work (§5.3/§6) is parked, not deleted.
+4. Accept that internet-routability is **explicitly out of scope** for this project. Local-network reachability only; remote access is the operator's own VPN/tunnel to set up.
+5. Accept §5.2 onward as a **Nano-era reference design**, not a description of what's built today for AtomS3 Lite — the retargeting work (ROADMAP I3, amended) is tracked separately and re-verifies each hardware-specific claim rather than assuming it carries over.
+6. Do not merge ADV NimBLE-on-while-QMX. B15 one-shot CTS is a separate product decision (ROADMAP).
+7. Field, once I3's retarget lands: embedded `.bin` fits flash budget on the new chip; field-flash prompt installs and boots the sidekick over USB-C, or falls back cleanly to desk flash; sidekick powered, QMX streaming, ADV **DM L** and CAT/`TA` unchanged; decode lines visible in a browser on an unmodified iPhone and an unmodified Android phone, no app installed on either.
