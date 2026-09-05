@@ -15,9 +15,28 @@ idf_component_register(
          "stream_uac.cpp"
          "dds_q15.cpp"
          "resample.cpp"
+         "station.cpp"
+         "station_save_queue.cpp"
+         "band_config.cpp"
+         "usb_c_presence.cpp"
+         "usb_c_presence_host.cpp"
+         "adif.cpp"
+         "qso_browse.cpp"
+         "file_list.cpp"
+         "file_list_queue.cpp"
+         "cts_time.cpp"
+         "cts_ble.cpp"
+         "external_rtc.cpp"
+         "storage_service.cpp"
     INCLUDE_DIRS "."
-    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib usb_host_uac usb_host_cdc_acm usb_c_presence storage_service external_rtc efuse station adif qso_browse file_list cts_time cts_ble band_config nano_flasher
+    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib nano_flasher
+             usb_host_uac usb_host_cdc_acm usb espressif__esp_tinyusb
+             bt nvs_flash efuse esp_partition esp_hw_support
+             driver esp_driver_i2c fatfs sdmmc wear_levelling
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Werror)
+# Moved here with storage_service.cpp (RFC 0002 §5.1). LINK_OPTIONS is a global
+# build property, so it works from `main` exactly as it did from the component.
+idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=tud_msc_inquiry_cb" APPEND)
 add_dependencies(${COMPONENT_LIB} minift8_build_identity)
 target_include_directories(${COMPONENT_LIB} PRIVATE ${CMAKE_BINARY_DIR}/generated)
