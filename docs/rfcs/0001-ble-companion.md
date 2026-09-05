@@ -32,6 +32,8 @@ We will **not**:
 * Make BLE or the Nano mandatory at boot
 * Block QMX USB-host CAT
 * Turn on SPIRAM / PSRAM on the ADV to “make room” for NimBLE. USB CDC and UAC need **internal DMA-capable** RAM. External RAM does not fix the V2.0.4 / 2026-08-31 failure mode.
+    * **Scope clarification (2026-09-04):** this non-goal is about **DMA buffers**, and for those it is correct — external RAM cannot back USB CDC/UAC descriptors or the contiguous DMA block §4.1b measures. It has since been read more broadly than it should be. It does **not** say that no data may live in external RAM. The ft8_lib waterfall in particular (`waterfall_static_buf`, 80,538 B — the single largest DIRAM object in the build) is plain CPU-swept data, never a DMA target, and would be a legitimate PSRAM candidate on hardware that had PSRAM, subject to measuring candidate-search sweep cost against the ~13 s slot budget.
+    * **Moot on this board, and that is the actual blocker:** the Stamp-S3A is an **ESP32-S3FN8** (`F` = embedded flash, `N8` = 8 MB; an `R2`/`R8` suffix would indicate embedded PSRAM). There is no PSRAM die to move anything into. `CONFIG_SOC_SPIRAM_SUPPORTED=y` in `sdkconfig` is chip-*family* capability, not a statement about this board, and `CONFIG_SPIRAM` is unset. Confirm on hardware with `esptool.py flash_id` — the `Features:` line names embedded PSRAM when present. So “move the waterfall to slower RAM” fails for want of hardware, not for want of a sound idea.
 * Ship on-chip `ENABLE_BLE` in official `dev` / tagged binaries
 * Treat two ATOMs/Nanos (no USB-host brain) as a QMX radio
 * Use a Morserino-32 or M32 Pocket as the BLE coprocessor (classic 4-pin header or Pocket USB). Leave those boxes as CW. I17 (Pocket as a Mini-FT8 *host*) is Ideas, not this path.
