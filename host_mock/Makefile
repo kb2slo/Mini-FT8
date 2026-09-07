@@ -4,7 +4,8 @@ CXXFLAGS = -DHOST_MOCK -std=c++17 -g -Wall -Wno-unused-variable
 CFLAGS   = -DHOST_MOCK -g -Wall
 
 # host_mock first so mock esp_log.h shadows the real one
-INCLUDES = -I. -I../main -I../components/ui/include \
+INCLUDES = -I. -I../main -I../main/radio -I../main/audio -I../main/storage -I../main/time \
+           -I../components/ui/include \
            -I../components/ft8_lib -I../components/ft8_lib/vendor \
            -I../components/ft8_lib/vendor/ft8 \
            -I../components/board_cardputer_adv/include
@@ -58,13 +59,13 @@ $(CANCEL_TARGET): $(CANCEL_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 ADIF_OBJ = adif.o test_adif_merge.o
-adif.o: ../main/adif.cpp
+adif.o: ../main/storage/adif.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(ADIF_TARGET): $(ADIF_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 STATION_OBJ = station.o test_station.o
-station.o: ../main/station.cpp
+station.o: ../main/storage/station.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(STATION_TARGET): $(STATION_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -86,7 +87,7 @@ $(RX_LIST_STALE_TARGET): $(RX_LIST_STALE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 CTS_TIME_OBJ = cts_time.o test_cts_time.o
-cts_time.o: ../main/cts_time.cpp
+cts_time.o: ../main/time/cts_time.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(CTS_TIME_TARGET): $(CTS_TIME_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -110,7 +111,7 @@ $(POWER_TARGET): $(POWER_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 QSO_BROWSE_OBJ = qso_browse.o test_qso_browse.o
-qso_browse.o: ../main/qso_browse.cpp
+qso_browse.o: ../main/storage/qso_browse.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(QSO_BROWSE_TARGET): $(QSO_BROWSE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -120,15 +121,15 @@ $(COPY_BLOCK_TARGET): $(COPY_BLOCK_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 STATION_SAVE_OBJ = station_save_queue.o test_station_save_queue.o
-station_save_queue.o: ../main/station_save_queue.cpp
+station_save_queue.o: ../main/storage/station_save_queue.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(STATION_SAVE_TARGET): $(STATION_SAVE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 FILE_LIST_OBJ = qso_browse.o file_list.o file_list_queue.o test_file_list.o
-file_list.o: ../main/file_list.cpp
+file_list.o: ../main/storage/file_list.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
-file_list_queue.o: ../main/file_list_queue.cpp
+file_list_queue.o: ../main/storage/file_list_queue.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(FILE_LIST_TARGET): $(FILE_LIST_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
