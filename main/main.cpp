@@ -3170,6 +3170,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
       rtc_last_update -= delta_ms;
       rtc_update_strings();
       rtc_sync_to_esp_rtc();
+      (void)rtc_write_external_from_soft("decode auto-sync");
       ESP_LOGI("SYNC", "Applied RTC sync: median=%.2fs delta=%dms", median, delta_ms);
     }
   }
