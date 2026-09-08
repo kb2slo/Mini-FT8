@@ -93,3 +93,39 @@ bool menu_edit_accepts(MenuEdit kind, char c, size_t current_len, char* out_ch)
         return false;
     }
 }
+
+size_t menu_long_max_len(MenuLongEdit kind)
+{
+    switch (kind) {
+        case MenuLongEdit::IgnoreList:
+            return kMenuIgnoreMaxLen;
+        case MenuLongEdit::FreeText:
+        case MenuLongEdit::Comment:
+        case MenuLongEdit::None:
+        default:
+            return 0;   // uncapped
+    }
+}
+
+bool menu_long_accepts(MenuLongEdit kind, char c, size_t current_len, char* out_ch)
+{
+    if (c < 32 || c >= 127) {
+        return false;   // non-printable never appends
+    }
+    const size_t cap = menu_long_max_len(kind);
+    if (cap != 0 && current_len >= cap) {
+        return false;
+    }
+    switch (kind) {
+        case MenuLongEdit::FreeText:
+        case MenuLongEdit::IgnoreList:
+            if (out_ch) *out_ch = (char)std::toupper((unsigned char)c);
+            return true;
+        case MenuLongEdit::Comment:
+            if (out_ch) *out_ch = c;
+            return true;
+        case MenuLongEdit::None:
+        default:
+            return false;
+    }
+}

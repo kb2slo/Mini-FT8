@@ -563,7 +563,6 @@ static OffsetSrc g_offset_src = OffsetSrc::RANDOM;
 static RadioType g_radio = RadioType::QMX;       
 static int g_gps_baud = 115200;
 static bool g_gnss_lora_enabled = false;
-static constexpr size_t kIgnorePrefixTextMaxLen = 64;
 static std::string g_comment1 = "MiniFT8 /Radio";   
 static std::string g_ignore_prefix_text;
 static std::vector<std::string> g_ignore_prefixes;  
@@ -611,9 +610,8 @@ static bool g_protocol_pending_ft4 = false;
 static std::string menu_edit_buf;
 static int menu_cursor_edit_original = 0;
 static bool menu_long_edit = false;
-static enum { LONG_NONE, LONG_FT, LONG_COMMENT, LONG_ACTIVE, LONG_IGNORE } menu_long_kind = LONG_NONE;
+static MenuLongEdit menu_long_kind = MenuLongEdit::None;
 static std::string menu_long_buf;
-static std::string menu_long_backup;
 static int menu_flash_idx = -1;          // absolute index to flash highlight
 static int64_t menu_flash_deadline = 0;  // ms timestamp when flash ends
 static int rx_flash_idx = -1;
@@ -1617,8 +1615,8 @@ static bool ignorelist_matches_normalized_dxcall(const std::string& dxcall_norm)
 }
 
 static std::string clamp_ignore_prefix_text(const std::string& s) {
-  if (s.size() <= kIgnorePrefixTextMaxLen) return s;
-  return s.substr(0, kIgnorePrefixTextMaxLen);
+  if (s.size() <= kMenuIgnoreMaxLen) return s;
+  return s.substr(0, kMenuIgnoreMaxLen);
 }
 
 static std::string normalize_time_hms(const std::string& src) {
@@ -3423,16 +3421,18 @@ static void ma_send_freetext() {
   draw_menu_view();
   debug_log_line(std::string("Queued: ") + g_free_text);
 }
-static void ma_long_edit(decltype(menu_long_kind) kind, const std::string& cur) {
+static void ma_long_edit(MenuLongEdit kind, const std::string& cur) {
+  // No backup is kept: the live value is only written on Enter, so cancelling
+  // is just dropping the scratch buffer. The old menu_long_backup was assigned
+  // here and cleared on exit but never read.
   menu_long_edit = true;
   menu_long_kind = kind;
   menu_long_buf = cur;
-  menu_long_backup = cur;
   draw_menu_view();
 }
-static void ma_freetext()  { ma_long_edit(LONG_FT, g_free_text); }
-static void ma_ignore()    { ma_long_edit(LONG_IGNORE, g_ignore_prefix_text); }
-static void ma_comment()   { ma_long_edit(LONG_COMMENT, g_comment1); }
+static void ma_freetext()  { ma_long_edit(MenuLongEdit::FreeText, g_free_text); }
+static void ma_ignore()    { ma_long_edit(MenuLongEdit::IgnoreList, g_ignore_prefix_text); }
+static void ma_comment()   { ma_long_edit(MenuLongEdit::Comment, g_comment1); }
 static void ma_inline_edit(int abs_idx, const std::string& cur) {
   menu_edit_idx = abs_idx;
   menu_edit_buf = cur;
@@ -5236,41 +5236,38 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
           if (ui_mode == UIMode::MENU) {
             if (menu_long_edit) {
               if (c == '\n' || c == '\r') {
-                if (menu_long_kind == LONG_FT) {
-                  g_free_text = menu_long_buf;
-                  if (g_cq_type == CqType::CQFREETEXT) g_cq_freetext = g_free_text;
-                  update_autoseq_cq_type();
-                } else if (menu_long_kind == LONG_COMMENT) {
-                  g_comment1 = menu_long_buf;
-                } else if (menu_long_kind == LONG_ACTIVE) {
-                  g_active_band_text = menu_long_buf;
-                  rebuild_active_bands();
-                } else if (menu_long_kind == LONG_IGNORE) {
-                  g_ignore_prefix_text = clamp_ignore_prefix_text(menu_long_buf);
-                  rebuild_ignore_prefixes();
+                switch (menu_long_kind) {
+                  case MenuLongEdit::FreeText:
+                    g_free_text = menu_long_buf;
+                    if (g_cq_type == CqType::CQFREETEXT) g_cq_freetext = g_free_text;
+                    update_autoseq_cq_type();
+                    break;
+                  case MenuLongEdit::Comment:
+                    g_comment1 = menu_long_buf;
+                    break;
+                  case MenuLongEdit::IgnoreList:
+                    g_ignore_prefix_text = clamp_ignore_prefix_text(menu_long_buf);
+                    rebuild_ignore_prefixes();
+                    break;
+                  case MenuLongEdit::None:
+                    break;
                 }
                 save_station_data();
                 menu_long_edit = false;
-                menu_long_kind = LONG_NONE;
+                menu_long_kind = MenuLongEdit::None;
                 menu_long_buf.clear();
-                menu_long_backup.clear();
                 draw_menu_view();
               } else if (c == '`') {
                 menu_long_edit = false;
-                menu_long_kind = LONG_NONE;
+                menu_long_kind = MenuLongEdit::None;
                 menu_long_buf.clear();
-                menu_long_backup.clear();
                 draw_menu_view();
               } else if (c == 0x08 || c == 0x7f) {
                 if (!menu_long_buf.empty()) menu_long_buf.pop_back();
                 draw_menu_view();
               } else if (c >= 32 && c < 127) {
-                char ch = c;
-                if (menu_long_kind == LONG_FT || menu_long_kind == LONG_IGNORE) {
-                  ch = toupper((unsigned char)ch);
-                }
-                if (!(menu_long_kind == LONG_IGNORE &&
-                      menu_long_buf.size() >= kIgnorePrefixTextMaxLen)) {
+                char ch = 0;
+                if (menu_long_accepts(menu_long_kind, (char)c, menu_long_buf.size(), &ch)) {
                   menu_long_buf.push_back(ch);
                 }
                 draw_menu_view();

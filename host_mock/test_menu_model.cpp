@@ -13,21 +13,24 @@
 
 static int g_fail = 0;
 
-static void check(bool ok, const char* what) {
+static void check(bool ok, const char* what)
+{
     if (!ok) {
         std::printf("FAIL: %s\n", what);
         g_fail++;
     }
 }
 
-static void check_eq_int(int got, int want, const char* what) {
+static void check_eq_int(int got, int want, const char* what)
+{
     if (got != want) {
         std::printf("FAIL: %s (got %d, want %d)\n", what, got, want);
         g_fail++;
     }
 }
 
-static void check_eq_str(const char* got, const char* want, const char* what) {
+static void check_eq_str(const char* got, const char* want, const char* what)
+{
     if (std::strcmp(got, want) != 0) {
         std::printf("FAIL: %s (got \"%s\", want \"%s\")\n", what, got, want);
         g_fail++;
@@ -36,13 +39,15 @@ static void check_eq_str(const char* got, const char* want, const char* what) {
 
 // --- layout ---------------------------------------------------------------
 
-static void test_shape(void) {
+static void test_shape(void)
+{
     check_eq_int(menu_row_count(), 18, "row count");
     check_eq_int(menu_page_count(), 3, "page count");
     check_eq_int(kMenuRowsPerPage, 6, "rows per page");
 }
 
-static void test_page_and_key(void) {
+static void test_page_and_key(void)
+{
     // Row 0 is page 0 key '1'; row 17 is page 2 key '6'.
     check_eq_int(menu_page_of(0), 0, "row 0 page");
     check(menu_key_of(0) == '1', "row 0 key");
@@ -54,7 +59,8 @@ static void test_page_and_key(void) {
     check(menu_key_of(17) == '6', "row 17 key");
 }
 
-static void test_roundtrip(void) {
+static void test_roundtrip(void)
+{
     // Every row must map to a (page, key) that maps back to the same row.
     // This is the invariant the old code restated by hand in three places.
     for (int i = 0; i < menu_row_count(); ++i) {
@@ -68,7 +74,8 @@ static void test_roundtrip(void) {
     }
 }
 
-static void test_out_of_range(void) {
+static void test_out_of_range(void)
+{
     check_eq_int(menu_page_of(-1), -1, "page_of(-1)");
     check_eq_int(menu_page_of(18), -1, "page_of(18)");
     check(menu_key_of(-1) == 0, "key_of(-1)");
@@ -85,7 +92,8 @@ static void test_out_of_range(void) {
 
 // --- identity -------------------------------------------------------------
 
-static void test_ids(void) {
+static void test_ids(void)
+{
     // Pins the on-screen order. Reordering a row without updating main.cpp's
     // parallel label/action table would move an action under a new label; this
     // makes the order itself an assertion.
@@ -112,7 +120,8 @@ static void test_ids(void) {
 
 // --- edit classes ---------------------------------------------------------
 
-static void test_edit_classes(void) {
+static void test_edit_classes(void)
+{
     // Exactly four rows have an inline editor.
     check(menu_edit_class(3) == MenuEdit::Callsign, "call is Callsign");
     check(menu_edit_class(4) == MenuEdit::Callsign, "grid is Callsign");
@@ -146,7 +155,8 @@ static void test_edit_classes(void) {
 
 // --- character filter -----------------------------------------------------
 
-static void test_filter_callsign(void) {
+static void test_filter_callsign(void)
+{
     char out = 0;
     check(menu_edit_accepts(MenuEdit::Callsign, 'k', 0, &out) && out == 'K',
           "callsign lower-cases to upper");
@@ -162,7 +172,8 @@ static void test_filter_callsign(void) {
           "callsign rejects DEL");
 }
 
-static void test_filter_numeric(void) {
+static void test_filter_numeric(void)
+{
     char out = 0;
     check(menu_edit_accepts(MenuEdit::Numeric, '0', 0, &out) && out == '0',
           "numeric accepts 0");
@@ -181,7 +192,8 @@ static void test_filter_numeric(void) {
           "numeric rejects past cap");
 }
 
-static void test_filter_none(void) {
+static void test_filter_none(void)
+{
     char out = 0;
     check(!menu_edit_accepts(MenuEdit::None, 'a', 0, &out),
           "None class never accepts");
@@ -189,13 +201,61 @@ static void test_filter_none(void) {
           "None class rejects digits too");
 }
 
-static void test_filter_null_out(void) {
+static void test_filter_null_out(void)
+{
     // A caller that only wants the accept/reject decision must not crash.
     check(menu_edit_accepts(MenuEdit::Numeric, '5', 0, nullptr), "null out_ch ok");
     check(!menu_edit_accepts(MenuEdit::Numeric, 'z', 0, nullptr), "null out_ch reject ok");
 }
 
-int main(void) {
+// --- long edit ------------------------------------------------------------
+
+static void test_long_edit_caps(void)
+{
+    check_eq_int((int)menu_long_max_len(MenuLongEdit::IgnoreList), (int)kMenuIgnoreMaxLen,
+                 "ignore list is capped");
+    check_eq_int((int)menu_long_max_len(MenuLongEdit::FreeText), 0, "free text is uncapped");
+    check_eq_int((int)menu_long_max_len(MenuLongEdit::Comment), 0, "comment is uncapped");
+    check_eq_int((int)menu_long_max_len(MenuLongEdit::None), 0, "None is uncapped");
+}
+
+static void test_long_edit_case_rules(void)
+{
+    char out = 0;
+    // Free text and the ignore list upper-case; the comment does not. That
+    // asymmetry was two nested conditions in the key handler.
+    check(menu_long_accepts(MenuLongEdit::FreeText, 'k', 0, &out) && out == 'K',
+          "free text upper-cases");
+    check(menu_long_accepts(MenuLongEdit::IgnoreList, 'w', 0, &out) && out == 'W',
+          "ignore list upper-cases");
+    check(menu_long_accepts(MenuLongEdit::Comment, 'k', 0, &out) && out == 'k',
+          "comment keeps lower case");
+    check(menu_long_accepts(MenuLongEdit::Comment, '/', 0, &out) && out == '/',
+          "comment keeps the macro slash");
+
+    check(!menu_long_accepts(MenuLongEdit::None, 'a', 0, &out), "None never accepts");
+    check(!menu_long_accepts(MenuLongEdit::FreeText, '\n', 0, &out), "newline rejected");
+    check(!menu_long_accepts(MenuLongEdit::Comment, (char)0x7f, 0, &out), "DEL rejected");
+}
+
+static void test_long_edit_ignore_cap(void)
+{
+    char out = 0;
+    check(menu_long_accepts(MenuLongEdit::IgnoreList, 'A', kMenuIgnoreMaxLen - 1, &out),
+          "ignore list accepts at cap - 1");
+    check(!menu_long_accepts(MenuLongEdit::IgnoreList, 'A', kMenuIgnoreMaxLen, &out),
+          "ignore list rejects at cap");
+    check(!menu_long_accepts(MenuLongEdit::IgnoreList, 'A', kMenuIgnoreMaxLen + 10, &out),
+          "ignore list rejects past cap");
+    // The uncapped kinds keep accepting well past that length.
+    check(menu_long_accepts(MenuLongEdit::FreeText, 'A', kMenuIgnoreMaxLen * 4, &out),
+          "free text is not affected by the ignore cap");
+    check(menu_long_accepts(MenuLongEdit::Comment, 'a', kMenuIgnoreMaxLen * 4, &out),
+          "comment is not affected by the ignore cap");
+}
+
+int main(void)
+{
     test_shape();
     test_page_and_key();
     test_roundtrip();
@@ -206,6 +266,9 @@ int main(void) {
     test_filter_numeric();
     test_filter_none();
     test_filter_null_out();
+    test_long_edit_caps();
+    test_long_edit_case_rules();
+    test_long_edit_ignore_cap();
 
     if (g_fail) {
         std::printf("FAILED: %d check(s)\n", g_fail);

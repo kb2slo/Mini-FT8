@@ -44,7 +44,7 @@ Run by the agent locally, and by CI on every PR. No hardware.
 | `host_test_usb_c_presence` | USB-C presence detection policy |
 | `host_test_datetime_field` | STATUS date/time editor: cursor movement over separators, digit overwrite, and strict range validation. Carries regression cases for the dates `mktime` used to silently roll over, plus an exhaustive sweep of every day in a leap and non-leap year |
 | `host_test_screen_model` | Screen navigation: key to screen, R never toggling, the seven plain toggles, M/N/O sharing MENU across three pages, P cycling stats to log to RX, and `C` staying inert after B23 |
-| `host_test_menu_model` | MENU layout arithmetic (page/key round-trip for all 18 rows), row identity and order, edit character classes, and the inline-edit filter. Carries regression cases for both defects B32 fixed |
+| `host_test_menu_model` | MENU layout arithmetic (page/key round-trip for all 18 rows), row identity and order, inline-edit character classes and filter, and the long-edit rules (per-kind case handling and the ignore-list cap). Carries regression cases for both defects B32 fixed |
 
 ### What automation cannot see
 
@@ -107,7 +107,7 @@ For each row: press the key, confirm the effect, and confirm no *other* row chan
 |---|---|---|
 | `1` | `CQ Type:<type>` | Cycles CQ / SOTA / POTA / QRP / FD / FreeText, wrapping after 6 presses back to `CQ` |
 | `2` | `Send FreeText` | Row flashes ~0.5 s; `D`-log shows `Queued: <text>`; the FreeText transmits next slot |
-| `3` | `F:<text>` | Opens the long-edit screen for FreeText; `` ` `` cancels leaving the old value, Enter saves |
+| `3` | `F:<text>` | Opens the long-edit screen for FreeText; typed letters appear **upper case**; `` ` `` cancels leaving the old value, Enter saves |
 | `4` | `Call:<call>` | Inline edit; **typed letters appear uppercase**; Enter saves, `` ` `` cancels |
 | `5` | `Grid:<grid>` | Inline edit; **uppercase**; accepts 4/6/8 char; a bad grid logs `Grid format: AA00/AA00aa/AA00aa00` and does not save |
 | `6` | battery/sleep line | Enters Charge Mode |
@@ -119,8 +119,8 @@ For each row: press the key, confirm the effect, and confirm no *other* row chan
 | `1` | `Offset:<src>` | Cycles Random / RX / Cursor, wrapping after 3 |
 | `2` | `Fixed:<hz>` | Inline edit, **digits only** — letters must be rejected with no visible change. `▲``▼``◀``▶` step ±100/±10 and clamp to 200–3000. `` ` `` restores the value you started with |
 | `3` | `Radio:<name>` | Cycles QMX / QDX. If audio was streaming and the backend differs, audio stops and `D`-log shows `Audio stop <radio>` |
-| `4` | `IgnoreList:<prefixes>` | Long edit; space-separated prefixes |
-| `5` | `C:<comment>` | Long edit; `/Radio` and `/Grid` macros expand in the displayed line |
+| `4` | `IgnoreList:<prefixes>` | Long edit; **upper case**; space-separated prefixes; stops accepting at 64 characters |
+| `5` | `C:<comment>` | Long edit; **keeps lower case, unlike FreeText and IgnoreList**; `/Radio` and `/Grid` macros expand in the displayed line |
 | `6` | `Mode: FT8` or `FT4` | Toggles FT8/FT4 and appends `*` when it differs from the running mode. Reboot applies it |
 
 #### MENU P3 (`O`)
@@ -222,6 +222,7 @@ commits below changed live code.
 | waterfall buffer | Waterfall still renders normally while streaming | owed |
 | B30 (core_api removal) | R-tap a decode to reply; backtick cancel during TX; drop a QSO from the `T` list | owed |
 | B31 (extern audit) | none — linkage and visibility only, byte-identical binary | n/a |
+| B35 (menu long edit) | MENU P1 `3` and P2 `4`/`5`: each long editor saves on Enter, discards on `` ` ``, and applies its own case rule. Character rules are host-tested; what is operator-only is that the long-edit screen paints and the value reaches `Station.txt` | owed |
 | B34 (date/time editor) | Section 5 rows 5.5-5.11. The validation and cursor rules are host-tested now; what is operator-only is that the STATUS screen redraws the edited line correctly and the RTC actually takes a valid setting | owed |
 | B33 (screen registry) | Section 1 (reachability) plus the M/N/O paging rows in section 2. Navigation rules are host-tested now; what is operator-only is whether each screen paints the right thing when reached | owed |
 | B32 (menu table) | **All of section 2**, every item on every page. Layout, row order and the edit filter are now host-tested; what remains operator-only is whether each label sits with its own action | owed |

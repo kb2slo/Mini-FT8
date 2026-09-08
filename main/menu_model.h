@@ -56,5 +56,31 @@ const char* menu_row_id(int idx);           // "" if out of range
 // is rejected outright: no append, and the caller must not redraw.
 bool menu_edit_accepts(MenuEdit kind, char c, size_t current_len, char* out_ch);
 
+// ---------------------------------------------------------------------------
+// Long edit: the full-screen editor MENU uses for the free text, the comment,
+// and the ignore list. Each kind has its own character rules, which used to be
+// two nested conditions inside the key handler.
+//
+// There was a fourth kind, LONG_ACTIVE, for the old ActiveBand text. Band
+// config (O then 3) replaced it and nothing has set it since, so its commit
+// branch was unreachable; it is not represented here.
+// ---------------------------------------------------------------------------
+enum class MenuLongEdit : uint8_t {
+    None,
+    FreeText,    // upper-cased, no length cap
+    Comment,     // taken as typed, no length cap
+    IgnoreList,  // upper-cased, capped at kMenuIgnoreMaxLen
+};
+
+inline constexpr size_t kMenuIgnoreMaxLen = 64;
+
+// Character-filter policy for a long edit, same contract as
+// menu_edit_accepts(): false means reject outright, and `out_ch` receives the
+// character to append when true.
+bool menu_long_accepts(MenuLongEdit kind, char c, size_t current_len, char* out_ch);
+
+// Length cap for a kind, or 0 when uncapped.
+size_t menu_long_max_len(MenuLongEdit kind);
+
 // Longest inline-edit buffer a Numeric row will accept.
 inline constexpr size_t kMenuNumericMaxLen = 10;
