@@ -34,9 +34,6 @@ int64_t rtc_now_ms();
 #define FT8_SAMPLE_RATE 6000
 #endif
 
-static uint8_t s_latest_waterfall_row[FT8_AUDIO_WATERFALL_ROW_WIDTH] = {0};
-static bool s_latest_waterfall_row_valid = false;
-static portMUX_TYPE s_latest_waterfall_row_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void push_waterfall_latest(const monitor_t& mon)
 {
@@ -70,23 +67,9 @@ static void push_waterfall_latest(const monitor_t& mon)
     }
 
     ui_push_waterfall_row(scaled, FT8_AUDIO_WATERFALL_ROW_WIDTH);
-    taskENTER_CRITICAL(&s_latest_waterfall_row_lock);
-    memcpy(s_latest_waterfall_row, scaled, FT8_AUDIO_WATERFALL_ROW_WIDTH);
-    s_latest_waterfall_row_valid = true;
-    taskEXIT_CRITICAL(&s_latest_waterfall_row_lock);
-
     core_fire_waterfall_row(block, collapsed, num_bins,
                             /*swr=*/1.5f, /*pwr=*/2.0f, /*ptt=*/false);
 }
-
-void ft8_audio_pipeline_clear_latest_waterfall_row(void)
-{
-    taskENTER_CRITICAL(&s_latest_waterfall_row_lock);
-    memset(s_latest_waterfall_row, 0, sizeof(s_latest_waterfall_row));
-    s_latest_waterfall_row_valid = false;
-    taskEXIT_CRITICAL(&s_latest_waterfall_row_lock);
-}
-
 
 void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg)
 {

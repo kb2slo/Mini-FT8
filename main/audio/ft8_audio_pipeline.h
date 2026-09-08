@@ -18,4 +18,3 @@ typedef struct {
 } ft8_audio_pipeline_config_t;
 
 void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg);
-void ft8_audio_pipeline_clear_latest_waterfall_row(void);

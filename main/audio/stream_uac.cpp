@@ -961,7 +961,6 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
     s_format.sample_freq = UAC_SAMPLE_RATE;
     s_format.bit_resolution = UAC_BIT_RESOLUTION;
     s_format.channels = UAC_CHANNELS;
-    ft8_audio_pipeline_clear_latest_waterfall_row();
 
     ESP_LOGI(TAG, "Starting UAC profile=%s (host already up=%d)",
              profile_name(s_profile), s_host_installed ? 1 : 0);
@@ -1029,7 +1028,6 @@ void uac_stop(void) {
     }
 
     s_state = UAC_STATE_IDLE;
-    ft8_audio_pipeline_clear_latest_waterfall_row();
     snprintf(s_status_string, sizeof(s_status_string), "Idle");
     ESP_LOGI(TAG, "UAC stopped");
 }
