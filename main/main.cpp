@@ -426,7 +426,6 @@ int g_offset_hz = 1500;                  // visible to core_api.cpp
 int g_band_sel = 1; // default 80m       // visible to core_api.cpp
 static bool g_tune = false;
 static BeaconMode g_status_beacon_temp = BeaconMode::OFF;
-[[maybe_unused]] static bool g_cat_toggle_high = false;
 std::string g_date = "2025-12-11";      // visible to core_api.cpp
 std::string g_time = "10:10:00";        // visible to core_api.cpp
 static int status_edit_idx = -1;     // 0-5
@@ -637,7 +636,6 @@ static int rx_flash_idx = -1;
 static int64_t rx_flash_deadline = 0;
 bool g_streaming = false;
 static void draw_menu_view();
-static void draw_battery_icon(int x, int y, int w, int h, int level, bool charging);
 static void draw_status_view();
 static void draw_status_line(int idx, const std::string& text, bool highlight);
 void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool update_ui);
@@ -648,17 +646,12 @@ static void consume_cdc_initial_sync();
 bool sync_radio_to_current_band(const char* reason);
 static void menu_flash_tick();
 static void rx_flash_tick();
-static bool looks_like_grid(const std::string& s);
-static bool looks_like_report(const std::string& s, int& out);
 static std::string g_last_reply_text;
 void rebuild_active_bands();   // visible to core_api.cpp
 static bool band_row_enabled(int index);
 static int s_menu_enter_page = -1;
 static bool s_band_config_menu = false;
-static void schedule_tx_if_idle();
 static int64_t s_last_tx_slot_idx = -1000;  // Track last TX slot for retry scheduling
-[[maybe_unused]] static bool g_sync_pending = false;
-[[maybe_unused]] static int g_sync_delta_ms = 0;
 static void enqueue_beacon_cq();
 static void arm_from_autoseq_or_beacon();
 static void qso_load_file_list();
@@ -1202,114 +1195,6 @@ struct WAVHeader {
   uint32_t data_size;
 };
 
-[[maybe_unused]] static esp_err_t decode_wav(const char* path) {
-  ESP_LOGI(TAG, "Decoding %s", path);
-  StorageStream* stream = storage_stream_open(path, StorageOpenMode::READ);
-  if (!stream) {
-    ESP_LOGE(TAG, "Failed to open %s", path);
-    return ESP_FAIL;
-  }
-
-  WAVHeader hdr;
-  if (storage_stream_read(stream, &hdr, sizeof(hdr)) != sizeof(hdr)) {
-    ESP_LOGE(TAG, "Failed to read WAV header");
-    storage_stream_close(stream);
-    return ESP_FAIL;
-  }
-  if (memcmp(hdr.riff, "RIFF", 4) != 0 || memcmp(hdr.wave, "WAVE", 4) != 0) {
-    ESP_LOGE(TAG, "Invalid WAV header");
-    storage_stream_close(stream);
-    return ESP_FAIL;
-  }
-  if (hdr.sample_rate != FT8_SAMPLE_RATE || hdr.num_channels != 1) {
-    ESP_LOGE(TAG, "WAV must be mono %d Hz (got %u Hz, %u ch)", FT8_SAMPLE_RATE, hdr.sample_rate, hdr.num_channels);
-    storage_stream_close(stream);
-    return ESP_FAIL;
-  }
-
-  const int bytes_per_sample = hdr.bits_per_sample / 8;
-
-  monitor_config_t mon_cfg;
-  mon_cfg.f_min = 200.0f;
-  mon_cfg.f_max = 2900.0f;
-  mon_cfg.sample_rate = FT8_SAMPLE_RATE;
-  mon_cfg.time_osr = g_time_osr;
-  mon_cfg.freq_osr = g_freq_osr;
-  mon_cfg.protocol = g_protocol->protocol_id;
-
-  monitor_t mon;
-  monitor_init(&mon, &mon_cfg);
-  monitor_reset(&mon);
-
-  float* chunk = (float*)malloc(sizeof(float) * mon.block_size);
-  if (!chunk) {
-    ESP_LOGE(TAG, "Chunk alloc failed");
-    storage_stream_close(stream);
-    monitor_free(&mon);
-    return ESP_ERR_NO_MEM;
-  }
-
-  bool eof = false;
-  while (!eof) {
-    int read_samples = 0;
-    while (read_samples < mon.block_size && !eof) {
-      float sample_value = 0.0f;
-      if (bytes_per_sample == 1) {
-        uint8_t sample = 0;
-        if (storage_stream_read(stream, &sample, 1) != 1) {
-          eof = true;
-          break;
-        }
-        int s = sample;
-        sample_value = ((float)s - 128.0f) / 128.0f;
-      } else if (bytes_per_sample == 2) {
-        uint8_t sample[2] = {};
-        if (storage_stream_read(stream, sample, sizeof(sample)) != sizeof(sample)) {
-          eof = true;
-          break;
-        }
-        int low = sample[0];
-        int high = sample[1];
-        int16_t s = (int16_t)((high << 8) | low);
-        sample_value = (float)s / 32768.0f;
-      } else {
-        eof = true;
-        break;
-      }
-      chunk[read_samples++] = sample_value;
-    }
-    if (read_samples == 0) break;
-    for (int i = read_samples; i < mon.block_size; ++i) {
-      chunk[i] = 0.0f;
-    }
-
-    // Simple per-block AGC to ~0.1 target level
-    double acc = 0.0;
-    for (int i = 0; i < mon.block_size; ++i) acc += fabsf(chunk[i]);
-    float level = (float)(acc / mon.block_size);
-    float gain = (level > 1e-6f) ? 0.1f / level : 1.0f;
-    if (gain < 0.1f) gain = 0.1f;
-    if (gain > 10.0f) gain = 10.0f;
-    for (int i = 0; i < mon.block_size; ++i) {
-      chunk[i] *= gain;
-    }
-
-    monitor_process(&mon, chunk);
-  }
-
-  free(chunk);
-  storage_stream_close(stream);
-
-  if (mon.wf.num_blocks == 0) {
-    ESP_LOGW(TAG, "No audio blocks processed");
-    monitor_free(&mon);
-    return ESP_FAIL;
-  }
-  decode_monitor_results(&mon, &mon_cfg, false); // defer UI to main loop on core1
-  monitor_free(&mon);
-
-  return ESP_OK;
-}
 
 static void redraw_tx_view() {
   // Get QSO states from autoseq for display
@@ -1849,37 +1734,6 @@ static const char* gps_source_name() {
   return g_gnss_lora_enabled ? "GNSS_LoRa" : "PORTA";
 }
 
-static std::string normalize_date_ymd(const std::string& src) {
-  auto date_in_range = [](int y, int M, int d) -> bool {
-    return (y >= 2024 && y <= 2099 && M >= 1 && M <= 12 && d >= 1 && d <= 31);
-  };
-
-  int y = 0, M = 0, d = 0;
-  if (sscanf(src.c_str(), "%d-%d-%d", &y, &M, &d) == 3 && date_in_range(y, M, d)) {
-    char out[16];
-    snprintf(out, sizeof(out), "%04d-%02d-%02d", y, M, d);
-    return out;
-  }
-
-  std::string digits;
-  digits.reserve(src.size());
-  for (unsigned char ch : src) {
-    if (std::isdigit(ch)) digits.push_back((char)ch);
-  }
-  if (digits.size() >= 8) {
-    y = (digits[0] - '0') * 1000 + (digits[1] - '0') * 100 +
-        (digits[2] - '0') * 10 + (digits[3] - '0');
-    M = (digits[4] - '0') * 10 + (digits[5] - '0');
-    d = (digits[6] - '0') * 10 + (digits[7] - '0');
-    if (date_in_range(y, M, d)) {
-      char out[16];
-      snprintf(out, sizeof(out), "%04d-%02d-%02d", y, M, d);
-      return out;
-    }
-  }
-
-  return "";
-}
 
 static std::string normalize_grid_maidenhead(const std::string& src) {
   size_t b = 0;
@@ -2795,42 +2649,7 @@ static void fft_waterfall_tx_tone(float tone_hz) {
   ui_push_tx_waterfall_row(row.data(), (int)row.size());
 }
 
-[[maybe_unused]] static bool is_grid4(const std::string& s) {
-  if (s.size() != 4) return false;
-  auto is_letter = [](char c){ return c >= 'A' && c <= 'R'; };
-  auto is_digitc = [](char c){ return c >= '0' && c <= '9'; };
-  return is_letter(toupper((unsigned char)s[0])) &&
-         is_letter(toupper((unsigned char)s[1])) &&
-         is_digitc(s[2]) &&
-         is_digitc(s[3]);
-}
 
-[[maybe_unused]] static int parse_report_snr(const std::string& f3) {
-  if (f3.empty()) return -99;
-  std::string s = f3;
-  if (!s.empty() && (s[0] == 'R' || s[0] == 'r')) {
-    s = s.substr(1);
-  }
-  if (s.empty()) return -99;
-  bool neg = false;
-  size_t idx = 0;
-  if (s[0] == '+' || s[0] == '-') {
-    neg = (s[0] == '-');
-    idx = 1;
-  }
-  int val = 0;
-  bool found = false;
-  for (; idx < s.size(); ++idx) {
-    char c = s[idx];
-    if (c < '0' || c > '9') break;
-    val = val * 10 + (c - '0');
-    found = true;
-    if (val > 99) break;
-  }
-  if (!found) return -99;
-  if (neg) val = -val;
-  return val;
-}
 
 // ---- Static decode workspace (zero heap allocation) ----
 // Use the shared RxDecodeEntry type from ui.h so we can hand it directly
@@ -3283,27 +3102,7 @@ static void encode_and_log_pending_tx() {
   log_tones(tones, g_protocol->total_symbols);
 }
 
-[[maybe_unused]] static bool looks_like_grid(const std::string& s) {
-  if (s.size() != 4) return false;
-  return std::isalpha((unsigned char)s[0]) && std::isalpha((unsigned char)s[1]) &&
-         std::isdigit((unsigned char)s[2]) && std::isdigit((unsigned char)s[3]);
-}
 
-[[maybe_unused]] static bool looks_like_report(const std::string& s, int& out) {
-  if (s.empty()) return false;
-  int sign = 1;
-  size_t idx = 0;
-  if (s[0] == '-') { sign = -1; idx = 1; }
-  else if (s[0] == '+') { idx = 1; }
-  if (idx >= s.size()) return false;
-  int val = 0;
-  for (; idx < s.size(); ++idx) {
-    if (!std::isdigit((unsigned char)s[idx])) return false;
-    val = val * 10 + (s[idx] - '0');
-  }
-  out = sign * val;
-  return true;
-}
 
 // Enqueue a beacon CQ. Parity is determined by beacon mode.
 // Duplicate prevention is handled by autoseq_start_cq().
@@ -3314,34 +3113,15 @@ static void enqueue_beacon_cq() {
   core_fire_qso_changed();  // propagates to all registered consumers
 }
 
-static bool autoseq_has_pending_tx() {
-  AutoseqTxEntry tmp;
-  return autoseq_fetch_pending_tx(tmp);
-}
 
 // Schedule a one-off pending TX (e.g., manual FreeText) without touching autoseq state.
 // Returns false if TX is already active or if scheduling failed.
 // Uses the single-threaded state machine - TX will trigger at next matching slot boundary.
-static bool schedule_manual_pending_tx(const AutoseqTxEntry& pending) {
-  // Already transmitting or TX pending?
-  if (g_tx_active || g_qso_xmit) {
-    return false;
-  }
-
-  arm_pending_tx(pending);
-  ESP_LOGI(TAG, "schedule_manual_pending_tx: queued TX=%s for parity=%d",
-           pending.text.c_str(), g_target_slot_parity);
-  return true;
-}
 
 // NOTE: This function is now mostly superseded by the state machine approach.
 // TX scheduling is done via g_qso_xmit and g_target_slot_parity flags,
 // and check_slot_boundary() triggers TX at the right time.
 // Keeping this as a no-op for now in case any code still calls it.
-[[maybe_unused]] static void schedule_tx_if_idle() {
-  // No-op: TX scheduling is now handled by decode_monitor_results setting
-  // g_qso_xmit and check_slot_boundary triggering TX at slot start.
-}
 
 // Helper to send TA command (deduplicated)
 static void tx_send_ta(float tone_hz) {
@@ -3592,20 +3372,6 @@ static void draw_menu_view() {
     menu_flash_idx = -1;
   }
   ui_draw_list(lines, menu_page, highlight_abs);
-  // Draw battery icon on visible battery line
-  int battery_abs_idx = 5;
-  if (menu_page == (battery_abs_idx / 6)) {
-    int line_on_page = battery_abs_idx % 6;
-    const int line_h = 19;
-    const int start_y = UI_START_Y;
-    (void)line_on_page;
-    (void)line_h;
-    (void)start_y;
-    //int y = start_y + line_on_page * line_h + 3;
-    //int level = (int)M5.Power.getBatteryLevel();
-    //bool charging = M5.Power.isCharging();
-    //draw_battery_icon(190, y, 24, 12, level, charging);
-  }
 }
 
 static std::string status_sync_line() {
@@ -4083,17 +3849,7 @@ static std::string trim_copy(const std::string& s) {
   return s.substr(b, e - b);
 }
 
-static void ascii_upper_inplace(std::string& s) {
-  for (auto& ch : s) {
-    ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-  }
-}
 
-static std::string trim_upper_copy(const std::string& s) {
-  std::string out = trim_copy(s);
-  ascii_upper_inplace(out);
-  return out;
-}
 
 static uint32_t parse_crc_hex(const std::string& hex) {
   if (hex.empty()) return 0;
@@ -5939,29 +5695,4 @@ static void draw_status_line(int idx, const std::string& text, bool highlight) {
   std::snprintf(buf, sizeof(buf), "%d %s", idx + 1, text.c_str());
   ui_set_visible_text_line(idx, buf);
   M5.Display.printf("%s", buf);
-}
-[[maybe_unused]] static void draw_battery_icon(int x, int y, int w, int h, int level, bool charging) {
-  if (level < 0) level = 0;
-  if (level > 100) level = 100;
-  // Outline
-  M5.Display.startWrite();
-  M5.Display.fillRect(x, y, w, h, TFT_BLACK);
-  M5.Display.drawRect(x, y, w - 3, h, TFT_WHITE);
-  M5.Display.fillRect(x + w - 3, y + h / 4, 3, h / 2, TFT_WHITE); // tab
-  // Fill
-  int inner_w = w - 5;
-  int inner_h = h - 4;
-  int fill_w = (inner_w * level) / 100;
-  uint16_t fill_color = (level > 30) ? M5.Display.color565(0, 200, 0)
-                        : (level > 15) ? M5.Display.color565(200, 180, 0)
-                                        : M5.Display.color565(200, 0, 0);
-  M5.Display.fillRect(x + 2, y + 2, fill_w, inner_h, fill_color);
-  // Charging bolt
-  if (charging) {
-    int bx = x + w / 2 - 2;
-    int by = y + 2;
-    M5.Display.fillTriangle(bx, by, bx + 4, by + h / 2, bx + 2, by, M5.Display.color565(255, 255, 0));
-    M5.Display.fillTriangle(bx + 2, by + h / 2, bx + 6, by + h - 2, bx + 4, by + h - 2, M5.Display.color565(255, 255, 0));
-  }
-  M5.Display.endWrite();
 }
