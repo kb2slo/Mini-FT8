@@ -13,10 +13,14 @@ evidence about parsing, policy, and linkage. They are not evidence that the radi
 
 Run by the agent locally, and by CI on every PR. No hardware.
 
+**Run all three harnesses, not two.** `tx_e2e` is a separate CMake project and is easy to forget: a B22
+include-path miss in it survived an entire branch of local `idf.py build` + `host_mock` runs and only
+surfaced in CI. The commands below are the full local set.
+
 | Harness | Command | Covers |
 | --- | --- | --- |
 | `host_mock` (20 binaries) | `make -C host_mock && host_mock/host_test*` | See table below. CI globs the binaries rather than listing them, so a new test runs as soon as the Makefile builds it |
-| `tests/tx_e2e` | CTest, CI job **Host tests** | L1 encoder, TA format, golden WAV RX decode |
+| `tests/tx_e2e` | `cmake -S tests/tx_e2e -B tests/tx_e2e/build && cmake --build tests/tx_e2e/build -j4 && (cd tests/tx_e2e/build && ctest --output-on-failure)` | L1 encoder, TX state machine, poll timing, timer isolation, golden WAV RX decode, TA format — 6 tests |
 | Firmware build | `idf.py build` | `main/` under `-Werror`; merged image; must be **warning-free** |
 | Sidekick build | CI job **Sidekick (ESP32-C6)** | Companion firmware compiles and stages |
 | README audit | CI job **README audit** | A PR removing a `UIMode` enumerator or changing a key binding under `main/` must touch `README.md` |
