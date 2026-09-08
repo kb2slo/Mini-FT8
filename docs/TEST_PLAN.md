@@ -204,14 +204,14 @@ commits below changed live code.
 
 | From | Check | Status |
 | --- | --- | --- |
-| B28 `bb356f6` | MENU P1 `6` toggles `Mode: FT8` / `FT4` with `*`; survives `Station.txt` save + reboot | owed |
-| `729a952` | UART screen mirror still dumps the screen on G4/G5 key injection | owed |
-| B29 `21ed004` | MENU P3 `5` Copy files to SD → `Copied OK`; log writes normal during TX/decode | owed |
-| `320ddf5` | `S` → `2` QMX audio starts and stops; decode works; radio change stops audio | owed |
-| `671395b` | Waterfall still renders normally while streaming | owed |
-| B30 `49f4f69` / `752473f` | R-tap a decode to reply; backtick cancel during TX; drop a QSO from the `T` list | owed |
-| B31 `56cd506` | none — linkage and visibility only, byte-identical binary | n/a |
-| B32 `c0f0fbb` | **All of section 2**, every item on every page. Highest-risk change on the branch: the menu was rewritten from three disconnected definitions per item into one table | owed |
+| B28 (ENABLE_FT4) | MENU P1 `6` toggles `Mode: FT8` / `FT4` with `*`; survives `Station.txt` save + reboot | owed |
+| dead build flags | UART screen mirror still dumps the screen on G4/G5 key injection | owed |
+| B29 (host protocol) | MENU P3 `5` Copy files to SD → `Copied OK`; log writes normal during TX/decode | owed |
+| audio dispatch | `S` → `2` QMX audio starts and stops; decode works; radio change stops audio | owed |
+| waterfall buffer | Waterfall still renders normally while streaming | owed |
+| B30 (core_api removal) | R-tap a decode to reply; backtick cancel during TX; drop a QSO from the `T` list | owed |
+| B31 (extern audit) | none — linkage and visibility only, byte-identical binary | n/a |
+| B32 (menu table) | **All of section 2**, every item on every page. Highest-risk change on the branch: the menu was rewritten from three disconnected definitions per item into one table | owed |
 | all | Sections 0, 1, 3–7 — one full pass | owed |
 
 ## Keeping this file true
