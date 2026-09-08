@@ -42,12 +42,14 @@ BAND_CONFIG_TARGET = host_test_band_config
 USB_C_PRESENCE_TARGET = host_test_usb_c_presence
 MENU_MODEL_TARGET = host_test_menu_model
 SCREEN_MODEL_TARGET = host_test_screen_model
+DATETIME_FIELD_TARGET = host_test_datetime_field
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
-     $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_TARGET) $(SCREEN_MODEL_TARGET)
+     $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_TARGET) $(SCREEN_MODEL_TARGET) \
+     $(DATETIME_FIELD_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -112,6 +114,12 @@ screen_model.o: ../main/screen_model.cpp
 $(SCREEN_MODEL_TARGET): $(SCREEN_MODEL_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+DATETIME_FIELD_OBJ = datetime_field.o test_datetime_field.o
+datetime_field.o: ../main/datetime_field.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(DATETIME_FIELD_TARGET): $(DATETIME_FIELD_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 USB_C_PRESENCE_OBJ = usb_c_presence.o test_usb_c_presence.o
 usb_c_presence.o: ../main/usb_c_presence.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
@@ -165,6 +173,7 @@ clean:
 	      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
 	      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
 	      $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_OBJ) $(MENU_MODEL_TARGET) \
-	      $(SCREEN_MODEL_OBJ) $(SCREEN_MODEL_TARGET)
+	      $(SCREEN_MODEL_OBJ) $(SCREEN_MODEL_TARGET) \
+	      $(DATETIME_FIELD_OBJ) $(DATETIME_FIELD_TARGET)
 
 .PHONY: all clean

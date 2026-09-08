@@ -77,6 +77,7 @@ static const char* STATION_FILE = "Station.txt";
 #include "protocol.h"
 #include "menu_model.h"
 #include "screen_model.h"
+#include "datetime_field.h"
 #include "decode_tx_state.h"
 #include "main_services.h"
 
@@ -5072,10 +5073,18 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 draw_status_view();
               }
               else if (c == '5') {
-                status_edit_idx = 4; status_edit_buffer = g_date; status_cursor_pos = 0; while (status_cursor_pos < (int)status_edit_buffer.size() && (status_edit_buffer[status_cursor_pos] == '-')) status_cursor_pos++; draw_status_view();
+                status_edit_idx = 4;
+                status_edit_buffer = g_date;
+                status_cursor_pos = datetime_field_cursor_first(status_edit_buffer.c_str(),
+                                                                status_edit_buffer.size());
+                draw_status_view();
               }
               else if (c == '6') {
-                status_edit_idx = 5; status_edit_buffer = g_time; status_cursor_pos = 0; while (status_cursor_pos < (int)status_edit_buffer.size() && (status_edit_buffer[status_cursor_pos] == ':')) status_cursor_pos++; draw_status_view();
+                status_edit_idx = 5;
+                status_edit_buffer = g_time;
+                status_cursor_pos = datetime_field_cursor_first(status_edit_buffer.c_str(),
+                                                                status_edit_buffer.size());
+                draw_status_view();
               }
             } else {
               if (status_edit_idx == 1) {
@@ -5087,31 +5096,45 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 else if (c == '\n') { save_station_data(); status_edit_idx = -1; draw_status_view(); }
               } else if (status_edit_idx == 4 || status_edit_idx == 5) {
                 if (c == '`') { status_edit_idx = -1; status_edit_buffer.clear(); status_cursor_pos = -1; draw_status_view(); }
-                else if (c == ',') { // left
-                  int pos = status_cursor_pos - 1;
-                  while (pos >= 0 && (status_edit_buffer[pos] == '-' || status_edit_buffer[pos] == ':')) pos--;
-                  if (pos >= 0) status_cursor_pos = pos;
+                else if (c == ',') {   // left
+                  status_cursor_pos = datetime_field_cursor_left(
+                      status_edit_buffer.c_str(), status_edit_buffer.size(), status_cursor_pos);
                   draw_status_view();
-                } else if (c == '/') { // right
-                  int pos = status_cursor_pos + 1;
-                  while (pos < (int)status_edit_buffer.size() && (status_edit_buffer[pos] == '-' || status_edit_buffer[pos] == ':')) pos++;
-                  if (pos < (int)status_edit_buffer.size()) status_cursor_pos = pos;
+                } else if (c == '/') {  // right
+                  status_cursor_pos = datetime_field_cursor_right(
+                      status_edit_buffer.c_str(), status_edit_buffer.size(), status_cursor_pos);
                   draw_status_view();
                 } else if (c >= '0' && c <= '9') {
-                  if (status_cursor_pos >= 0 && status_cursor_pos < (int)status_edit_buffer.size()) {
-                    status_edit_buffer[status_cursor_pos] = c;
-                    int pos = status_cursor_pos + 1;
-                    while (pos < (int)status_edit_buffer.size() && (status_edit_buffer[pos] == '-' || status_edit_buffer[pos] == ':')) pos++;
-                    if (pos < (int)status_edit_buffer.size()) status_cursor_pos = pos;
-                  }
+                  status_cursor_pos = datetime_field_set_digit(
+                      &status_edit_buffer[0], status_edit_buffer.size(), status_cursor_pos, c);
                   draw_status_view();
                 } else if (c == '\n') {
-                  if (status_edit_idx == 4) g_date = status_edit_buffer;
-                  else g_time = normalize_time_hms(status_edit_buffer);
-                  if (rtc_apply_manual_time_from_strings()) {
-                    save_station_data();
-                  } else {
+                  // Validate before assigning. The old path wrote the buffer
+                  // into g_date/g_time first and relied on mktime() to reject
+                  // bad input -- but mktime normalises out-of-range fields
+                  // instead of failing, so "2026-02-30" became 2026-03-02 and
+                  // was written to the RTC. A rejected entry now leaves the
+                  // running clock untouched.
+                  const std::string candidate = (status_edit_idx == 4)
+                                                    ? status_edit_buffer
+                                                    : normalize_time_hms(status_edit_buffer);
+                  const bool ok = (status_edit_idx == 4)
+                                      ? datetime_field_date_valid(candidate.c_str())
+                                      : datetime_field_time_valid(candidate.c_str());
+                  if (!ok) {
                     debug_log_line("Invalid date/time");
+                  } else {
+                    const std::string prev_date = g_date;
+                    const std::string prev_time = g_time;
+                    if (status_edit_idx == 4) g_date = candidate;
+                    else                      g_time = candidate;
+                    if (rtc_apply_manual_time_from_strings()) {
+                      save_station_data();
+                    } else {
+                      g_date = prev_date;   // RTC refused it; put the clock back
+                      g_time = prev_time;
+                      debug_log_line("Invalid date/time");
+                    }
                   }
                   status_edit_idx = -1;
                   status_cursor_pos = -1;

@@ -19,6 +19,7 @@ idf_component_register(
          "band_config.cpp"
          "menu_model.cpp"
          "screen_model.cpp"
+         "datetime_field.cpp"
          "usb_c_presence.cpp"
          "usb_c_presence_host.cpp"
          "storage/adif.cpp"

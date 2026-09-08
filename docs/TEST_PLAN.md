@@ -15,7 +15,7 @@ Run by the agent locally, and by CI on every PR. No hardware.
 
 | Harness | Command | Covers |
 | --- | --- | --- |
-| `host_mock` (19 binaries) | `make -C host_mock && host_mock/host_test*` | See table below. CI globs the binaries rather than listing them, so a new test runs as soon as the Makefile builds it |
+| `host_mock` (20 binaries) | `make -C host_mock && host_mock/host_test*` | See table below. CI globs the binaries rather than listing them, so a new test runs as soon as the Makefile builds it |
 | `tests/tx_e2e` | CTest, CI job **Host tests** | L1 encoder, TA format, golden WAV RX decode |
 | Firmware build | `idf.py build` | `main/` under `-Werror`; merged image; must be **warning-free** |
 | Sidekick build | CI job **Sidekick (ESP32-C6)** | Companion firmware compiles and stages |
@@ -42,6 +42,7 @@ Run by the agent locally, and by CI on every PR. No hardware.
 | `host_test_tx_hud_banner` | TX HUD banner state |
 | `host_test_rx_list_stale` | RX list staleness marking |
 | `host_test_usb_c_presence` | USB-C presence detection policy |
+| `host_test_datetime_field` | STATUS date/time editor: cursor movement over separators, digit overwrite, and strict range validation. Carries regression cases for the dates `mktime` used to silently roll over, plus an exhaustive sweep of every day in a leap and non-leap year |
 | `host_test_screen_model` | Screen navigation: key to screen, R never toggling, the seven plain toggles, M/N/O sharing MENU across three pages, P cycling stats to log to RX, and `C` staying inert after B23 |
 | `host_test_menu_model` | MENU layout arithmetic (page/key round-trip for all 18 rows), row identity and order, edit character classes, and the inline-edit filter. Carries regression cases for both defects B32 fixed |
 
@@ -176,7 +177,11 @@ For each row: press the key, confirm the effect, and confirm no *other* row chan
 | 5.4 | `4` | Toggles Tune; radio keys and unkeys |
 | 5.5 | `5` | Edits Date in place; digits only; Enter applies to the RTC |
 | 5.6 | `6` | Edits Time in place; time line shows `G` for GPS or `R` for DS3231 source |
-| 5.7 | Enter an invalid date | `D`-log shows `Invalid date/time`; clock unchanged |
+| 5.7 | Enter `2026-02-30` and press Enter | `D`-log shows `Invalid date/time`; **date line unchanged**; clock not set |
+| 5.8 | Enter `2026-13-45`, then `2026-00-00` | Both rejected the same way. Before B34 all three of these were silently accepted and rolled over (to 2026-03-02, 2027-02-14 and 2025-11-30) |
+| 5.9 | Enter `2024-02-29`, then `2025-02-29` | Leap day accepted in 2024, rejected in 2025 |
+| 5.10 | While editing the date, hold `/` to the end then `,` back | Cursor steps over the `-` separators in both directions and stops at each end without sticking |
+| 5.11 | Enter `24:00:00` as the time | Rejected; time line unchanged |
 
 ### 6. BAND (`B`), QSO (`Q`), Delete (`D`), GPS (`G`), PERF (`P`), BT (`H`)
 
@@ -217,6 +222,7 @@ commits below changed live code.
 | waterfall buffer | Waterfall still renders normally while streaming | owed |
 | B30 (core_api removal) | R-tap a decode to reply; backtick cancel during TX; drop a QSO from the `T` list | owed |
 | B31 (extern audit) | none — linkage and visibility only, byte-identical binary | n/a |
+| B34 (date/time editor) | Section 5 rows 5.5-5.11. The validation and cursor rules are host-tested now; what is operator-only is that the STATUS screen redraws the edited line correctly and the RTC actually takes a valid setting | owed |
 | B33 (screen registry) | Section 1 (reachability) plus the M/N/O paging rows in section 2. Navigation rules are host-tested now; what is operator-only is whether each screen paints the right thing when reached | owed |
 | B32 (menu table) | **All of section 2**, every item on every page. Layout, row order and the edit filter are now host-tested; what remains operator-only is whether each label sits with its own action | owed |
 | all | Sections 0, 1, 3–7 — one full pass | owed |
