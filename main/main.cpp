@@ -3331,60 +3331,255 @@ static void tx_tick() {
   g_tx_next_tone_time = g_tx_slot_start_ms + g_tx_tone_idx * (int)roundf(g_protocol->symbol_period * 1000.0f);
 }
 
+// ===========================================================================
+// MENU model
+//
+// One row of the menu is one entry in kMenuItems. Before this, a single item
+// was defined in three disconnected places keyed by two different index
+// systems: its text was pushed positionally into a vector in draw_menu_view(),
+// its action lived in a nested if (menu_page == N) { if (c == '1') ... } chain
+// ~1800 lines away, and its edit behaviour was a magic absolute index (3, 4,
+// 7, 17). Nothing failed to compile if they disagreed.
+//
+// Layout is derived, not written down twice: item i is on page i / kMenuRows
+// and answers to key '1' + (i % kMenuRows). Adding or reordering an item means
+// editing one row of this table.
+// ===========================================================================
+
+static constexpr int kMenuRows = 6;   // rows per page, matches ui_draw_list()
+
+// How typed characters are filtered while this row is in inline edit.
+enum class MenuEdit : uint8_t {
+  None,     // row has no inline edit
+  Callsign, // any printable, forced upper
+  Numeric,  // digits only
+};
+
+struct MenuItem {
+  const char*  id;              // stable name, for tests and debug
+  std::string (*label)();       // the line as drawn
+  void       (*action)();       // key press on this row
+  MenuEdit     edit;
+};
+
+// Absolute indices referenced by name. These are the numbers the old code
+// spelled as bare literals in several places each.
+static constexpr int kMenuIdxSendFreeText = 1;
+static constexpr int kMenuIdxCall         = 3;
+static constexpr int kMenuIdxGrid         = 4;
+static constexpr int kMenuIdxOffsetHz     = 7;
+static constexpr int kMenuIdxMaxRetry     = 17;
+
+// --- labels ---------------------------------------------------------------
+static std::string ml_cq_type() {
+  std::string s("CQ Type:");
+  if (g_cq_type == CqType::CQFREETEXT) s += g_cq_freetext;
+  else s += cq_type_name(g_cq_type);
+  return s;
+}
+static std::string ml_send_freetext() { return "Send FreeText"; }
+static std::string ml_freetext()      { return std::string("F:") + head_trim(g_free_text, 16); }
+static std::string ml_call() {
+  return std::string("Call:") + elide_right(menu_edit_idx == kMenuIdxCall ? menu_edit_buf : g_call);
+}
+static std::string ml_grid() {
+  std::string g = g_grid;
+  if (menu_edit_idx == kMenuIdxGrid) {
+    g = menu_edit_buf;
+  } else if (g_time_synced_from_gps && g_grid_from_gps && g_grid_gps_display8.size() == 8) {
+    g = g_grid_gps_display8;
+  }
+  return std::string("Grid:") + elide_right(g);
+}
+static std::string ml_sleep_batt()  { return menu_sleep_batt_line(); }
+static std::string ml_offset_src()  { return std::string("Offset:") + offset_name(g_offset_src); }
+static std::string ml_offset_hz() {
+  return std::string("Fixed:") +
+         (menu_edit_idx == kMenuIdxOffsetHz ? menu_edit_buf : std::to_string(g_offset_hz));
+}
+static std::string ml_radio()       { return std::string("Radio:") + radio_profile_name(g_radio); }
+static std::string ml_ignore()      { return std::string("IgnoreList:") + head_trim(g_ignore_prefix_text, 10); }
+static std::string ml_comment()     { return std::string("C:") + head_trim(expand_comment1(), 16); }
+static std::string ml_protocol() {
+  // Saved (pending) mode; '*' if it differs from the running boot mode, so the
+  // user knows a reboot is needed to apply the change.
+  const char* pending = g_protocol_pending_ft4 ? "FT4" : "FT8";
+  const bool needs_reboot = g_protocol_pending_ft4 != (g_protocol == &kProtocolFT4);
+  return std::string("Mode: ") + pending + (needs_reboot ? "*" : "");
+}
+static std::string ml_rxtx_log()    { return std::string("RxTxLog:") + (g_rxtx_log ? "ON" : "OFF"); }
+static std::string ml_skip_tx1()    { return std::string("SkipTX1:") + (g_skip_tx1 ? "ON" : "OFF"); }
+static std::string ml_band_config() { return "Band config"; }
+static std::string ml_gnss_lora()   { return std::string("GNSS_LoRa:") + (g_gnss_lora_enabled ? "ON" : "OFF"); }
+static std::string ml_copy_to_sd()  { return copy_to_sd_menu_item(rtc_now_ms()); }
+static std::string ml_max_retry() {
+  return std::string("Max Retry:") +
+         (menu_edit_idx == kMenuIdxMaxRetry ? menu_edit_buf : std::to_string(g_autoseq_max_retry));
+}
+
+// --- actions --------------------------------------------------------------
+static void ma_cq_type() {
+  g_cq_type = (CqType)(((int)g_cq_type + 1) % 6);
+  if (g_cq_type == CqType::CQFREETEXT) g_cq_freetext = g_free_text;
+  save_station_data();
+  update_autoseq_cq_type();
+  draw_menu_view();
+}
+static void ma_send_freetext() {
+  // FT is a one-shot entry that sorts to the FRONT of the active queue, so the
+  // next TX is the FT, preempting any active QSO. The QSO ctx is preserved and
+  // resumes on the slot after FT fires. Parity inherits from queue[0] when
+  // non-empty; otherwise the next-slot fallback below.
+  const int64_t now_slot = rtc_now_ms() / g_protocol->slot_time_ms;
+  const int fallback_parity = (int)((now_slot + 1) & 1);
+  if (!autoseq_schedule_freetext(g_free_text, fallback_parity)) return;
+  // Re-arm so the FT replaces any QSO TX armed by a prior decode cycle.
+  AutoseqTxEntry pending;
+  if (autoseq_fetch_pending_tx(pending)) arm_pending_tx(pending);
+  menu_flash_idx = kMenuIdxSendFreeText;
+  menu_flash_deadline = rtc_now_ms() + 500;
+  draw_menu_view();
+  debug_log_line(std::string("Queued: ") + g_free_text);
+}
+static void ma_long_edit(decltype(menu_long_kind) kind, const std::string& cur) {
+  menu_long_edit = true;
+  menu_long_kind = kind;
+  menu_long_buf = cur;
+  menu_long_backup = cur;
+  draw_menu_view();
+}
+static void ma_freetext()  { ma_long_edit(LONG_FT, g_free_text); }
+static void ma_ignore()    { ma_long_edit(LONG_IGNORE, g_ignore_prefix_text); }
+static void ma_comment()   { ma_long_edit(LONG_COMMENT, g_comment1); }
+static void ma_inline_edit(int abs_idx, const std::string& cur) {
+  menu_edit_idx = abs_idx;
+  menu_edit_buf = cur;
+  draw_menu_view();
+}
+static void ma_call()      { ma_inline_edit(kMenuIdxCall, g_call); }
+static void ma_grid()      { ma_inline_edit(kMenuIdxGrid, g_grid); }
+static void ma_max_retry() { ma_inline_edit(kMenuIdxMaxRetry, std::to_string(g_autoseq_max_retry)); }
+static void ma_offset_hz() {
+  menu_cursor_edit_original = g_offset_hz;
+  ma_inline_edit(kMenuIdxOffsetHz, std::to_string(g_offset_hz));
+}
+static void ma_sleep_batt() { enter_charge_mode(); }
+static void ma_offset_src() {
+  g_offset_src = (OffsetSrc)(((int)g_offset_src + 1) % 3);
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_radio() {
+  const RadioType old_radio = radio_profile_canonical(g_radio);
+  const audio_source_backend_t old_audio = radio_profile_get(old_radio).audio_backend;
+  const bool was_streaming = audio_source_is_streaming();
+  g_radio = radio_profile_next(g_radio);
+  const RadioType new_radio = radio_profile_canonical(g_radio);
+  const audio_source_backend_t new_audio = radio_profile_get(new_radio).audio_backend;
+  if (was_streaming && old_audio != new_audio) {
+    ESP_LOGI(TAG, "Stopping audio for radio change %s/%s -> %s/%s",
+             radio_profile_name(old_radio), audio_source_backend_name(old_audio),
+             radio_profile_name(new_radio), audio_source_backend_name(new_audio));
+    debug_log_line(std::string("Audio stop ") + radio_profile_name(old_radio));
+    audio_source_stop();
+  }
+  apply_radio_profile_binding();
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_protocol() {
+  // g_protocol stays as-is for this boot session; takes effect on next reboot.
+  g_protocol_pending_ft4 = !g_protocol_pending_ft4;
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_rxtx_log() {
+  g_rxtx_log = !g_rxtx_log;
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_skip_tx1() {
+  g_skip_tx1 = !g_skip_tx1;
+  autoseq_set_skip_tx1(g_skip_tx1);
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_band_config() {
+  s_band_config_menu = true;
+  band_config_reset((int)g_bands.size());
+  enter_mode(UIMode::BAND);
+}
+static void ma_gnss_lora() {
+  gps_stop();
+  porta_stop();
+  g_gnss_lora_enabled = !g_gnss_lora_enabled;
+  apply_debug_uart_pin_policy();
+  save_station_data();
+  apply_radio_profile_binding();
+  draw_menu_view();
+}
+static void ma_copy_to_sd() {
+  CopyBlockInputs in;
+  in.writes_blocked   = storage_writes_blocked();
+  in.tx_active        = g_tx_active;
+  in.decode_active    = g_decode_in_progress;
+  in.audio_streaming  = audio_source_is_streaming();
+  in.firmware_owns    = (storage_service_owner() == StorageOwner::FIRMWARE);
+  in.open_streams     = storage_service_open_stream_count();
+  if (copy_to_sd_press(in, today_qso_file_name(), today_rt_file_name(),
+                       rtc_now_ms()) == CopyToSdPress::RedrawMenu) {
+    draw_menu_view();
+  }
+}
+
+// --- the table ------------------------------------------------------------
+// Order is the on-screen order. Index = page * kMenuRows + (key - '1').
+static const MenuItem kMenuItems[] = {
+  // page 0
+  { "cq_type",     ml_cq_type,      ma_cq_type,      MenuEdit::None     },
+  { "send_ft",     ml_send_freetext,ma_send_freetext,MenuEdit::None     },
+  { "freetext",    ml_freetext,     ma_freetext,     MenuEdit::None     },
+  { "call",        ml_call,         ma_call,         MenuEdit::Callsign },
+  { "grid",        ml_grid,         ma_grid,         MenuEdit::Callsign },
+  { "sleep_batt",  ml_sleep_batt,   ma_sleep_batt,   MenuEdit::None     },
+  // page 1
+  { "offset_src",  ml_offset_src,   ma_offset_src,   MenuEdit::None     },
+  { "offset_hz",   ml_offset_hz,    ma_offset_hz,    MenuEdit::Numeric  },
+  { "radio",       ml_radio,        ma_radio,        MenuEdit::None     },
+  { "ignore_list", ml_ignore,       ma_ignore,       MenuEdit::None     },
+  { "comment",     ml_comment,      ma_comment,      MenuEdit::None     },
+  { "protocol",    ml_protocol,     ma_protocol,     MenuEdit::None     },
+  // page 2
+  { "rxtx_log",    ml_rxtx_log,     ma_rxtx_log,     MenuEdit::None     },
+  { "skip_tx1",    ml_skip_tx1,     ma_skip_tx1,     MenuEdit::None     },
+  { "band_config", ml_band_config,  ma_band_config,  MenuEdit::None     },
+  { "gnss_lora",   ml_gnss_lora,    ma_gnss_lora,    MenuEdit::None     },
+  { "copy_to_sd",  ml_copy_to_sd,   ma_copy_to_sd,   MenuEdit::None     },
+  { "max_retry",   ml_max_retry,    ma_max_retry,    MenuEdit::Numeric  },
+};
+static constexpr int kMenuItemCount = (int)(sizeof(kMenuItems) / sizeof(kMenuItems[0]));
+static constexpr int kMenuPageCount = (kMenuItemCount + kMenuRows - 1) / kMenuRows;
+
+// The magic indices the old code compared against are now assertions.
+static_assert(kMenuItemCount == 18, "menu item count changed; check callers");
+static_assert(kMenuPageCount == 3,  "menu page count changed; check M/N/O keys");
+
+// Inline-edit character class for the row currently being edited.
+static MenuEdit menu_edit_kind() {
+  if (menu_edit_idx < 0 || menu_edit_idx >= kMenuItemCount) return MenuEdit::None;
+  return kMenuItems[menu_edit_idx].edit;
+}
+
 static void draw_menu_view() {
-    if (menu_long_edit) {
-      draw_menu_long_edit();
-      return;
-    }
-  int64_t now = rtc_now_ms();
+  if (menu_long_edit) {
+    draw_menu_long_edit();
+    return;
+  }
+  const int64_t now = rtc_now_ms();
 
   std::vector<std::string> lines;
-  lines.reserve(12);
-
-  std::string cq_line = std::string("CQ Type:");
-  if (g_cq_type == CqType::CQFREETEXT) cq_line += g_cq_freetext;
-  else cq_line += cq_type_name(g_cq_type);
-  lines.push_back(cq_line);
-  lines.push_back("Send FreeText");
-  lines.push_back(std::string("F:") + head_trim(g_free_text, 16));
-  lines.push_back(std::string("Call:") + elide_right(menu_edit_idx == 3 ? menu_edit_buf : g_call));
-  std::string display_grid = g_grid;
-  if (menu_edit_idx == 4) {
-    display_grid = menu_edit_buf;
-  } else if (g_time_synced_from_gps && g_grid_from_gps && g_grid_gps_display8.size() == 8) {
-    display_grid = g_grid_gps_display8;
-  }
-  lines.push_back(std::string("Grid:") + elide_right(display_grid));
-  lines.push_back(menu_sleep_batt_line());
-
-  lines.push_back(std::string("Offset:") + offset_name(g_offset_src));
-  if (menu_edit_idx == 7) {
-    lines.push_back(std::string("Fixed:") + menu_edit_buf);
-  } else {
-    lines.push_back(std::string("Fixed:") + std::to_string(g_offset_hz));
-  }
-  lines.push_back(std::string("Radio:") + radio_profile_name(g_radio));
-  lines.push_back(std::string("IgnoreList:") + head_trim(g_ignore_prefix_text, 10));
-  lines.push_back(std::string("C:") + head_trim(expand_comment1(), 16));
-  {
-    // Show the saved (pending) mode.  Add '*' if it differs from the running
-    // boot mode so the user knows a reboot is needed to apply the change.
-    const char* pending_name = g_protocol_pending_ft4 ? "FT4" : "FT8";
-    bool needs_reboot = g_protocol_pending_ft4 != (g_protocol == &kProtocolFT4);
-    lines.push_back(std::string("Mode: ") + pending_name + (needs_reboot ? "*" : ""));
-  }
-
-  // Page 2 content (index 12+)
-  lines.push_back(std::string("RxTxLog:") + (g_rxtx_log ? "ON" : "OFF"));
-  lines.push_back(std::string("SkipTX1:") + (g_skip_tx1 ? "ON" : "OFF"));
-  lines.push_back("Band config");
-  lines.push_back(std::string("GNSS_LoRa:") + (g_gnss_lora_enabled ? "ON" : "OFF"));
-  lines.push_back(copy_to_sd_menu_item(now));
-  if (menu_edit_idx == 17) {
-    lines.push_back(std::string("Max Retry:") + menu_edit_buf);
-  } else {
-    lines.push_back(std::string("Max Retry:") + std::to_string(g_autoseq_max_retry));
-  }
+  lines.reserve(kMenuItemCount);
+  for (const MenuItem& item : kMenuItems) lines.push_back(item.label());
 
   int highlight_abs = -1;
   if (menu_edit_idx >= 0) {
@@ -3396,9 +3591,8 @@ static void draw_menu_view() {
   } else {
     menu_flash_idx = -1;
   }
-  // Auto-clear flash after timeout
   if (menu_flash_idx >= 0 && now >= menu_flash_deadline) {
-    menu_flash_idx = -1;
+    menu_flash_idx = -1;   // auto-clear flash after timeout
   }
   ui_draw_list(lines, menu_page, highlight_abs);
 }
@@ -5109,8 +5303,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               if (c == '\n' || c == '\r') {
                 bool should_save = true;
                 // Absolute indices across pages
-                if (menu_edit_idx == 3) { g_call = menu_edit_buf; autoseq_set_station(g_call, grid_ft8_4(g_grid)); }
-                else if (menu_edit_idx == 4) {
+                if (menu_edit_idx == kMenuIdxCall) { g_call = menu_edit_buf; autoseq_set_station(g_call, grid_ft8_4(g_grid)); }
+                else if (menu_edit_idx == kMenuIdxGrid) {
                   const std::string norm_grid = normalize_grid_maidenhead(menu_edit_buf);
                   if (!norm_grid.empty()) {
                     g_grid = norm_grid;
@@ -5122,9 +5316,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                     debug_log_line("Grid format: AA00/AA00aa/AA00aa00");
                   }
                 }
-                else if (menu_edit_idx == 7) { g_offset_hz = atoi(menu_edit_buf.c_str()); redraw_countdown_now(); }
-                else if (menu_edit_idx == 10) { g_comment1 = menu_edit_buf; }
-                else if (menu_edit_idx == 17) {
+                else if (menu_edit_idx == kMenuIdxOffsetHz) { g_offset_hz = atoi(menu_edit_buf.c_str()); redraw_countdown_now(); }
+                else if (menu_edit_idx == kMenuIdxMaxRetry) {
                   char* end = nullptr;
                   long v = std::strtol(menu_edit_buf.c_str(), &end, 10);
                   if (end != menu_edit_buf.c_str() && end && *end == '\0') {
@@ -5142,19 +5335,19 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               } else if (c == 0x08 || c == 0x7f) {
                 if (!menu_edit_buf.empty()) menu_edit_buf.pop_back();
                 draw_menu_view();
-                if (menu_edit_idx == 7) {
+                if (menu_edit_idx == kMenuIdxOffsetHz) {
                   g_offset_hz = atoi(menu_edit_buf.c_str());
                   redraw_countdown_now();
                 }
               } else if (c == '`') {
-                if (menu_edit_idx == 7) {
+                if (menu_edit_idx == kMenuIdxOffsetHz) {
                   g_offset_hz = menu_cursor_edit_original;
                   redraw_countdown_now();
                 }
                 menu_edit_idx = -1;
                 menu_edit_buf.clear();
                 draw_menu_view();
-              } else if (menu_edit_idx == 7 && (c == ';' || c == '.' || c == ',' || c == '/')) {
+              } else if (menu_edit_idx == kMenuIdxOffsetHz && (c == ';' || c == '.' || c == ',' || c == '/')) {
                 // Arrow mode starts from the currently shown edit value.
                 int cursor_val = g_offset_hz;
                 if (!menu_edit_buf.empty()) {
@@ -5172,26 +5365,26 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 draw_menu_view();
                 redraw_countdown_now();
               } else if (c >= 32 && c < 127) {
-                char ch = c;
-                if (menu_edit_idx == 15) {
-                  const bool is_sign = (ch == '+' || ch == '-');
-                  const bool is_digit = (ch >= '0' && ch <= '9');
-                  if (is_sign) {
-                    if (!menu_edit_buf.empty()) break;
-                  } else if (!is_digit) {
+                // Character class comes from the table row being edited, not
+                // from arithmetic on its index.
+                bool accepted = false;
+                switch (menu_edit_kind()) {
+                  case MenuEdit::Numeric:
+                    if (c >= '0' && c <= '9' && menu_edit_buf.size() < 10) {
+                      menu_edit_buf.push_back((char)c);
+                      accepted = true;
+                    }
                     break;
-                  }
-                  if (menu_edit_buf.size() >= 11) break;
-                } else if (menu_edit_idx == 17) {
-                  if (ch < '0' || ch > '9') break;
-                  if (menu_edit_buf.size() >= 10) break;
+                  case MenuEdit::Callsign:
+                    menu_edit_buf.push_back((char)toupper((unsigned char)c));
+                    accepted = true;
+                    break;
+                  case MenuEdit::None:
+                    break;
                 }
-                if (menu_edit_idx % 6 == 3 || menu_edit_idx % 6 == 4 || menu_edit_idx % 6 == 5) {
-                  ch = toupper((unsigned char)ch);
-                }
-                menu_edit_buf.push_back(ch);
+                if (!accepted) break;   // rejected: no push, no redraw
                 draw_menu_view();
-                if (menu_edit_idx == 7) {
+                if (menu_edit_idx == kMenuIdxOffsetHz) {
                   g_offset_hz = atoi(menu_edit_buf.c_str());
                   redraw_countdown_now();
                 }
@@ -5202,144 +5395,14 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         if (c == ';') {
           if (menu_page > 0) { menu_page--; draw_menu_view(); }
         } else if (c == '.') {
-          if (menu_page < 2) { menu_page++; draw_menu_view(); }
-        } else if (menu_page == 0) {
-              if (c == '1') {
-                g_cq_type = (CqType)(((int)g_cq_type + 1) % 6);
-                if (g_cq_type == CqType::CQFREETEXT) g_cq_freetext = g_free_text;
-                save_station_data();
-                update_autoseq_cq_type();
-                draw_menu_view();
-              } else if (c == '2') {
-                // Send Free Text via autoseq queue. FT is a one-shot entry
-                // that sorts to the FRONT of the active queue — guarantees
-                // the next TX is the FT, preempting any active QSO. The QSO
-                // ctx is preserved (FT is one-shot, popped after TX) and
-                // resumes on the slot after FT fires.
-                // Slot parity: inherits from queue[0] if non-empty (joins
-                // the current activation period); uses next-slot fallback
-                // if empty.
-                int64_t now_slot = rtc_now_ms() / g_protocol->slot_time_ms;
-                int fallback_parity = (int)((now_slot + 1) & 1);
-                if (autoseq_schedule_freetext(g_free_text, fallback_parity)) {
-                  // Re-fetch and update g_pending_tx so the FT replaces any
-                  // previously-scheduled QSO TX. Without this, a QSO TX
-                  // that was already armed by a prior decode cycle would
-                  // still fire instead of the FT.
-                  AutoseqTxEntry pending;
-                  if (autoseq_fetch_pending_tx(pending)) {
-                    arm_pending_tx(pending);
-                  }
-                  menu_flash_idx = 1; // absolute index of "Send FreeText"
-                  menu_flash_deadline = rtc_now_ms() + 500;
-                  draw_menu_view();
-                  debug_log_line(std::string("Queued: ") + g_free_text);
-                }
-              } else if (c == '3') {
-                menu_long_edit = true;
-                menu_long_kind = LONG_FT;
-                menu_long_buf = g_free_text;
-                menu_long_backup = g_free_text;
-                draw_menu_view();
-              } else if (c == '4') {
-                menu_edit_idx = 3; // Call (line index 3)
-                menu_edit_buf = g_call;
-                draw_menu_view();
-              } else if (c == '5') {
-                menu_edit_idx = 4; // Grid (line index 4)
-                menu_edit_buf = g_grid;
-                draw_menu_view();
-              } else if (c == '6') {
-                enter_charge_mode();
-              }
-            } else if (menu_page == 1) {
-                if (c == '1') {
-                  g_offset_src = (OffsetSrc)(((int)g_offset_src + 1) % 3);
-                  save_station_data();
-                  draw_menu_view();
-                } else if (c == '2') {
-                  menu_edit_idx = 7; // Cursor line
-                  menu_cursor_edit_original = g_offset_hz;
-                  menu_edit_buf = std::to_string(g_offset_hz);
-                  draw_menu_view();
-                } else if (c == '3') {
-                  RadioType old_radio = radio_profile_canonical(g_radio);
-                  audio_source_backend_t old_audio = radio_profile_get(old_radio).audio_backend;
-                  bool was_streaming = audio_source_is_streaming();
-                  g_radio = radio_profile_next(g_radio);
-                  RadioType new_radio = radio_profile_canonical(g_radio);
-                  audio_source_backend_t new_audio = radio_profile_get(new_radio).audio_backend;
-                  if (was_streaming && old_audio != new_audio) {
-                    ESP_LOGI(TAG, "Stopping audio for radio change %s/%s -> %s/%s",
-                             radio_profile_name(old_radio),
-                             audio_source_backend_name(old_audio),
-                             radio_profile_name(new_radio),
-                             audio_source_backend_name(new_audio));
-                    debug_log_line(std::string("Audio stop ") + radio_profile_name(old_radio));
-                    audio_source_stop();
-                  }
-                  apply_radio_profile_binding();
-                  save_station_data();
-                  draw_menu_view();
-                } else if (c == '4') {
-                  menu_long_edit = true;
-                  menu_long_kind = LONG_IGNORE;
-                  menu_long_buf = g_ignore_prefix_text;
-                  menu_long_backup = g_ignore_prefix_text;
-                  draw_menu_view();
-                } else if (c == '5') {
-                  menu_long_edit = true;
-                  menu_long_kind = LONG_COMMENT;
-                  menu_long_buf = g_comment1;
-                  menu_long_backup = g_comment1;
-                  draw_menu_view();
-                } else if (c == '6') {
-                  // Toggle the pending protocol mode (FT8 <-> FT4).
-                  // g_protocol stays as-is for this boot session; the change
-                  // takes effect on next reboot.
-                  g_protocol_pending_ft4 = !g_protocol_pending_ft4;
-                  save_station_data();
-                  draw_menu_view();
-                }
-            } else if (menu_page == 2) {
-              if (c == '1') {
-                g_rxtx_log = !g_rxtx_log;
-                save_station_data();
-                draw_menu_view();
-              } else if (c == '2') {
-                g_skip_tx1 = !g_skip_tx1;
-                autoseq_set_skip_tx1(g_skip_tx1);
-                save_station_data();
-                draw_menu_view();
-              } else if (c == '3') {
-                s_band_config_menu = true;
-                band_config_reset((int)g_bands.size());
-                enter_mode(UIMode::BAND);
-              } else if (c == '4') {
-                gps_stop();
-                porta_stop();
-                g_gnss_lora_enabled = !g_gnss_lora_enabled;
-                apply_debug_uart_pin_policy();
-                save_station_data();
-                apply_radio_profile_binding();
-                draw_menu_view();
-              } else if (c == '5') {
-                CopyBlockInputs in;
-                in.writes_blocked = storage_writes_blocked();
-                in.tx_active = g_tx_active;
-                in.decode_active = g_decode_in_progress;
-                in.audio_streaming = audio_source_is_streaming();
-                in.firmware_owns = (storage_service_owner() == StorageOwner::FIRMWARE);
-                in.open_streams = storage_service_open_stream_count();
-                if (copy_to_sd_press(in, today_qso_file_name(), today_rt_file_name(),
-                                     rtc_now_ms()) == CopyToSdPress::RedrawMenu) {
-                  draw_menu_view();
-                }
-              } else if (c == '6') {
-                menu_edit_idx = 17; // Max Retry line
-                menu_edit_buf = std::to_string(g_autoseq_max_retry);
-                draw_menu_view();
-              }
+          if (menu_page < kMenuPageCount - 1) { menu_page++; draw_menu_view(); }
+        } else if (c >= '1' && c < '1' + kMenuRows) {
+          // One dispatch for every row on every page. Layout is derived from
+          // the table, so an item's key follows its position automatically.
+          const int idx = menu_page * kMenuRows + (c - '1');
+          if (idx >= 0 && idx < kMenuItemCount && kMenuItems[idx].action) {
+            kMenuItems[idx].action();
+          }
             }
           }
           break;
