@@ -9,7 +9,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/portmacro.h"
-#include "core_api_internal.h"
 #include "ui.h"
 
 extern "C" {
@@ -67,8 +66,6 @@ static void push_waterfall_latest(const monitor_t& mon)
     }
 
     ui_push_waterfall_row(scaled, FT8_AUDIO_WATERFALL_ROW_WIDTH);
-    core_fire_waterfall_row(block, collapsed, num_bins,
-                            /*swr=*/1.5f, /*pwr=*/2.0f, /*ptt=*/false);
 }
 
 void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg)

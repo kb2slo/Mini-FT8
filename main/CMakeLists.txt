@@ -5,7 +5,6 @@ idf_component_register(
          "storage/station_save_worker.cpp"
          "autoseq.cpp"
          "audio/audio_source.cpp"
-         "core_api.cpp"
          "time/gps.cpp"
          "porta.cpp"
          "radio/radio_control.cpp"

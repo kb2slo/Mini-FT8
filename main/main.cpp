@@ -30,8 +30,6 @@ extern "C" {
 #include "file_list_worker.h"
 #include "qso_browse.h"
 #include "copy_to_sd.h"
-#include "core_api.h"
-#include "core_api_internal.h"
 #include <M5Cardputer.h>
 #include <sstream>
 #include <iterator>
@@ -386,14 +384,14 @@ volatile int64_t g_decode_applied_slot_idx = -1;
 // consumes it once to synchronize the selected band and mode.
 volatile bool g_cdc_initial_sync_pending = false;
 
-// Deferred-save flag. main.cpp owns storage; core_api commands only request
+// Deferred-save flag. main.cpp owns storage; callers only request
 // a deferred save.
 volatile bool g_config_save_pending = false;
 
 // State machine variables (matching reference project architecture)
 // TX is scheduled by setting these flags; actual TX starts at slot boundary
 // Global TX-arming state: read by tx_tick on the next slot boundary.
-// Non-static so core_api.cpp can arm it from any UI consumer.
+// Non-static: un-staticked for core_api.cpp (54fc986), which is gone (B30).
 volatile bool g_qso_xmit = false;        // TX is pending
 volatile int g_target_slot_parity = 0;   // 0=even, 1=odd - parity of slot to TX on
 volatile bool g_was_txing = false;              // We were transmitting (for tick timing)
@@ -409,7 +407,7 @@ static bool g_perf_cpu_sample_valid = false;
 
 // BeaconMode and BandItem now defined in station_types.h
 #include "station_types.h"
-std::vector<BandItem> g_bands = {   // visible to core_api.cpp
+std::vector<BandItem> g_bands = {
     {"160m", 1840},   {"80m", 3573},   {"60m", 5357},   {"40m", 7074},
     {"30m", 10136},   {"20m", 14074},  {"17m", 18100},  {"15m", 21074},
     {"12m", 24915},   {"10m", 28074},  {"6m", 50313},   {"2m", 144174},
@@ -419,14 +417,14 @@ static std::vector<int> g_active_band_indices;
 static int band_page = 0;
 static int band_edit_idx = -1;       // absolute index into g_bands
 static std::string band_edit_buffer; // text while editing
-void update_autoseq_cq_type();  // visible to core_api.cpp
-BeaconMode g_beacon = BeaconMode::OFF;   // visible to core_api.cpp
-int g_offset_hz = 1500;                  // visible to core_api.cpp
-int g_band_sel = 1; // default 80m       // visible to core_api.cpp
+void update_autoseq_cq_type();
+BeaconMode g_beacon = BeaconMode::OFF;
+int g_offset_hz = 1500;               
+int g_band_sel = 1; // default 80m    
 static bool g_tune = false;
 static BeaconMode g_status_beacon_temp = BeaconMode::OFF;
-std::string g_date = "2025-12-11";      // visible to core_api.cpp
-std::string g_time = "10:10:00";        // visible to core_api.cpp
+std::string g_date = "2025-12-11";   
+std::string g_time = "10:10:00";     
 static int status_edit_idx = -1;     // 0-5
 static std::string status_edit_buffer;
 static int status_cursor_pos = -1;
@@ -439,20 +437,20 @@ static TickType_t g_app_core0_stack_last_sample_tick = 0;
 static uint32_t g_app_core0_stack_cur_free_bytes = 0;
 static uint32_t g_app_core0_stack_min_free_bytes = 0;
 
-void save_station_data();  // visible to core_api.cpp
+void save_station_data();
 
 // Core commands request a save; the main task performs storage I/O.
 extern volatile bool g_config_save_pending;
 // TX entry for display and scheduling (populated by autoseq)
 // Non-static for the same reason as g_qso_xmit / g_target_slot_parity
-// above — core_api.cpp's tap_rx RPC arms these on user-pick events.
+// above — rx_tap_reply() arms these on user-pick events.
 AutoseqTxEntry g_pending_tx;
 bool g_pending_tx_valid = false;
 
 // Forward declarations — definitions live near check_slot_boundary, where
 // g_offset_src has been declared.
 void arm_pending_tx(const AutoseqTxEntry& pending);
-volatile bool g_tx_cancel_requested = false;   // visible to core_api.cpp
+volatile bool g_tx_cancel_requested = false;
 static void enter_mode(UIMode new_mode);
 static void tx_tick();
 static void redraw_countdown_now();
@@ -467,8 +465,8 @@ static bool rtc_set_from_strings_source(RtcTimeSource source);
 static esp_err_t rtc_write_external_from_soft(const char* reason);
 static const char* rtc_time_source_suffix();
 bool rtc_set_from_strings();
-bool rtc_apply_manual_time_from_strings();   // visible to core_api.cpp
-void rtc_sync_to_esp_rtc();                  // visible to core_api.cpp
+bool rtc_apply_manual_time_from_strings();
+void rtc_sync_to_esp_rtc();               
 static bool g_rx_dirty = false;
 
 
@@ -543,13 +541,13 @@ static bool rtc_valid = false;
 static RtcTimeSource g_rtc_time_source = RtcTimeSource::SAVED;
 
 // CqType, OffsetSrc, RadioType now defined in station_types.h
-CqType g_cq_type = CqType::CQ;                // visible to core_api.cpp
-std::string g_cq_freetext = "FreeText";       // visible to core_api.cpp
-bool g_skip_tx1 = false;                      // visible to core_api.cpp
-int g_autoseq_max_retry = AUTOSEQ_MAX_RETRY;  // visible to core_api.cpp
+CqType g_cq_type = CqType::CQ;             
+std::string g_cq_freetext = "FreeText";    
+bool g_skip_tx1 = false;                   
+int g_autoseq_max_retry = AUTOSEQ_MAX_RETRY;
 static std::string g_free_text = "TNX 73";
-std::string g_call = "YOURCALL";   // visible to core_api.cpp
-std::string g_grid = "CM97";       // visible to core_api.cpp
+std::string g_call = "YOURCALL";
+std::string g_grid = "CM97";    
 static std::string g_grid_saved_manual = "CM97";
 static bool g_grid_from_gps = false;
 static bool g_time_synced_from_gps = false;
@@ -557,21 +555,22 @@ static std::string g_grid_gps_display8;
 bool g_decode_enabled = true;
 int g_time_osr = 2;
 int g_freq_osr = 1;
-OffsetSrc g_offset_src = OffsetSrc::RANDOM;  // visible to core_api.cpp
-RadioType g_radio = RadioType::QMX;          // visible to core_api.cpp
+OffsetSrc g_offset_src = OffsetSrc::RANDOM;
+RadioType g_radio = RadioType::QMX;       
 static int g_gps_baud = 115200;
 static bool g_gnss_lora_enabled = false;
 static constexpr size_t kIgnorePrefixTextMaxLen = 64;
-std::string g_comment1 = "MiniFT8 /Radio";      // visible to core_api.cpp
+std::string g_comment1 = "MiniFT8 /Radio";   
 static std::string g_ignore_prefix_text;
-std::vector<std::string> g_ignore_prefixes;     // visible to core_api.cpp
+std::vector<std::string> g_ignore_prefixes;  
 static bool g_rxtx_log = true;
 static bool radio_type_uses_display_only(RadioType r);
-void apply_radio_profile_binding();   // visible to core_api.cpp
+void apply_radio_profile_binding();
 static void gps_runtime_tick();
 static std::string expand_comment_macros(const std::string& src);
 static std::string normalize_grid_maidenhead(const std::string& src);
-// Non-static so core_api.cpp's set_call / set_grid RPCs can refresh the
+// Non-static: un-staticked for core_api.cpp's set_call / set_grid RPCs
+// (913cbef); core_api is gone (B30). Re-static when the extern audit lands.
 // autoseq station info exactly like the on-device MENU/STATUS edits do.
 std::string grid_ft8_4(const std::string& grid);
 // Single-threaded TX state machine (replaces separate tx_send_task)
@@ -623,12 +622,13 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
 static void update_countdown();
 static void redraw_countdown_now();
 static void consume_cdc_initial_sync();
-// Non-static so core_api.cpp can push band changes to the radio immediately.
+// Non-static: un-staticked for core_api.cpp's set_band RPC (0f71de1);
+// core_api is gone (B30). Re-static when the extern audit lands.
 bool sync_radio_to_current_band(const char* reason);
 static void menu_flash_tick();
 static void rx_flash_tick();
 static std::string g_last_reply_text;
-void rebuild_active_bands();   // visible to core_api.cpp
+void rebuild_active_bands();
 static bool band_row_enabled(int index);
 static int s_menu_enter_page = -1;
 static bool s_band_config_menu = false;
@@ -1915,6 +1915,14 @@ static bool drop_qso(int idx) {
   return ok;
 }
 
+// Called by the Station.txt save worker task once a write lands, so whichever
+// view is showing config (MENU/STATUS) re-evaluates on the next UI tick. Was
+// core_fire_config_changed() before core_api was removed (B30).
+void ui_mark_config_dirty(void) {
+  g_rx_dirty = true;
+  g_tx_view_dirty = true;
+}
+
 static void enter_charge_mode() {
   ESP_LOGI(TAG, "Entering charge mode (Launcher-style)");
   request_tx_cancel();
@@ -2008,7 +2016,7 @@ static void low_batt_apply_halt() {
   } else if (ui_mode == UIMode::TX) {
     redraw_tx_view();
   }
-  core_fire_qso_changed();
+  g_tx_view_dirty = true;
 }
 
 static void low_batt_apply_resume() {
@@ -2453,7 +2461,7 @@ static void check_slot_boundary() {
              (long long)slot_idx, slot_parity);
     autoseq_tick(slot_idx, slot_parity, 0);
     g_was_txing = false;
-    core_fire_qso_changed();  // propagates to all registered consumers
+    g_tx_view_dirty = true;
   }
 
   if (!g_was_txing && !g_tx_active &&
@@ -2766,7 +2774,7 @@ static void keep_rx_list_stale(bool update_ui) {
   if (update_ui) {
     draw_rx_screen();
   } else {
-    core_fire_rx_changed();
+    g_rx_dirty = true;
   }
 }
 
@@ -3023,7 +3031,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
 
     if (!to_me_auto.empty()) {
       autoseq_on_decodes(to_me_auto);
-      core_fire_qso_changed();  // propagates to all registered consumers
+      g_tx_view_dirty = true;
       g_last_reply_text = to_me_auto.front().text;
     }
 
@@ -3039,7 +3047,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
       snprintf(buf, sizeof(buf), "Heap %u", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
       debug_log_line(buf);
     } else {
-      core_fire_rx_changed();
+      g_rx_dirty = true;
     }
   } else {
     ESP_LOGD(TAG, "No messages decoded; keeping RX list");
@@ -3130,7 +3138,7 @@ static void encode_and_log_pending_tx() {
 static void enqueue_beacon_cq() {
   int target_parity = (g_beacon == BeaconMode::EVEN) ? 0 : 1;
   autoseq_start_cq(target_parity);
-  core_fire_qso_changed();  // propagates to all registered consumers
+  g_tx_view_dirty = true;
 }
 
 
@@ -3277,7 +3285,7 @@ static void tx_tick() {
     g_pending_tx_valid = false;
     g_tx_cancel_requested = false;
     g_was_txing = false;  // TX was cancelled - don't call tick at slot boundary
-    core_fire_qso_changed();  // propagates to all registered consumers
+    g_tx_view_dirty = true;
     restore_rx_after_tx();
     return;
   }
@@ -3302,7 +3310,7 @@ static void tx_tick() {
     g_tx_active = false;
     g_pending_tx_valid = false;
     g_tx_cancel_requested = false;
-    core_fire_qso_changed();  // propagates to all registered consumers
+    g_tx_view_dirty = true;
     restore_rx_after_tx();
     return;
   }
@@ -4048,7 +4056,7 @@ static void enter_mode(UIMode new_mode) {
       bool was_off = (g_beacon == BeaconMode::OFF);
       g_beacon = g_status_beacon_temp;
       save_station_data();
-      core_fire_qso_changed();  // propagates to all registered consumers
+      g_tx_view_dirty = true;
 
       if (g_beacon == BeaconMode::OFF) {
         autoseq_cancel_cq(g_tx_active);
@@ -4272,20 +4280,6 @@ static void app_task_core0(void* /*param*/) {
   // Initialize autoseq engine
   autoseq_init();
 
-  // Initialize the functional-core API (creates internal sync primitives).
-  // After this, UI consumers can call core_get_*, core_cmd_*, and register
-  // callbacks.
-  core_init();
-
-  // Register the Cardputer UI as a core_api consumer. The callbacks just set
-  // the existing dirty flags — the UI main loop drains them on each tick.
-  // Trivial handlers only (spec in docs/NATIVE_CLIENT_ARCHITECTURE.md).
-  core_on_rx_changed    ([]{ g_rx_dirty = true; });
-  core_on_qso_changed   ([]{ g_tx_view_dirty = true; });
-  // config changes redraw whatever view is showing them (MENU/STATUS);
-  // set both dirty flags so the next UI tick re-evaluates.
-  core_on_config_changed([]{ g_rx_dirty = true; g_tx_view_dirty = true; });
-  
 autoseq_set_adif_callback(log_adif_entry);
 autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
 

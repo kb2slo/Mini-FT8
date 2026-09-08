@@ -8,11 +8,11 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#include "core_api_internal.h"
 #include "station_save_queue.h"
 #include "storage_service.h"
 
 extern void debug_log_line_public(const std::string& msg);
+extern void ui_mark_config_dirty(void);
 
 namespace {
 
@@ -35,7 +35,7 @@ void write_blob_sync(const std::string& blob)
         debug_log_line_public("Station write failed");
         return;
     }
-    core_fire_config_changed();
+    ui_mark_config_dirty();
 }
 
 void station_save_task(void* /*param*/)
