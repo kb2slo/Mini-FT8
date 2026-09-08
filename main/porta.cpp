@@ -1,4 +1,5 @@
 #include "porta.h"
+#include "main_services.h"
 
 #include <cstring>
 #include <string>
@@ -17,7 +18,6 @@
 // without a G4/G5 USB-TTL adapter. debug_log_line_public() writes the
 // on-screen debug ring buffer (DEBUG UI mode) instead, same fix used for
 // nano_flasher's bring-up (RFC 0001 §5.2b).
-extern void debug_log_line_public(const std::string& msg);
 
 namespace {
 

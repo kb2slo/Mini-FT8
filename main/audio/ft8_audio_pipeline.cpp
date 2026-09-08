@@ -1,4 +1,7 @@
 #include "ft8_audio_pipeline.h"
+#include "decode_tx_state.h"
+#include "main_services.h"
+
 #include "protocol.h"
 
 #include <cmath>
@@ -17,22 +20,12 @@ extern "C" {
 #include "ft8/decode.h"
 }
 
-extern void log_heap(const char* tag);
-extern bool g_decode_enabled;
-extern int g_time_osr;
-extern int g_freq_osr;
-extern int64_t g_decode_slot_idx;
-extern volatile bool g_decode_in_progress;
-extern volatile int64_t g_decode_applied_slot_idx;
-extern volatile bool g_tx_active;
-extern volatile bool g_was_txing;
 void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool update_ui);
 int64_t rtc_now_ms();
 
 #ifndef FT8_SAMPLE_RATE
 #define FT8_SAMPLE_RATE 6000
 #endif
-
 
 static void push_waterfall_latest(const monitor_t& mon)
 {

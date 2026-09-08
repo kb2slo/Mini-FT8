@@ -1,4 +1,5 @@
 #include "station_save_worker.h"
+#include "main_services.h"
 
 #include <string>
 #include <utility>
@@ -10,9 +11,6 @@
 
 #include "station_save_queue.h"
 #include "storage_service.h"
-
-extern void debug_log_line_public(const std::string& msg);
-extern void ui_mark_config_dirty(void);
 
 namespace {
 

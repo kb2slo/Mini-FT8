@@ -1,4 +1,7 @@
 #include "stream_uac.h"
+#include "decode_tx_state.h"
+#include "main_services.h"
+
 #include "usb_c_presence.h"
 #include "ft8_audio_pipeline.h"
 #include "resample.h"
@@ -23,11 +26,8 @@
 #include <inttypes.h>
 
 static const char* TAG = "UAC_STREAM";
-extern void log_heap(const char* tag);
 
 // External references from main.cpp
-extern bool g_streaming;
-extern volatile bool g_cdc_initial_sync_pending;
 int64_t rtc_now_ms();
 
 // Task priorities and stack sizes
@@ -916,7 +916,6 @@ bool uac_is_streaming(void) {
     return s_state == UAC_STATE_STREAMING && s_mic_handle != NULL;
 }
 
-
 esp_err_t uac_host_ensure_started(void) {
     if (s_host_installed && s_usb_task_handle != NULL) {
         return ESP_OK;
@@ -996,8 +995,6 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
     return true;
 }
 
-
-
 void uac_stop(void) {
     if (s_state == UAC_STATE_IDLE) {
         return;
@@ -1031,7 +1028,6 @@ void uac_stop(void) {
     snprintf(s_status_string, sizeof(s_status_string), "Idle");
     ESP_LOGI(TAG, "UAC stopped");
 }
-
 
 esp_err_t uac_ensure_host_uninstalled(void) {
     uac_stop();
@@ -1188,9 +1184,6 @@ void uac_tx_end(void) {
     ESP_LOGI(TAG, "UAC OUT stopped packets=%u errors=%u",
              (unsigned)s_spk_packets_sent, (unsigned)s_spk_write_errors);
 }
-
-
-
 
 bool cat_cdc_ready(void) {
     return s_cdc_handle != NULL;

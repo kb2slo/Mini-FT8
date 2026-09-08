@@ -75,6 +75,8 @@ extern "C" {
 static const char* STATION_FILE = "Station.txt";
 
 #include "protocol.h"
+#include "decode_tx_state.h"
+#include "main_services.h"
 
 // Active protocol for this boot session — set once by load_station_data() from
 // Station.txt (protocol_mode=FT4), defaults to FT8.  Never changed mid-session;
@@ -315,7 +317,7 @@ bool hashtable_lookup(ftx_callsign_hash_type_t hash_type, uint32_t hash, char* c
     return false;
 }
 
-ftx_callsign_hash_interface_t hash_if = {
+static ftx_callsign_hash_interface_t hash_if = {
     .lookup_hash = hashtable_lookup,
     .save_hash = hashtable_add
 };
@@ -386,14 +388,14 @@ volatile bool g_cdc_initial_sync_pending = false;
 
 // Deferred-save flag. main.cpp owns storage; callers only request
 // a deferred save.
-volatile bool g_config_save_pending = false;
+static volatile bool g_config_save_pending = false;
 
 // State machine variables (matching reference project architecture)
 // TX is scheduled by setting these flags; actual TX starts at slot boundary
 // Global TX-arming state: read by tx_tick on the next slot boundary.
 // Non-static: un-staticked for core_api.cpp (54fc986), which is gone (B30).
-volatile bool g_qso_xmit = false;        // TX is pending
-volatile int g_target_slot_parity = 0;   // 0=even, 1=odd - parity of slot to TX on
+static volatile bool g_qso_xmit = false;        // TX is pending
+static volatile int g_target_slot_parity = 0;   // 0=even, 1=odd - parity of slot to TX on
 volatile bool g_was_txing = false;              // We were transmitting (for tick timing)
 volatile bool g_decode_in_progress = false; // Block TX trigger while decoding
 static int g_last_slot_parity = -1;             // For slot boundary detection (just parity, like reference)
@@ -407,7 +409,7 @@ static bool g_perf_cpu_sample_valid = false;
 
 // BeaconMode and BandItem now defined in station_types.h
 #include "station_types.h"
-std::vector<BandItem> g_bands = {
+static std::vector<BandItem> g_bands = {
     {"160m", 1840},   {"80m", 3573},   {"60m", 5357},   {"40m", 7074},
     {"30m", 10136},   {"20m", 14074},  {"17m", 18100},  {"15m", 21074},
     {"12m", 24915},   {"10m", 28074},  {"6m", 50313},   {"2m", 144174},
@@ -418,13 +420,13 @@ static int band_page = 0;
 static int band_edit_idx = -1;       // absolute index into g_bands
 static std::string band_edit_buffer; // text while editing
 void update_autoseq_cq_type();
-BeaconMode g_beacon = BeaconMode::OFF;
-int g_offset_hz = 1500;               
-int g_band_sel = 1; // default 80m    
+static BeaconMode g_beacon = BeaconMode::OFF;
+static int g_offset_hz = 1500;               
+static int g_band_sel = 1; // default 80m    
 static bool g_tune = false;
 static BeaconMode g_status_beacon_temp = BeaconMode::OFF;
-std::string g_date = "2025-12-11";   
-std::string g_time = "10:10:00";     
+static std::string g_date = "2025-12-11";   
+static std::string g_time = "10:10:00";     
 static int status_edit_idx = -1;     // 0-5
 static std::string status_edit_buffer;
 static int status_cursor_pos = -1;
@@ -440,17 +442,16 @@ static uint32_t g_app_core0_stack_min_free_bytes = 0;
 void save_station_data();
 
 // Core commands request a save; the main task performs storage I/O.
-extern volatile bool g_config_save_pending;
 // TX entry for display and scheduling (populated by autoseq)
 // Non-static for the same reason as g_qso_xmit / g_target_slot_parity
 // above — rx_tap_reply() arms these on user-pick events.
-AutoseqTxEntry g_pending_tx;
-bool g_pending_tx_valid = false;
+static AutoseqTxEntry g_pending_tx;
+static bool g_pending_tx_valid = false;
 
 // Forward declarations — definitions live near check_slot_boundary, where
 // g_offset_src has been declared.
 void arm_pending_tx(const AutoseqTxEntry& pending);
-volatile bool g_tx_cancel_requested = false;
+static volatile bool g_tx_cancel_requested = false;
 static void enter_mode(UIMode new_mode);
 static void tx_tick();
 static void redraw_countdown_now();
@@ -541,13 +542,13 @@ static bool rtc_valid = false;
 static RtcTimeSource g_rtc_time_source = RtcTimeSource::SAVED;
 
 // CqType, OffsetSrc, RadioType now defined in station_types.h
-CqType g_cq_type = CqType::CQ;             
-std::string g_cq_freetext = "FreeText";    
-bool g_skip_tx1 = false;                   
-int g_autoseq_max_retry = AUTOSEQ_MAX_RETRY;
+static CqType g_cq_type = CqType::CQ;             
+static std::string g_cq_freetext = "FreeText";    
+static bool g_skip_tx1 = false;                   
+static int g_autoseq_max_retry = AUTOSEQ_MAX_RETRY;
 static std::string g_free_text = "TNX 73";
-std::string g_call = "YOURCALL";
-std::string g_grid = "CM97";    
+static std::string g_call = "YOURCALL";
+static std::string g_grid = "CM97";    
 static std::string g_grid_saved_manual = "CM97";
 static bool g_grid_from_gps = false;
 static bool g_time_synced_from_gps = false;
@@ -555,14 +556,14 @@ static std::string g_grid_gps_display8;
 bool g_decode_enabled = true;
 int g_time_osr = 2;
 int g_freq_osr = 1;
-OffsetSrc g_offset_src = OffsetSrc::RANDOM;
-RadioType g_radio = RadioType::QMX;       
+static OffsetSrc g_offset_src = OffsetSrc::RANDOM;
+static RadioType g_radio = RadioType::QMX;       
 static int g_gps_baud = 115200;
 static bool g_gnss_lora_enabled = false;
 static constexpr size_t kIgnorePrefixTextMaxLen = 64;
-std::string g_comment1 = "MiniFT8 /Radio";   
+static std::string g_comment1 = "MiniFT8 /Radio";   
 static std::string g_ignore_prefix_text;
-std::vector<std::string> g_ignore_prefixes;  
+static std::vector<std::string> g_ignore_prefixes;  
 static bool g_rxtx_log = true;
 static bool radio_type_uses_display_only(RadioType r);
 void apply_radio_profile_binding();

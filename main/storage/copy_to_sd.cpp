@@ -1,4 +1,5 @@
 #include "copy_to_sd.h"
+#include "main_services.h"
 
 #include <cstdio>
 #include <string>
@@ -12,8 +13,6 @@
 #include "copy_menu.h"
 #include "storage_service.h"
 #include "ui.h"
-
-extern void debug_log_line_public(const std::string& msg);
 
 namespace {
 
