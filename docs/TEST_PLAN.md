@@ -15,7 +15,7 @@ Run by the agent locally, and by CI on every PR. No hardware.
 
 | Harness | Command | Covers |
 | --- | --- | --- |
-| `host_mock` (18 binaries) | `make -C host_mock && host_mock/host_test*` | See table below |
+| `host_mock` (18 binaries) | `make -C host_mock && host_mock/host_test*` | See table below. CI globs the binaries rather than listing them, so a new test runs as soon as the Makefile builds it |
 | `tests/tx_e2e` | CTest, CI job **Host tests** | L1 encoder, TA format, golden WAV RX decode |
 | Firmware build | `idf.py build` | `main/` under `-Werror`; merged image; must be **warning-free** |
 | Sidekick build | CI job **Sidekick (ESP32-C6)** | Companion firmware compiles and stages |

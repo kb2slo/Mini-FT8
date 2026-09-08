@@ -117,34 +117,31 @@ jobs:
         run: |
           make -j"$(nproc)"
           failed=0
+          # Scenario runner: one pass per JSON fixture.
           for f in test_*.json; do
             echo "===== $f ====="
             ./host_test "$f" || failed=1
           done
-          echo "===== host_test_unique_callsign ====="
-          ./host_test_unique_callsign || failed=1
-          echo "===== host_test_beacon_cancel ====="
-          ./host_test_beacon_cancel || failed=1
-          echo "===== host_test_adif_merge ====="
-          ./host_test_adif_merge || failed=1
-          echo "===== host_test_copy_block ====="
-          ./host_test_copy_block || failed=1
-          echo "===== host_test_station_save_queue ====="
-          ./host_test_station_save_queue || failed=1
-          echo "===== host_test_file_list ====="
-          ./host_test_file_list || failed=1
-          echo "===== host_test_radio_profile ====="
-          ./host_test_radio_profile || failed=1
-          echo "===== host_test_tx_hud_banner ====="
-          ./host_test_tx_hud_banner || failed=1
-          echo "===== host_test_rx_list_stale ====="
-          ./host_test_rx_list_stale || failed=1
-          echo "===== host_test_cts_time ====="
-          ./host_test_cts_time || failed=1
-          echo "===== host_test_band_config ====="
-          ./host_test_band_config || failed=1
-          echo "===== host_test_usb_c_presence ====="
-          ./host_test_usb_c_presence || failed=1
+          # Every other host_test_* binary the Makefile produced. Globbed on
+          # purpose: this list used to be maintained by hand, and four tests
+          # (station, decode_sort, power_hysteresis, qso_browse) had silently
+          # never run in CI because nobody added them here when they landed.
+          ran=0
+          for t in host_test_*; do
+            [ -x "$t" ] || continue
+            [ -d "$t" ] && continue
+            case "$t" in *.exe) continue;; esac
+            echo "===== $t ====="
+            ./"$t" || failed=1
+            ran=$((ran + 1))
+          done
+          echo "ran $ran host_test_* binaries"
+          # A Makefile or glob change that silently stops running the suite
+          # should fail loudly rather than pass with zero tests.
+          if [ "$ran" -lt 15 ]; then
+            echo "::error::expected at least 15 host_test_* binaries, ran $ran"
+            failed=1
+          fi
           exit "$failed"
 
       - name: TX e2e (CTest)
