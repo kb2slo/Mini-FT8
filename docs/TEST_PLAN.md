@@ -228,45 +228,21 @@ For each row: press the key, confirm the effect, and confirm no *other* row chan
 | 7.3 | `O` `5` | Copy to SD reports `Copied OK`; files land on the card |
 | 7.4 | Reboot | Call, grid, band, and every menu toggle survived |
 
-## Pending — owed on `refactor/main-subdirs`
+## Pending
 
-This branch is taking cleanup aggressively on the model that one significant regression pass happens before
-merge, rather than a field check per commit. **These are owed before this branch merges to `main`.**
+Nothing owed. `refactor/main-subdirs` was field-tested on 2026-09-08 and merged: sections 0–7 walked,
+including every MENU item on every page in section 2, plus a 3.6 h unattended beacon run (544 TX slots
+spotted by 1,195 receivers, no gap over 5 min) and a 22-QSO log on 20m.
 
-Most commits on the branch removed code that was provably never in the image (verified by linker map plus
-`nm` on the ELF, with a byte-identical `mini_ft8.bin` as the check). Those need no field test. Only the
-commits below changed live code.
+Rows do not accumulate across merges — a newly merged branch starts this section empty. Add one the moment
+a change touches a field-only path, naming the change and the exact check.
 
-| From | Check | Status |
-| --- | --- | --- |
-| B28 (ENABLE_FT4) | MENU P1 `6` toggles `Mode: FT8` / `FT4` with `*`; survives `Station.txt` save + reboot | owed |
-| dead build flags | UART screen mirror still dumps the screen on G4/G5 key injection | owed |
-| B29 (host protocol) | MENU P3 `5` Copy files to SD → `Copied OK`; log writes normal during TX/decode | owed |
-| audio dispatch | `S` → `2` QMX audio starts and stops; decode works; radio change stops audio | owed |
-| waterfall buffer | Waterfall still renders normally while streaming | owed |
-| B30 (core_api removal) | R-tap a decode to reply; backtick cancel during TX; drop a QSO from the `T` list | owed |
-| B31 (extern audit) | none — linkage and visibility only, byte-identical binary | n/a |
-| B35 (menu long edit) | MENU P1 `3` and P2 `4`/`5`: each long editor saves on Enter, discards on `` ` ``, and applies its own case rule. Character rules are host-tested; what is operator-only is that the long-edit screen paints and the value reaches `Station.txt` | owed |
-| B36 (USB host retry) | 0.9, and opportunistically: if `S`→`2` fails, does a second press recover it without a reboot? **This fix is unproven** — the race is not reproducible on the bench, so the field is the only evidence available | owed |
-| B34 (date/time editor) | Section 5 rows 5.5-5.11. The validation and cursor rules are host-tested now; what is operator-only is that the STATUS screen redraws the edited line correctly and the RTC actually takes a valid setting | owed |
-| B33 (screen registry) | Section 1 (reachability) plus the M/N/O paging rows in section 2. Navigation rules are host-tested now; what is operator-only is whether each screen paints the right thing when reached | owed |
-| B32 (menu table) | **All of section 2**, every item on every page. Layout, row order and the edit filter are now host-tested; what remains operator-only is whether each label sits with its own action | owed |
-| all | Sections 0, 1, 3–7 — one full pass | owed |
+### Standing watch — B36, unproven
 
-## Keeping this file true
+One item did **not** clear, and cannot be cleared by a passing run. B36 made a failed USB host install
+retryable instead of terminal for the boot, but the race is not reproducible on the bench, so a clean start
+proves only that the retry path was never needed. It stays unproven until a failure recovers.
 
-Same rule as the roadmap: **update this file in the same turn as the work.**
-
-- Work adds or changes a **host-testable** unit (parse, format, policy) → add or update its row under
-  [`host_mock` coverage](#host_mock-coverage) in the same commit as the code.
-- Work touches a **field-only** path → add a row to [Pending](#pending--owed-on-refactormain-subdirs) naming
-  the commit and the exact check. "Test the radio" is not a check; "MENU P3 `5` reports `Copied OK`" is.
-- Work removes code that was **provably not in the image** — linker map plus `nm`, byte-identical binary —
-  say so and add no row. That evidence is the test.
-- The operator runs a pending check → drop the row. Rows do not accumulate across merges; a merged branch
-  starts with an empty Pending section.
-- Work removes a harness or a check → remove its row, and say why in the commit message.
-
-An agent must say, in the turn where it reports work done, which of these it did. "No test-plan change
-needed" is a valid answer and must be stated explicitly, the same way the README audit works — an audit you
-skipped and an audit you did are otherwise indistinguishable.
+**If `S`→`2` ever fails, press it again before power-cycling.** It should be able to succeed. The `D` log now
+names the reason — `USB host retry after …`, `USB host timeout (…)`, `USB host install: …`,
+`UAC already started` — instead of only `Audio start fail`. That line is the evidence; capture it.
