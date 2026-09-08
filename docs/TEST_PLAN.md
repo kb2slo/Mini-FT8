@@ -192,12 +192,14 @@ For each row: press the key, confirm the effect, and confirm no *other* row chan
 | 5.3 | `3` | Steps to the next active band |
 | 5.4 | `4` | Toggles Tune; radio keys and unkeys |
 | 5.5 | `5` | Edits Date in place; digits only; Enter applies to the RTC |
-| 5.6 | `6` | Edits Time in place; time line shows `G` for GPS or `R` for DS3231 source |
+| 5.6 | `6` | Edits Time in place. The Time line's source suffix is ` G` GPS, ` R` DS3231, ` P` phone, or blank for saved / ESP-RTC / manual |
 | 5.7 | Enter `2026-02-30` and press Enter | `D`-log shows `Invalid date/time`; **date line unchanged**; clock not set |
 | 5.8 | Enter `2026-13-45`, then `2026-00-00` | Both rejected the same way. Before B34 all three of these were silently accepted and rolled over (to 2026-03-02, 2027-02-14 and 2025-11-30) |
 | 5.9 | Enter `2024-02-29`, then `2025-02-29` | Leap day accepted in 2024, rejected in 2025 |
 | 5.10 | While editing the date, hold `/` to the end then `,` back | Cursor steps over the `-` separators in both directions and stops at each end without sticking |
 | 5.11 | Enter `24:00:00` as the time | Rejected; time line unchanged |
+| 5.12 | Enter a **valid** date and time and press Enter | Accepted and applied. B34 changed this path, so confirm a good setting still reaches the clock — not only that bad ones are refused |
+| 5.13 | Power-cycle after 5.12, with a DS3231 fitted | Time survives; suffix reads ` R` |
 
 ### 6. BAND (`B`), QSO (`Q`), Delete (`D`), GPS (`G`), PERF (`P`), BT (`H`)
 
