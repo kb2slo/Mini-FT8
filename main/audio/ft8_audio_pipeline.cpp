@@ -87,18 +87,6 @@ void ft8_audio_pipeline_clear_latest_waterfall_row(void)
     taskEXIT_CRITICAL(&s_latest_waterfall_row_lock);
 }
 
-bool ft8_audio_pipeline_get_latest_waterfall_row(uint8_t* out_row, int out_len)
-{
-    if (!out_row || out_len < FT8_AUDIO_WATERFALL_ROW_WIDTH) return false;
-    bool valid = false;
-    taskENTER_CRITICAL(&s_latest_waterfall_row_lock);
-    valid = s_latest_waterfall_row_valid;
-    if (valid) {
-        memcpy(out_row, s_latest_waterfall_row, FT8_AUDIO_WATERFALL_ROW_WIDTH);
-    }
-    taskEXIT_CRITICAL(&s_latest_waterfall_row_lock);
-    return valid;
-}
 
 void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg)
 {

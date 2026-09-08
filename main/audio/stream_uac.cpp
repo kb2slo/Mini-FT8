@@ -118,8 +118,6 @@ static constexpr uint16_t k_qmx_vid = 0x0483;
 static constexpr uint16_t k_qmx_pid = 0xA34C;
 
 // Debug display buffers
-static char s_debug_line1[64] = "";
-static char s_debug_line2[64] = "";
 
 // Resampler state
 static resample_state_t s_resample_state;
@@ -890,25 +888,7 @@ static int uac_read_ft8_samples(void* ctx, float* out, int max_samples) {
             continue;
         }
         int num_frames = bytes_read / frame_bytes;
-        int remainder = bytes_read % frame_bytes;
         if (num_frames == 0) continue;
-
-        int32_t val = 0;
-        if (s_format.bit_resolution == 24) {
-            val = usb_buffer[0] | (usb_buffer[1] << 8) | (usb_buffer[2] << 16);
-            if (val & 0x800000) val |= 0xFF000000;
-        } else {
-            int16_t v16 = (int16_t)(usb_buffer[0] | (usb_buffer[1] << 8));
-            val = v16;
-        }
-        snprintf(s_debug_line1, sizeof(s_debug_line1),
-                 "fmt=%lu/%u/%u v=%ld",
-                 (unsigned long)s_format.sample_freq,
-                 s_format.bit_resolution,
-                 s_format.channels,
-                 (long)val);
-        snprintf(s_debug_line2, sizeof(s_debug_line2),
-                 "rd=%lu fb=%d rem=%d", (unsigned long)bytes_read, frame_bytes, remainder);
 
         return uac_pcm_to_ft8_samples(&s_resample_state, usb_buffer,
                                       (int)bytes_read, out,
@@ -931,17 +911,11 @@ static void uac_on_block_processed(void* ctx) {
 }
 
 // Public API implementation
-uac_stream_state_t uac_get_state(void) {
-    return s_state;
-}
 
 bool uac_is_streaming(void) {
     return s_state == UAC_STATE_STREAMING && s_mic_handle != NULL;
 }
 
-bool uac_get_latest_waterfall_row(uint8_t* out_row, int out_len) {
-    return ft8_audio_pipeline_get_latest_waterfall_row(out_row, out_len);
-}
 
 esp_err_t uac_host_ensure_started(void) {
     if (s_host_installed && s_usb_task_handle != NULL) {
@@ -1023,13 +997,7 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
     return true;
 }
 
-bool uac_start(void) {
-    return uac_start_with_profile(UAC_PROFILE_QMX);
-}
 
-bool uac_qmx_detected(void) {
-  return s_mic_handle != NULL || s_cdc_handle != NULL;
-}
 
 void uac_stop(void) {
     if (s_state == UAC_STATE_IDLE) {
@@ -1066,9 +1034,6 @@ void uac_stop(void) {
     ESP_LOGI(TAG, "UAC stopped");
 }
 
-bool uac_usb_host_released(void) {
-    return !s_host_installed && s_usb_task_handle == NULL;
-}
 
 esp_err_t uac_ensure_host_uninstalled(void) {
     uac_stop();
@@ -1226,17 +1191,8 @@ void uac_tx_end(void) {
              (unsigned)s_spk_packets_sent, (unsigned)s_spk_write_errors);
 }
 
-const char* uac_get_status_string(void) {
-    return s_status_string;
-}
 
-const char* uac_get_debug_line1(void) {
-    return s_debug_line1;
-}
 
-const char* uac_get_debug_line2(void) {
-    return s_debug_line2;
-}
 
 bool cat_cdc_ready(void) {
     return s_cdc_handle != NULL;

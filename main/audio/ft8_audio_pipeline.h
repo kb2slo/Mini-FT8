@@ -19,4 +19,3 @@ typedef struct {
 
 void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg);
 void ft8_audio_pipeline_clear_latest_waterfall_row(void);
-bool ft8_audio_pipeline_get_latest_waterfall_row(uint8_t* out_row, int out_len);

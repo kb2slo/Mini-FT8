@@ -33,20 +33,12 @@ typedef enum {
 
 #define UAC_WATERFALL_ROW_WIDTH FT8_AUDIO_WATERFALL_ROW_WIDTH
 
-uac_stream_state_t uac_get_state(void);
 bool uac_is_streaming(void);
-bool uac_start(void);
 bool uac_start_with_profile(uac_stream_profile_t profile);
 void uac_stop(void);
 esp_err_t uac_host_ensure_started(void);
 esp_err_t uac_ensure_host_uninstalled(void);
-bool uac_usb_host_released(void);
-bool uac_qmx_detected(void);
 
-const char* uac_get_status_string(void);
-const char* uac_get_debug_line1(void);
-const char* uac_get_debug_line2(void);
-bool uac_get_latest_waterfall_row(uint8_t* out_row, int out_len);
 
 bool cat_cdc_ready(void);
 esp_err_t cat_cdc_send(const uint8_t* data, size_t len, uint32_t timeout_ms);

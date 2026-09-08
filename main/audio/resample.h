@@ -18,15 +18,6 @@ typedef struct {
 // Initialize resampler state (no-op, kept for API compatibility)
 void resample_init(resample_state_t* state);
 
-// Convert 24-bit stereo samples to mono float
-// Input: 24-bit LE stereo samples (6 bytes per sample pair: L0 L1 L2 R0 R1 R2)
-// Output: Mono float samples in range [-1.0, 1.0]
-// Returns: Number of mono samples written
-int convert_24bit_stereo_to_mono_float(
-    const uint8_t* in,      // Input buffer (24-bit stereo, little-endian)
-    float* out,             // Output buffer (mono float)
-    int num_stereo_samples  // Number of stereo sample pairs
-);
 
 // Decimate 48kHz mono float samples to 6kHz (simple decimation, no filtering)
 // Input: 48kHz mono float samples
@@ -40,17 +31,6 @@ int resample_48k_to_6k(
     int in_samples          // Number of input samples
 );
 
-// Combined conversion: 24-bit/48kHz/stereo -> 12kHz mono float
-// This is the main entry point for UAC audio processing
-// Input: Raw USB audio data (24-bit LE stereo at 48kHz)
-// Output: 12kHz mono float samples ready for FT8 processing
-// Returns: Number of 12kHz samples written
-int uac_to_ft8_samples(
-    resample_state_t* state,
-    const uint8_t* in,      // USB audio buffer (24-bit stereo)
-    float* out,             // Output buffer (12kHz mono float)
-    int num_stereo_samples  // Number of stereo sample pairs at 48kHz
-);
 
 // Generic conversion: 48kHz PCM (16/24-bit mono/stereo) -> 6kHz mono float
 // Input: Raw PCM USB audio bytes

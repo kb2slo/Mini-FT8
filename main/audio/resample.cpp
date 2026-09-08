@@ -6,36 +6,6 @@ void resample_init(resample_state_t* state) {
     (void)state;
 }
 
-int convert_24bit_stereo_to_mono_float(
-    const uint8_t* in,
-    float* out,
-    int num_stereo_samples
-) {
-    const float scale = 1.0f / 8388608.0f;  // 2^23 for 24-bit normalization
-
-    for (int i = 0; i < num_stereo_samples; i++) {
-        // Read left channel (24-bit LE)
-        int offset = i * 6;  // 6 bytes per stereo sample (3+3)
-        int32_t left = in[offset] | (in[offset + 1] << 8) | (in[offset + 2] << 16);
-        // Sign extend from 24-bit to 32-bit
-        if (left & 0x800000) {
-            left |= 0xFF000000;
-        }
-
-        // Read right channel (24-bit LE)
-        int32_t right = in[offset + 3] | (in[offset + 4] << 8) | (in[offset + 5] << 16);
-        // Sign extend from 24-bit to 32-bit
-        if (right & 0x800000) {
-            right |= 0xFF000000;
-        }
-
-        // Downmix to mono: (L + R) / 2
-        float mono = ((float)left + (float)right) * 0.5f * scale;
-        out[i] = mono;
-    }
-
-    return num_stereo_samples;
-}
 
 int resample_48k_to_6k(
     resample_state_t* state,
@@ -56,14 +26,6 @@ int resample_48k_to_6k(
     return out_samples;
 }
 
-int uac_to_ft8_samples(
-    resample_state_t* state,
-    const uint8_t* in,
-    float* out,
-    int num_stereo_samples
-) {
-    return uac_pcm_to_ft8_samples(state, in, num_stereo_samples * 6, out, 24, 2);
-}
 
 int uac_pcm_to_ft8_samples(
     resample_state_t* state,
