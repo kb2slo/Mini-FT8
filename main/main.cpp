@@ -43,7 +43,6 @@ extern "C" {
 #include <cstring>
 #include <algorithm>
 #include <memory>
-#include "driver/usb_serial_jtag.h"
 #include "hal/uart_ll.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
@@ -440,7 +439,6 @@ static TickType_t g_app_core0_stack_last_sample_tick = 0;
 static uint32_t g_app_core0_stack_cur_free_bytes = 0;
 static uint32_t g_app_core0_stack_min_free_bytes = 0;
 
-static void host_handle_line(const std::string& line);
 void save_station_data();  // visible to core_api.cpp
 
 // Core commands request a save; the main task performs storage I/O.
@@ -455,8 +453,6 @@ bool g_pending_tx_valid = false;
 // g_offset_src has been declared.
 void arm_pending_tx(const AutoseqTxEntry& pending);
 volatile bool g_tx_cancel_requested = false;   // visible to core_api.cpp
-static void host_process_bytes(const uint8_t* buf, size_t len);
-[[maybe_unused]] static void poll_host_uart();
 static void enter_mode(UIMode new_mode);
 static void tx_tick();
 static void redraw_countdown_now();
@@ -537,22 +533,7 @@ static std::vector<std::string> g_d_files;
 static uint32_t s_d_list_gen = 0;
 static int d_page = 0;
 static std::string host_input;
-static const char* HOST_PROMPT = "MINIFT8> ";
-static bool usb_ready = false;
 static QueueHandle_t s_key_inject_queue = nullptr;
-static bool host_bin_active = false;
-static size_t host_bin_remaining = 0;
-static StorageStream* host_bin_stream = nullptr;
-static uint32_t host_bin_crc = 0;
-static uint32_t host_bin_expected_crc = 0;
-static size_t host_bin_received = 0;
-static std::vector<uint8_t> host_bin_buf;
-static const size_t HOST_BIN_CHUNK = 512;
-static size_t host_bin_chunk_expect = 0; // payload bytes this chunk (excludes CRC trailer)
-static uint8_t host_bin_first8[8] = {0};
-static uint8_t host_bin_last8[8] = {0};
-static size_t host_bin_first_filled = 0;
-static std::string host_bin_path;
 
 // Software RTC
 static time_t rtc_epoch_base = 0;
@@ -607,7 +588,7 @@ static int g_tx_last_ta_int = -1;          // For TA command deduplication
 static int g_tx_last_ta_frac = -1;
 
 static bool storage_should_guard_active_logs() {
-  return g_tx_active || g_decode_in_progress || audio_source_is_streaming() || host_bin_active;
+  return g_tx_active || g_decode_in_progress || audio_source_is_streaming();
 }
 
 static bool storage_reject_active_log_user_mutation(const std::string& name_or_path) {
@@ -1037,16 +1018,6 @@ static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid,
 }
 
 
-static void ensure_usb() {
-  if (usb_ready) return;
-  usb_serial_jtag_driver_config_t cfg = {
-    .tx_buffer_size = 1024,
-    .rx_buffer_size = 4096,
-  };
-  if (usb_serial_jtag_driver_install(&cfg) == ESP_OK) {
-    usb_ready = true;
-  }
-}
 
 static bool uart_inject_last_was_cr = false;
 static bool g_debug_uart_pins_enabled = true;
@@ -1082,21 +1053,6 @@ static void poll_uart_inject_keys() {
   }
 }
 
-static void host_write_str(const std::string& s) {
-  ensure_usb();
-  if (usb_ready) {
-    const uint8_t* p = reinterpret_cast<const uint8_t*>(s.data());
-    size_t remaining = s.size();
-    while (remaining > 0) {
-      size_t chunk = remaining;
-      if (chunk > 256) chunk = 256;
-      int written = usb_serial_jtag_write_bytes(p, chunk, portMAX_DELAY);
-      if (written <= 0) break;
-      p += written;
-      remaining -= written;
-    }
-  }
-}
 
 // ================================================================
 // UART screen mirror
@@ -3842,355 +3798,15 @@ static void debug_log_line(const std::string& msg) {
   debug_page = (int)((g_debug_lines.size() - 1) / 6);
 }
 
-static std::string trim_copy(const std::string& s) {
-  size_t b = 0, e = s.size();
-  while (b < e && isspace((unsigned char)s[b])) ++b;
-  while (e > b && isspace((unsigned char)s[e - 1])) --e;
-  return s.substr(b, e - b);
-}
 
 
 
-static uint32_t parse_crc_hex(const std::string& hex) {
-  if (hex.empty()) return 0;
-  char* end = nullptr;
-  unsigned long v = strtoul(hex.c_str(), &end, 16);
-  if (end == hex.c_str() || *end != '\0') return 0;
-  return (uint32_t)v;
-}
 
-static uint32_t crc32_update(uint32_t crc, const uint8_t* data, size_t len) {
-  crc = crc ^ 0xFFFFFFFFu;
-  for (size_t i = 0; i < len; ++i) {
-    crc ^= data[i];
-    for (int j = 0; j < 8; ++j) {
-      uint32_t mask = -(crc & 1u);
-      crc = (crc >> 1) ^ (0xEDB88320u & mask);
-    }
-  }
-  return crc ^ 0xFFFFFFFFu;
-}
 
-static void host_debug_hex8(const char* prefix, const uint8_t* b) {
-  char buf[64];
-  int n = snprintf(buf, sizeof(buf), "%s ", prefix);
-  for (int i = 0; i < 8 && n + 3 < (int)sizeof(buf); ++i) {
-    n += snprintf(buf + n, sizeof(buf) - n, "%02X ", b[i]);
-  }
-  if (n > 0 && buf[n - 1] == ' ') buf[n - 1] = 0;
-  host_write_str(std::string(buf) + "\r\n");
-}
 
-static void host_handle_line(const std::string& line_in) {
-  bool send_prompt = true;
-  std::string line = trim_copy(line_in);
-  if (line.empty()) { /* host_write_str(HOST_PROMPT);*/ return; }
-  debug_log_line(std::string("[HOST RX] ") + line);
-  //std::string echo = std::string("ECHO: ") + line + "\r\n";
-  //host_write_str(echo);
 
-  auto to_upper = [](std::string s) {
-    for (auto& c : s) c = toupper((unsigned char)c);
-    return s;
-  };
-  std::istringstream iss(line);
-  std::string cmd;
-  iss >> cmd;
-  std::string cmd_up = to_upper(cmd);
-  std::string rest;
-  std::getline(iss, rest);
-  rest = trim_copy(rest);
 
-  auto send = [](const std::string& msg) { host_write_str(msg + "\r\n"); };
 
-  if (cmd_up == "WRITE" || cmd_up == "APPEND") {
-    std::istringstream rs(rest);
-    std::string fname;
-    rs >> fname;
-    std::string content;
-    std::getline(rs, content);
-    content = trim_copy(content);
-    if (fname.empty()) {
-      send("ERROR: filename required");
-    } else if (cmd_up == "WRITE" && storage_reject_active_log_user_mutation(fname)) {
-      send("ERROR: active log protected");
-    } else {
-      if (cmd_up == "WRITE") {
-        send(storage_file_write_atomic(fname, content) ? "OK" : "ERROR: write failed");
-      } else {
-        send(storage_file_append(fname, content, "", true) ? "OK" : "ERROR: write failed");
-      }
-    }
-  } else if (cmd_up == "READ") {
-    if (rest.empty()) send("ERROR: filename required");
-    else {
-      StorageStream* stream = storage_stream_open(rest, StorageOpenMode::READ);
-      if (!stream) send("ERROR: open failed");
-      else {
-        char buf[128];
-        while (storage_stream_read_line(stream, buf, sizeof(buf))) {
-          host_write_str(std::string(buf));
-        }
-        storage_stream_close(stream);
-        send_prompt = false;
-      }
-    }
-  } else if (cmd_up == "DELETE") {
-    if (rest.empty()) send("ERROR: filename required");
-    else if (storage_reject_active_log_user_mutation(rest)) send("ERROR: active log protected");
-    else {
-      if (storage_file_remove(rest)) send("OK"); else send("ERROR: delete failed");
-    }
-  } else if (cmd_up == "LIST") {
-    std::vector<std::string> files;
-    if (!storage_file_list(files)) send("ERROR: storage unavailable");
-    else {
-      for (const auto& file : files) send(file);
-      send("OK");
-    }
-  } else if (cmd_up == "WRITEBIN") {
-    std::istringstream rs(rest);
-    std::string fname;
-    size_t size = 0;
-    std::string crc_hex;
-    rs >> fname >> size >> crc_hex;
-    uint32_t crc_exp = parse_crc_hex(crc_hex);
-    if (fname.empty() || size == 0 || crc_hex.empty()) {
-      send("ERROR: filename, size, crc32_hex required");
-    } else if (host_bin_active) {
-      send("ERROR: binary upload in progress");
-    } else if (storage_reject_active_log_user_mutation(fname)) {
-      send("ERROR: active log protected");
-    } else {
-      StorageStream* stream = storage_stream_open(fname, StorageOpenMode::WRITE_TRUNCATE);
-      if (!stream) {
-        send("ERROR: open failed");
-      } else {
-          host_bin_path = fname;
-          host_bin_active = true;
-          host_bin_remaining = size;
-          host_bin_stream = stream;
-          host_bin_crc = 0;
-          host_bin_expected_crc = crc_exp;
-          host_bin_received = 0;
-          host_bin_buf.clear();
-          host_bin_buf.reserve(HOST_BIN_CHUNK);
-          host_bin_chunk_expect = (host_bin_remaining < HOST_BIN_CHUNK) ? host_bin_remaining : HOST_BIN_CHUNK;
-          host_bin_first_filled = 0;
-          memset(host_bin_first8, 0, sizeof(host_bin_first8));
-          memset(host_bin_last8, 0, sizeof(host_bin_last8));
-          host_write_str("OK: send " + std::to_string(size) + " bytes, chunk " + std::to_string(HOST_BIN_CHUNK) + " +4crc\r\n");
-          send_prompt = false; // prompt after binary upload completes
-      }
-    }
-  } else if (cmd_up == "DATE") {
-    if (rest.empty()) {
-      send("DATE " + g_date);
-    } else {
-      int y, M, d;
-      if (sscanf(rest.c_str(), "%d-%d-%d", &y, &M, &d) != 3 ||
-          y < 2024 || y > 2099 || M < 1 || M > 12 || d < 1 || d > 31) {
-        send("ERROR: use DATE YYYY-MM-DD");
-      } else {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", y, M, d);
-        g_date = buf;
-        if (rtc_apply_manual_time_from_strings()) { save_station_data(); send("OK"); }
-        else send("ERROR: invalid date");
-      }
-    }
-  } else if (cmd_up == "TIME") {
-    if (rest.empty()) {
-      send("TIME " + g_time);
-    } else {
-      int h, m, s;
-      if (sscanf(rest.c_str(), "%d:%d:%d", &h, &m, &s) != 3 ||
-          h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) {
-        send("ERROR: use TIME HH:MM:SS");
-      } else {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
-        g_time = buf;
-        if (rtc_apply_manual_time_from_strings()) { save_station_data(); send("OK"); }
-        else send("ERROR: invalid time");
-      }
-    }
-  } else if (cmd_up == "SLEEP") {
-    if (rtc_valid) {
-      // Compute current time in milliseconds, round up to next second boundary
-      int64_t elapsed_ms = esp_timer_get_time() / 1000 - rtc_ms_start;
-      int64_t now_ms = (time_t)rtc_epoch_base * 1000LL + elapsed_ms;
-      int64_t frac = now_ms % 1000;
-      int64_t wait_ms = (frac > 0) ? (1000 - frac) : 0;
-      time_t sleep_epoch = (time_t)((now_ms + 999) / 1000);  // ceil to next second
-
-      // Wait until the second boundary, then set ESP RTC and sleep
-      if (wait_ms > 0) vTaskDelay(pdMS_TO_TICKS(wait_ms));
-      station_save_worker_flush();
-      file_list_worker_flush();
-      struct timeval tv = { .tv_sec = sleep_epoch, .tv_usec = 0 };
-      settimeofday(&tv, NULL);
-    }
-    send("OK: entering deep sleep");
-    M5.Display.sleep();
-    vTaskDelay(pdMS_TO_TICKS(10));
-    esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
-    esp_deep_sleep_start();
-  } else if (cmd_up == "INFO") {
-    send("Heap: " + std::to_string(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)));
-    send("OK");
-  } else if (cmd_up == "HELP") {
-    send("Commands: INFO, LIST, READ <file>, HELP, EXIT");
-  } else if (cmd_up == "EXIT") {
-    send("OK: exit host");
-    enter_mode(UIMode::RX);
-    return;
-  } else {
-    send("ERROR: Unknown command. Type HELP.");
-  }
-
-  if (send_prompt) host_write_str(std::string(HOST_PROMPT));
-}
-
-static void host_bin_close_release() {
-  if (host_bin_stream) {
-    storage_stream_sync(host_bin_stream);
-    storage_stream_close(host_bin_stream);
-    host_bin_stream = nullptr;
-  }
-  host_bin_active = false;
-  host_bin_remaining = 0;
-  host_bin_buf.clear();
-}
-
-static void host_process_bytes(const uint8_t* buf, size_t len) {
-  ESP_LOGD(TAG, "host_process_bytes len=%u", (unsigned)len);
-  for (size_t i = 0; i < len; ) {
-    if (host_bin_active) {
-      // Skip any stray CR/LF before first payload byte
-      if (host_bin_received == 0 && host_bin_buf.empty() && (buf[i] == '\r' || buf[i] == '\n')) {
-        ++i;
-        continue;
-      }
-      size_t payload_need = host_bin_chunk_expect;
-      size_t total_need = payload_need + 4; // payload + crc32 trailer
-      size_t avail = len - i;
-      size_t copy = total_need - host_bin_buf.size();
-      if (copy > avail) copy = avail;
-      host_bin_buf.insert(host_bin_buf.end(), buf + i, buf + i + copy);
-      i += copy;
-
-      if (host_bin_buf.size() >= total_need) {
-        size_t payload_len = payload_need;
-        uint32_t recv_crc = (uint32_t(host_bin_buf[payload_len])) |
-                            (uint32_t(host_bin_buf[payload_len + 1]) << 8) |
-                            (uint32_t(host_bin_buf[payload_len + 2]) << 16) |
-                            (uint32_t(host_bin_buf[payload_len + 3]) << 24);
-        uint32_t calc_crc = crc32_update(0, host_bin_buf.data(), payload_len);
-        if (calc_crc != recv_crc) {
-          char dbg[128];
-          snprintf(dbg, sizeof(dbg), "ERROR: chunk crc off=%u len=%u calc=%08X recv=%08X\r\n",
-                   (unsigned)(host_bin_received + payload_len), (unsigned)payload_len,
-                   (unsigned)calc_crc, (unsigned)recv_crc);
-          host_write_str(std::string(dbg));
-          // Send first/last bytes of the chunk to compare
-          if (payload_len >= 8) host_debug_hex8("DBG CHUNK FIRST8", host_bin_buf.data());
-          if (payload_len >= 8) host_debug_hex8("DBG CHUNK LAST8", host_bin_buf.data() + payload_len - 8);
-          if (payload_len < 8) host_debug_hex8("DBG CHUNK PART", host_bin_buf.data());
-          // Also report the CRC trailer bytes as seen
-          uint8_t crc_bytes[4] = {
-            host_bin_buf[payload_len],
-            host_bin_buf[payload_len + 1],
-            host_bin_buf[payload_len + 2],
-            host_bin_buf[payload_len + 3]
-          };
-          host_debug_hex8("DBG CRC BYTES", crc_bytes);
-          host_bin_close_release();
-          host_write_str(std::string(HOST_PROMPT));
-          continue;
-        }
-
-        // Capture first/last bytes for debugging
-        if (host_bin_first_filled < 8) {
-          size_t need = 8 - host_bin_first_filled;
-          if (need > payload_len) need = payload_len;
-          memcpy(host_bin_first8 + host_bin_first_filled, host_bin_buf.data(), need);
-          host_bin_first_filled += need;
-        }
-        // update last8 buffer
-        if (payload_len >= 8) {
-          memcpy(host_bin_last8, host_bin_buf.data() + payload_len - 8, 8);
-        } else {
-          // shift existing and append
-          size_t shift = (payload_len + 8 > 8) ? (payload_len) : payload_len;
-          if (shift > 0) {
-            memmove(host_bin_last8, host_bin_last8 + shift, 8 - shift);
-            memcpy(host_bin_last8 + (8 - payload_len), host_bin_buf.data(), payload_len);
-          }
-        }
-
-        size_t written = storage_stream_write(host_bin_stream, host_bin_buf.data(), payload_len);
-        if (written != payload_len) {
-          host_write_str("ERROR: write failed\r\n");
-          host_bin_close_release();
-          host_write_str(std::string(HOST_PROMPT));
-          continue;
-        }
-        host_bin_crc = crc32_update(host_bin_crc, host_bin_buf.data(), payload_len);
-        host_bin_remaining -= payload_len;
-        host_bin_received += payload_len;
-        host_bin_buf.clear();
-        host_write_str("ACK " + std::to_string(host_bin_received) + "\r\n");
-
-        if (host_bin_remaining == 0) {
-          uint32_t crc_final = host_bin_crc;
-          host_bin_close_release();
-          // Reopen file to send first/last 8 bytes for debugging
-          host_debug_hex8("DBG FIRST8", host_bin_first8);
-          host_debug_hex8("DBG LAST8", host_bin_last8);
-          char crc_line[64];
-          snprintf(crc_line, sizeof(crc_line), "DBG CRC %08X EXPECT %08X\r\n",
-                   (unsigned)crc_final, (unsigned)host_bin_expected_crc);
-          host_write_str(std::string(crc_line));
-          if (crc_final != host_bin_expected_crc) {
-            host_write_str("ERROR: crc mismatch\r\n");
-          } else {
-            host_write_str("OK crc " + std::to_string(crc_final) + "\r\n");
-          }
-          host_write_str(std::string(HOST_PROMPT));
-        } else {
-          host_bin_chunk_expect = (host_bin_remaining < HOST_BIN_CHUNK) ? host_bin_remaining : HOST_BIN_CHUNK;
-        }
-      }
-      continue;
-    }
-    char ch = (char)buf[i++];
-    if (ch == '\r' || ch == '\n') {
-      if (!host_input.empty()) {
-    //ESP_LOGI(TAG, "HOST line: %s", host_input.c_str());
-        host_handle_line(host_input);
-        host_input.clear();
-      } else {
-        //host_write_str(std::string(HOST_PROMPT));
-      }
-    } else if (ch == 0x08 || ch == 0x7f) {
-      if (!host_input.empty()) host_input.pop_back();
-    } else if (ch >= 32 && ch < 127) {
-      host_input.push_back(ch);
-    }
-  }
-}
-
-[[maybe_unused]] static void poll_host_uart() {
-  ensure_usb();
-  if (!usb_ready) return;
-  uint8_t buf[512];
-  while (true) {
-    int r = usb_serial_jtag_read_bytes(buf, sizeof(buf), 0);
-    if (r <= 0) break;
-    host_process_bytes(buf, (size_t)r);
-  }
-}
 
 static std::string station_read_stream_text(StorageStream* stream) {
   std::string text;
@@ -5654,7 +5270,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 in.tx_active = g_tx_active;
                 in.decode_active = g_decode_in_progress;
                 in.audio_streaming = audio_source_is_streaming();
-                in.host_bin_active = host_bin_active;
                 in.firmware_owns = (storage_service_owner() == StorageOwner::FIRMWARE);
                 in.open_streams = storage_service_open_stream_count();
                 if (copy_to_sd_press(in, today_qso_file_name(), today_rt_file_name(),
