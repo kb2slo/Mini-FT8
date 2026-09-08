@@ -417,7 +417,7 @@ static std::vector<BandItem> g_bands = {
     {"30m", 10136},   {"20m", 14074},  {"17m", 18100},  {"15m", 21074},
     {"12m", 24915},   {"10m", 28074},  {"6m", 50313},   {"2m", 144174},
 };
-static std::string g_active_band_text = "80 40 20 17 15 12 10";
+static std::string g_active_band_text = "80 40 30 20 17 15 12 10";
 static std::vector<int> g_active_band_indices;
 static int band_page = 0;
 static int band_edit_idx = -1;       // absolute index into g_bands
