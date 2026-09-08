@@ -40,12 +40,13 @@ RX_LIST_STALE_TARGET = host_test_rx_list_stale
 CTS_TIME_TARGET = host_test_cts_time
 BAND_CONFIG_TARGET = host_test_band_config
 USB_C_PRESENCE_TARGET = host_test_usb_c_presence
+MENU_MODEL_TARGET = host_test_menu_model
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
-     $(USB_C_PRESENCE_TARGET)
+     $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -96,6 +97,12 @@ BAND_CONFIG_OBJ = band_config.o test_band_config.o
 band_config.o: ../main/band_config.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(BAND_CONFIG_TARGET): $(BAND_CONFIG_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+MENU_MODEL_OBJ = menu_model.o test_menu_model.o
+menu_model.o: ../main/menu_model.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(MENU_MODEL_TARGET): $(MENU_MODEL_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 USB_C_PRESENCE_OBJ = usb_c_presence.o test_usb_c_presence.o
@@ -150,6 +157,6 @@ clean:
 	      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
 	      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
 	      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
-	      $(USB_C_PRESENCE_TARGET)
+	      $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_OBJ) $(MENU_MODEL_TARGET)
 
 .PHONY: all clean

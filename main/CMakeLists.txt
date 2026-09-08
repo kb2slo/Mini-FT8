@@ -17,6 +17,7 @@ idf_component_register(
          "storage/station.cpp"
          "storage/station_save_queue.cpp"
          "band_config.cpp"
+         "menu_model.cpp"
          "usb_c_presence.cpp"
          "usb_c_presence_host.cpp"
          "storage/adif.cpp"

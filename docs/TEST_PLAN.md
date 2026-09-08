@@ -15,7 +15,7 @@ Run by the agent locally, and by CI on every PR. No hardware.
 
 | Harness | Command | Covers |
 | --- | --- | --- |
-| `host_mock` (17 binaries) | `make -C host_mock && host_mock/host_test*` | See table below |
+| `host_mock` (18 binaries) | `make -C host_mock && host_mock/host_test*` | See table below |
 | `tests/tx_e2e` | CTest, CI job **Host tests** | L1 encoder, TA format, golden WAV RX decode |
 | Firmware build | `idf.py build` | `main/` under `-Werror`; merged image; must be **warning-free** |
 | Sidekick build | CI job **Sidekick (ESP32-C6)** | Companion firmware compiles and stages |
@@ -42,13 +42,17 @@ Run by the agent locally, and by CI on every PR. No hardware.
 | `host_test_tx_hud_banner` | TX HUD banner state |
 | `host_test_rx_list_stale` | RX list staleness marking |
 | `host_test_usb_c_presence` | USB-C presence detection policy |
+| `host_test_menu_model` | MENU layout arithmetic (page/key round-trip for all 18 rows), row identity and order, edit character classes, and the inline-edit filter. Carries regression cases for both defects B32 fixed |
 
 ### What automation cannot see
 
 Named explicitly so nobody mistakes a green run for coverage. None of the following has a harness:
 
-- **The UI.** No test covers any `draw_*` function, the MENU screens, key dispatch, or `UIMode` transitions.
-  A menu item can be reordered, mislabelled, or wired to the wrong action with every test green.
+- **The UI rendering.** No test covers any `draw_*` function or `UIMode` transitions. The MENU is now
+  partly covered: `host_test_menu_model` pins layout, row order, and the edit filter, and
+  `menu_assert_model_in_sync()` logs at startup if the label/action table drifts off the model. What stays
+  uncovered is whether a row's *label* and *action* actually belong together — that pairing is still only
+  verifiable by eye, which is why section 2 below checks label and effect together.
 - **The main loop and slot state machine.** `app_task_core0`, `tx_tick`, `check_slot_boundary`.
 - **Any field-only path**: USB host / UAC audio, CAT, CDC, display and SPI, GPS, DS3231, SD card, flash.
 - **Timing.** Slot alignment, decode-window deadlines, TX start latency.
@@ -211,7 +215,7 @@ commits below changed live code.
 | waterfall buffer | Waterfall still renders normally while streaming | owed |
 | B30 (core_api removal) | R-tap a decode to reply; backtick cancel during TX; drop a QSO from the `T` list | owed |
 | B31 (extern audit) | none — linkage and visibility only, byte-identical binary | n/a |
-| B32 (menu table) | **All of section 2**, every item on every page. Highest-risk change on the branch: the menu was rewritten from three disconnected definitions per item into one table | owed |
+| B32 (menu table) | **All of section 2**, every item on every page. Layout, row order and the edit filter are now host-tested; what remains operator-only is whether each label sits with its own action | owed |
 | all | Sections 0, 1, 3–7 — one full pass | owed |
 
 ## Keeping this file true

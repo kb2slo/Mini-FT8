@@ -75,6 +75,7 @@ extern "C" {
 static const char* STATION_FILE = "Station.txt";
 
 #include "protocol.h"
+#include "menu_model.h"
 #include "decode_tx_state.h"
 #include "main_services.h"
 
@@ -3346,20 +3347,13 @@ static void tx_tick() {
 // editing one row of this table.
 // ===========================================================================
 
-static constexpr int kMenuRows = 6;   // rows per page, matches ui_draw_list()
-
-// How typed characters are filtered while this row is in inline edit.
-enum class MenuEdit : uint8_t {
-  None,     // row has no inline edit
-  Callsign, // any printable, forced upper
-  Numeric,  // digits only
-};
-
+// Layout, row identity and the edit character classes live in menu_model.h,
+// which is pure and host-tested (host_test_menu_model). This table binds a
+// label and an action to each of those rows, index-parallel.
 struct MenuItem {
-  const char*  id;              // stable name, for tests and debug
+  const char*  id;              // must match menu_row_id(i)
   std::string (*label)();       // the line as drawn
   void       (*action)();       // key press on this row
-  MenuEdit     edit;
 };
 
 // Absolute indices referenced by name. These are the numbers the old code
@@ -3533,41 +3527,48 @@ static void ma_copy_to_sd() {
 }
 
 // --- the table ------------------------------------------------------------
-// Order is the on-screen order. Index = page * kMenuRows + (key - '1').
+// Order is the on-screen order and must match kMenuRows in menu_model.cpp;
+// menu_assert_model_in_sync() checks that at startup.
 static const MenuItem kMenuItems[] = {
   // page 0
-  { "cq_type",     ml_cq_type,      ma_cq_type,      MenuEdit::None     },
-  { "send_ft",     ml_send_freetext,ma_send_freetext,MenuEdit::None     },
-  { "freetext",    ml_freetext,     ma_freetext,     MenuEdit::None     },
-  { "call",        ml_call,         ma_call,         MenuEdit::Callsign },
-  { "grid",        ml_grid,         ma_grid,         MenuEdit::Callsign },
-  { "sleep_batt",  ml_sleep_batt,   ma_sleep_batt,   MenuEdit::None     },
+  { "cq_type",     ml_cq_type,      ma_cq_type },
+  { "send_ft",     ml_send_freetext,ma_send_freetext },
+  { "freetext",    ml_freetext,     ma_freetext },
+  { "call",        ml_call,         ma_call },
+  { "grid",        ml_grid,         ma_grid },
+  { "sleep_batt",  ml_sleep_batt,   ma_sleep_batt },
   // page 1
-  { "offset_src",  ml_offset_src,   ma_offset_src,   MenuEdit::None     },
-  { "offset_hz",   ml_offset_hz,    ma_offset_hz,    MenuEdit::Numeric  },
-  { "radio",       ml_radio,        ma_radio,        MenuEdit::None     },
-  { "ignore_list", ml_ignore,       ma_ignore,       MenuEdit::None     },
-  { "comment",     ml_comment,      ma_comment,      MenuEdit::None     },
-  { "protocol",    ml_protocol,     ma_protocol,     MenuEdit::None     },
+  { "offset_src",  ml_offset_src,   ma_offset_src },
+  { "offset_hz",   ml_offset_hz,    ma_offset_hz },
+  { "radio",       ml_radio,        ma_radio },
+  { "ignore_list", ml_ignore,       ma_ignore },
+  { "comment",     ml_comment,      ma_comment },
+  { "protocol",    ml_protocol,     ma_protocol },
   // page 2
-  { "rxtx_log",    ml_rxtx_log,     ma_rxtx_log,     MenuEdit::None     },
-  { "skip_tx1",    ml_skip_tx1,     ma_skip_tx1,     MenuEdit::None     },
-  { "band_config", ml_band_config,  ma_band_config,  MenuEdit::None     },
-  { "gnss_lora",   ml_gnss_lora,    ma_gnss_lora,    MenuEdit::None     },
-  { "copy_to_sd",  ml_copy_to_sd,   ma_copy_to_sd,   MenuEdit::None     },
-  { "max_retry",   ml_max_retry,    ma_max_retry,    MenuEdit::Numeric  },
+  { "rxtx_log",    ml_rxtx_log,     ma_rxtx_log },
+  { "skip_tx1",    ml_skip_tx1,     ma_skip_tx1 },
+  { "band_config", ml_band_config,  ma_band_config },
+  { "gnss_lora",   ml_gnss_lora,    ma_gnss_lora },
+  { "copy_to_sd",  ml_copy_to_sd,   ma_copy_to_sd },
+  { "max_retry",   ml_max_retry,    ma_max_retry },
 };
 static constexpr int kMenuItemCount = (int)(sizeof(kMenuItems) / sizeof(kMenuItems[0]));
-static constexpr int kMenuPageCount = (kMenuItemCount + kMenuRows - 1) / kMenuRows;
+static_assert(kMenuItemCount == 18, "menu item count changed; check menu_model.cpp");
 
-// The magic indices the old code compared against are now assertions.
-static_assert(kMenuItemCount == 18, "menu item count changed; check callers");
-static_assert(kMenuPageCount == 3,  "menu page count changed; check M/N/O keys");
-
-// Inline-edit character class for the row currently being edited.
-static MenuEdit menu_edit_kind() {
-  if (menu_edit_idx < 0 || menu_edit_idx >= kMenuItemCount) return MenuEdit::None;
-  return kMenuItems[menu_edit_idx].edit;
+// The two tables must stay index-parallel. Checked once at startup rather than
+// at compile time because menu_row_id() is not constexpr; a mismatch here means
+// a label or action has drifted onto the wrong row.
+static void menu_assert_model_in_sync() {
+  if (menu_row_count() != kMenuItemCount) {
+    ESP_LOGE(TAG, "MENU desync: model %d rows, table %d", menu_row_count(), kMenuItemCount);
+    return;
+  }
+  for (int i = 0; i < kMenuItemCount; ++i) {
+    if (std::strcmp(kMenuItems[i].id, menu_row_id(i)) != 0) {
+      ESP_LOGE(TAG, "MENU desync at %d: table \"%s\" vs model \"%s\"",
+               i, kMenuItems[i].id, menu_row_id(i));
+    }
+  }
 }
 
 static void draw_menu_view() {
@@ -4475,6 +4476,9 @@ static void app_task_core0(void* /*param*/) {
   // Initialize autoseq engine
   autoseq_init();
 
+  // MENU table and menu_model.cpp must stay index-parallel.
+  menu_assert_model_in_sync();
+
 autoseq_set_adif_callback(log_adif_entry);
 autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
 
@@ -5367,22 +5371,12 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               } else if (c >= 32 && c < 127) {
                 // Character class comes from the table row being edited, not
                 // from arithmetic on its index.
-                bool accepted = false;
-                switch (menu_edit_kind()) {
-                  case MenuEdit::Numeric:
-                    if (c >= '0' && c <= '9' && menu_edit_buf.size() < 10) {
-                      menu_edit_buf.push_back((char)c);
-                      accepted = true;
-                    }
-                    break;
-                  case MenuEdit::Callsign:
-                    menu_edit_buf.push_back((char)toupper((unsigned char)c));
-                    accepted = true;
-                    break;
-                  case MenuEdit::None:
-                    break;
+                char ch = 0;
+                if (!menu_edit_accepts(menu_edit_class(menu_edit_idx), (char)c,
+                                       menu_edit_buf.size(), &ch)) {
+                  break;                // rejected: no push, no redraw
                 }
-                if (!accepted) break;   // rejected: no push, no redraw
+                menu_edit_buf.push_back(ch);
                 draw_menu_view();
                 if (menu_edit_idx == kMenuIdxOffsetHz) {
                   g_offset_hz = atoi(menu_edit_buf.c_str());
@@ -5395,12 +5389,12 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         if (c == ';') {
           if (menu_page > 0) { menu_page--; draw_menu_view(); }
         } else if (c == '.') {
-          if (menu_page < kMenuPageCount - 1) { menu_page++; draw_menu_view(); }
-        } else if (c >= '1' && c < '1' + kMenuRows) {
-          // One dispatch for every row on every page. Layout is derived from
-          // the table, so an item's key follows its position automatically.
-          const int idx = menu_page * kMenuRows + (c - '1');
-          if (idx >= 0 && idx < kMenuItemCount && kMenuItems[idx].action) {
+          if (menu_page < menu_page_count() - 1) { menu_page++; draw_menu_view(); }
+        } else {
+          // One dispatch for every row on every page; the model maps
+          // (page, key) to a row, so an item's key follows its position.
+          const int idx = menu_index_for(menu_page, c);
+          if (idx >= 0 && kMenuItems[idx].action) {
             kMenuItems[idx].action();
           }
             }
