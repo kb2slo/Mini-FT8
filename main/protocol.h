@@ -2,7 +2,6 @@
 
 #include <stdint.h>
 #include "ft8/constants.h"
-#include "feature_flags.h"
 
 // ---------------------------------------------------------------------------
 // Runtime protocol configuration for Mini-FT8.
@@ -36,7 +35,6 @@ inline constexpr ProtocolConfig kProtocolFT8 = {
     .samples_per_symbol = 7680,
 };
 
-#if ENABLE_FT4
 inline constexpr ProtocolConfig kProtocolFT4 = {
     .protocol_id   = FTX_PROTOCOL_FT4,
     .name          = "FT4",
@@ -46,7 +44,6 @@ inline constexpr ProtocolConfig kProtocolFT4 = {
     .tone_spacing  = 20.8333f,
     .samples_per_symbol = 2304,
 };
-#endif
 
 // g_protocol — pointer to the active protocol for this boot session.
 // Defined in main.cpp (defaults to &kProtocolFT8); set by load_station_data()

@@ -4,7 +4,8 @@ CXXFLAGS = -DHOST_MOCK -std=c++17 -g -Wall -Wno-unused-variable
 CFLAGS   = -DHOST_MOCK -g -Wall
 
 # host_mock first so mock esp_log.h shadows the real one
-INCLUDES = -I. -I../main -I../components/ui/include \
+INCLUDES = -I. -I../main -I../main/radio -I../main/audio -I../main/storage -I../main/time \
+           -I../components/ui/include \
            -I../components/ft8_lib -I../components/ft8_lib/vendor \
            -I../components/ft8_lib/vendor/ft8 \
            -I../components/board_cardputer_adv/include
@@ -39,12 +40,16 @@ RX_LIST_STALE_TARGET = host_test_rx_list_stale
 CTS_TIME_TARGET = host_test_cts_time
 BAND_CONFIG_TARGET = host_test_band_config
 USB_C_PRESENCE_TARGET = host_test_usb_c_presence
+MENU_MODEL_TARGET = host_test_menu_model
+SCREEN_MODEL_TARGET = host_test_screen_model
+DATETIME_FIELD_TARGET = host_test_datetime_field
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
-     $(USB_C_PRESENCE_TARGET)
+     $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_TARGET) $(SCREEN_MODEL_TARGET) \
+     $(DATETIME_FIELD_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -58,13 +63,13 @@ $(CANCEL_TARGET): $(CANCEL_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 ADIF_OBJ = adif.o test_adif_merge.o
-adif.o: ../main/adif.cpp
+adif.o: ../main/storage/adif.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(ADIF_TARGET): $(ADIF_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 STATION_OBJ = station.o test_station.o
-station.o: ../main/station.cpp
+station.o: ../main/storage/station.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(STATION_TARGET): $(STATION_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -86,7 +91,7 @@ $(RX_LIST_STALE_TARGET): $(RX_LIST_STALE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 CTS_TIME_OBJ = cts_time.o test_cts_time.o
-cts_time.o: ../main/cts_time.cpp
+cts_time.o: ../main/time/cts_time.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(CTS_TIME_TARGET): $(CTS_TIME_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -95,6 +100,24 @@ BAND_CONFIG_OBJ = band_config.o test_band_config.o
 band_config.o: ../main/band_config.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(BAND_CONFIG_TARGET): $(BAND_CONFIG_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+MENU_MODEL_OBJ = menu_model.o test_menu_model.o
+menu_model.o: ../main/menu_model.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(MENU_MODEL_TARGET): $(MENU_MODEL_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+SCREEN_MODEL_OBJ = screen_model.o test_screen_model.o
+screen_model.o: ../main/screen_model.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(SCREEN_MODEL_TARGET): $(SCREEN_MODEL_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+DATETIME_FIELD_OBJ = datetime_field.o test_datetime_field.o
+datetime_field.o: ../main/datetime_field.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(DATETIME_FIELD_TARGET): $(DATETIME_FIELD_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 USB_C_PRESENCE_OBJ = usb_c_presence.o test_usb_c_presence.o
@@ -110,7 +133,7 @@ $(POWER_TARGET): $(POWER_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 QSO_BROWSE_OBJ = qso_browse.o test_qso_browse.o
-qso_browse.o: ../main/qso_browse.cpp
+qso_browse.o: ../main/storage/qso_browse.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(QSO_BROWSE_TARGET): $(QSO_BROWSE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -120,15 +143,15 @@ $(COPY_BLOCK_TARGET): $(COPY_BLOCK_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 STATION_SAVE_OBJ = station_save_queue.o test_station_save_queue.o
-station_save_queue.o: ../main/station_save_queue.cpp
+station_save_queue.o: ../main/storage/station_save_queue.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(STATION_SAVE_TARGET): $(STATION_SAVE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 FILE_LIST_OBJ = qso_browse.o file_list.o file_list_queue.o test_file_list.o
-file_list.o: ../main/file_list.cpp
+file_list.o: ../main/storage/file_list.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
-file_list_queue.o: ../main/file_list_queue.cpp
+file_list_queue.o: ../main/storage/file_list_queue.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(FILE_LIST_TARGET): $(FILE_LIST_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -149,6 +172,8 @@ clean:
 	      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
 	      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
 	      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
-	      $(USB_C_PRESENCE_TARGET)
+	      $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_OBJ) $(MENU_MODEL_TARGET) \
+	      $(SCREEN_MODEL_OBJ) $(SCREEN_MODEL_TARGET) \
+	      $(DATETIME_FIELD_OBJ) $(DATETIME_FIELD_TARGET)
 
 .PHONY: all clean

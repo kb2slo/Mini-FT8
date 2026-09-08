@@ -67,7 +67,7 @@ endif()
 
 # L2 State Machine Test
 add_executable(test_l2 test_l2_state_machine.cpp tx_state_machine.cpp decode_helper.cpp)
-target_include_directories(test_l2 PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/../../main)
+target_include_directories(test_l2 PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/../../main ${CMAKE_SOURCE_DIR}/../../main/radio ${CMAKE_SOURCE_DIR}/../../main/audio ${CMAKE_SOURCE_DIR}/../../main/storage ${CMAKE_SOURCE_DIR}/../../main/time)
 if(WIN32)
     target_link_libraries(test_l2 PRIVATE ft8_lib)
 else()
@@ -107,7 +107,7 @@ endif()
 
 # TA command format test (firmware header; no ft8_lib)
 add_executable(test_ta_format test_ta_format.cpp)
-target_include_directories(test_ta_format PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/../../main)
+target_include_directories(test_ta_format PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/../../main ${CMAKE_SOURCE_DIR}/../../main/radio ${CMAKE_SOURCE_DIR}/../../main/audio ${CMAKE_SOURCE_DIR}/../../main/storage ${CMAKE_SOURCE_DIR}/../../main/time)
 if(NOT WIN32)
     target_link_libraries(test_ta_format PRIVATE m)
 endif()

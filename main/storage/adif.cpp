@@ -506,3 +506,63 @@ void adif_logger_dedupe_remember(AdifLoggerDedupe* io,
     }
     io->recent.push_back(AdifLoggerDedupeEntry{call_norm, now_ms});
 }
+
+// ---------------------------------------------------------------------------
+// Logger record formatting
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// "<tag:len>value " -- ADIF's length prefix is the byte count of the value.
+void append_field(std::string& out, const char* tag, const std::string& value,
+                  bool trailing_space = true) {
+    out += '<';
+    out += tag;
+    out += ':';
+    out += std::to_string(value.size());
+    out += '>';
+    out += value;
+    if (trailing_space) {
+        out += ' ';
+    }
+}
+
+// Same, but omitted entirely when the value is empty, rather than emitted as
+// a zero-length tag.
+void append_field_if_set(std::string& out, const char* tag, const std::string& value) {
+    if (value.empty()) {
+        return;
+    }
+    append_field(out, tag, value);
+}
+
+void append_report_if_set(std::string& out, const char* tag, int value) {
+    if (value == kAdifNoReport) {
+        return;
+    }
+    append_field(out, tag, std::to_string(value));
+}
+
+}  // namespace
+
+std::string adif_format_log_record(const AdifLogFields& f) {
+    std::string out;
+    out.reserve(192);
+    append_field(out, "call", f.call);
+    append_field_if_set(out, "gridsquare", f.gridsquare);
+    // No space after mode: matches the record layout this logger has always
+    // written. ADIF fields are self-delimiting by length, so it parses either
+    // way, but keeping it byte-compatible means existing archives and freshly
+    // written records still merge on identical keys.
+    append_field(out, "mode", f.mode, /*trailing_space=*/false);
+    append_field(out, "qso_date", f.qso_date);
+    append_field(out, "time_on", f.time_on);
+    append_field(out, "freq", f.freq);
+    append_field(out, "station_callsign", f.station_callsign);
+    append_field_if_set(out, "my_gridsquare", f.my_gridsquare);
+    append_report_if_set(out, "rst_sent", f.rst_sent);
+    append_report_if_set(out, "rst_rcvd", f.rst_rcvd);
+    append_field_if_set(out, "comment", f.comment);
+    out += "<eor>\n";
+    return out;
+}

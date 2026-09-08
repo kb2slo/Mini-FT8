@@ -30,8 +30,6 @@ extern "C" {
 #include "file_list_worker.h"
 #include "qso_browse.h"
 #include "copy_to_sd.h"
-#include "core_api.h"
-#include "core_api_internal.h"
 #include <M5Cardputer.h>
 #include <sstream>
 #include <iterator>
@@ -43,7 +41,6 @@ extern "C" {
 #include <cstring>
 #include <algorithm>
 #include <memory>
-#include "driver/usb_serial_jtag.h"
 #include "hal/uart_ll.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
@@ -77,8 +74,12 @@ extern "C" {
 
 static const char* STATION_FILE = "Station.txt";
 
-#include "feature_flags.h"
 #include "protocol.h"
+#include "menu_model.h"
+#include "screen_model.h"
+#include "datetime_field.h"
+#include "decode_tx_state.h"
+#include "main_services.h"
 
 // Active protocol for this boot session — set once by load_station_data() from
 // Station.txt (protocol_mode=FT4), defaults to FT8.  Never changed mid-session;
@@ -319,7 +320,7 @@ bool hashtable_lookup(ftx_callsign_hash_type_t hash_type, uint32_t hash, char* c
     return false;
 }
 
-ftx_callsign_hash_interface_t hash_if = {
+static ftx_callsign_hash_interface_t hash_if = {
     .lookup_hash = hashtable_lookup,
     .save_hash = hashtable_add
 };
@@ -360,7 +361,7 @@ static bool rewrite_dxpedition_for_mycall(const std::string& raw_text,
 }
 
 static const char* TAG = "FT8";
-enum class UIMode { RX, TX, BAND, MENU, DEBUG, STATUS, QSO, GPS, PERF, BT };
+// UIMode and the key->screen rules live in screen_model.h (host-tested).
 enum class RtcTimeSource : uint8_t {
   SAVED = 0,
   ESP_RTC,
@@ -388,16 +389,16 @@ volatile int64_t g_decode_applied_slot_idx = -1;
 // consumes it once to synchronize the selected band and mode.
 volatile bool g_cdc_initial_sync_pending = false;
 
-// Deferred-save flag. main.cpp owns storage; core_api commands only request
+// Deferred-save flag. main.cpp owns storage; callers only request
 // a deferred save.
-volatile bool g_config_save_pending = false;
+static volatile bool g_config_save_pending = false;
 
 // State machine variables (matching reference project architecture)
 // TX is scheduled by setting these flags; actual TX starts at slot boundary
 // Global TX-arming state: read by tx_tick on the next slot boundary.
-// Non-static so core_api.cpp can arm it from any UI consumer.
-volatile bool g_qso_xmit = false;        // TX is pending
-volatile int g_target_slot_parity = 0;   // 0=even, 1=odd - parity of slot to TX on
+// Non-static: un-staticked for core_api.cpp (54fc986), which is gone (B30).
+static volatile bool g_qso_xmit = false;        // TX is pending
+static volatile int g_target_slot_parity = 0;   // 0=even, 1=odd - parity of slot to TX on
 volatile bool g_was_txing = false;              // We were transmitting (for tick timing)
 volatile bool g_decode_in_progress = false; // Block TX trigger while decoding
 static int g_last_slot_parity = -1;             // For slot boundary detection (just parity, like reference)
@@ -411,25 +412,24 @@ static bool g_perf_cpu_sample_valid = false;
 
 // BeaconMode and BandItem now defined in station_types.h
 #include "station_types.h"
-std::vector<BandItem> g_bands = {   // visible to core_api.cpp
+static std::vector<BandItem> g_bands = {
     {"160m", 1840},   {"80m", 3573},   {"60m", 5357},   {"40m", 7074},
     {"30m", 10136},   {"20m", 14074},  {"17m", 18100},  {"15m", 21074},
     {"12m", 24915},   {"10m", 28074},  {"6m", 50313},   {"2m", 144174},
 };
-static std::string g_active_band_text = "80 40 20 17 15 12 10";
+static std::string g_active_band_text = "80 40 30 20 17 15 12 10";
 static std::vector<int> g_active_band_indices;
 static int band_page = 0;
 static int band_edit_idx = -1;       // absolute index into g_bands
 static std::string band_edit_buffer; // text while editing
-void update_autoseq_cq_type();  // visible to core_api.cpp
-BeaconMode g_beacon = BeaconMode::OFF;   // visible to core_api.cpp
-int g_offset_hz = 1500;                  // visible to core_api.cpp
-int g_band_sel = 1; // default 80m       // visible to core_api.cpp
+void update_autoseq_cq_type();
+static BeaconMode g_beacon = BeaconMode::OFF;
+static int g_offset_hz = 1500;               
+static int g_band_sel = 1; // default 80m    
 static bool g_tune = false;
 static BeaconMode g_status_beacon_temp = BeaconMode::OFF;
-[[maybe_unused]] static bool g_cat_toggle_high = false;
-std::string g_date = "2025-12-11";      // visible to core_api.cpp
-std::string g_time = "10:10:00";        // visible to core_api.cpp
+static std::string g_date = "2025-12-11";   
+static std::string g_time = "10:10:00";     
 static int status_edit_idx = -1;     // 0-5
 static std::string status_edit_buffer;
 static int status_cursor_pos = -1;
@@ -442,23 +442,19 @@ static TickType_t g_app_core0_stack_last_sample_tick = 0;
 static uint32_t g_app_core0_stack_cur_free_bytes = 0;
 static uint32_t g_app_core0_stack_min_free_bytes = 0;
 
-static void host_handle_line(const std::string& line);
-void save_station_data();  // visible to core_api.cpp
+void save_station_data();
 
 // Core commands request a save; the main task performs storage I/O.
-extern volatile bool g_config_save_pending;
 // TX entry for display and scheduling (populated by autoseq)
 // Non-static for the same reason as g_qso_xmit / g_target_slot_parity
-// above — core_api.cpp's tap_rx RPC arms these on user-pick events.
-AutoseqTxEntry g_pending_tx;
-bool g_pending_tx_valid = false;
+// above — rx_tap_reply() arms these on user-pick events.
+static AutoseqTxEntry g_pending_tx;
+static bool g_pending_tx_valid = false;
 
 // Forward declarations — definitions live near check_slot_boundary, where
 // g_offset_src has been declared.
 void arm_pending_tx(const AutoseqTxEntry& pending);
-volatile bool g_tx_cancel_requested = false;   // visible to core_api.cpp
-static void host_process_bytes(const uint8_t* buf, size_t len);
-[[maybe_unused]] static void poll_host_uart();
+static volatile bool g_tx_cancel_requested = false;
 static void enter_mode(UIMode new_mode);
 static void tx_tick();
 static void redraw_countdown_now();
@@ -473,8 +469,8 @@ static bool rtc_set_from_strings_source(RtcTimeSource source);
 static esp_err_t rtc_write_external_from_soft(const char* reason);
 static const char* rtc_time_source_suffix();
 bool rtc_set_from_strings();
-bool rtc_apply_manual_time_from_strings();   // visible to core_api.cpp
-void rtc_sync_to_esp_rtc();                  // visible to core_api.cpp
+bool rtc_apply_manual_time_from_strings();
+void rtc_sync_to_esp_rtc();               
 static bool g_rx_dirty = false;
 
 
@@ -539,22 +535,7 @@ static std::vector<std::string> g_d_files;
 static uint32_t s_d_list_gen = 0;
 static int d_page = 0;
 static std::string host_input;
-static const char* HOST_PROMPT = "MINIFT8> ";
-static bool usb_ready = false;
 static QueueHandle_t s_key_inject_queue = nullptr;
-static bool host_bin_active = false;
-static size_t host_bin_remaining = 0;
-static StorageStream* host_bin_stream = nullptr;
-static uint32_t host_bin_crc = 0;
-static uint32_t host_bin_expected_crc = 0;
-static size_t host_bin_received = 0;
-static std::vector<uint8_t> host_bin_buf;
-static const size_t HOST_BIN_CHUNK = 512;
-static size_t host_bin_chunk_expect = 0; // payload bytes this chunk (excludes CRC trailer)
-static uint8_t host_bin_first8[8] = {0};
-static uint8_t host_bin_last8[8] = {0};
-static size_t host_bin_first_filled = 0;
-static std::string host_bin_path;
 
 // Software RTC
 static time_t rtc_epoch_base = 0;
@@ -564,13 +545,13 @@ static bool rtc_valid = false;
 static RtcTimeSource g_rtc_time_source = RtcTimeSource::SAVED;
 
 // CqType, OffsetSrc, RadioType now defined in station_types.h
-CqType g_cq_type = CqType::CQ;                // visible to core_api.cpp
-std::string g_cq_freetext = "FreeText";       // visible to core_api.cpp
-bool g_skip_tx1 = false;                      // visible to core_api.cpp
-int g_autoseq_max_retry = AUTOSEQ_MAX_RETRY;  // visible to core_api.cpp
+static CqType g_cq_type = CqType::CQ;             
+static std::string g_cq_freetext = "FreeText";    
+static bool g_skip_tx1 = false;                   
+static int g_autoseq_max_retry = AUTOSEQ_MAX_RETRY;
 static std::string g_free_text = "TNX 73";
-std::string g_call = "YOURCALL";   // visible to core_api.cpp
-std::string g_grid = "CM97";       // visible to core_api.cpp
+static std::string g_call = "YOURCALL";
+static std::string g_grid = "CM97";    
 static std::string g_grid_saved_manual = "CM97";
 static bool g_grid_from_gps = false;
 static bool g_time_synced_from_gps = false;
@@ -578,21 +559,21 @@ static std::string g_grid_gps_display8;
 bool g_decode_enabled = true;
 int g_time_osr = 2;
 int g_freq_osr = 1;
-OffsetSrc g_offset_src = OffsetSrc::RANDOM;  // visible to core_api.cpp
-RadioType g_radio = RadioType::QMX;          // visible to core_api.cpp
+static OffsetSrc g_offset_src = OffsetSrc::RANDOM;
+static RadioType g_radio = RadioType::QMX;       
 static int g_gps_baud = 115200;
 static bool g_gnss_lora_enabled = false;
-static constexpr size_t kIgnorePrefixTextMaxLen = 64;
-std::string g_comment1 = "MiniFT8 /Radio";      // visible to core_api.cpp
+static std::string g_comment1 = "MiniFT8 /Radio";   
 static std::string g_ignore_prefix_text;
-std::vector<std::string> g_ignore_prefixes;     // visible to core_api.cpp
+static std::vector<std::string> g_ignore_prefixes;  
 static bool g_rxtx_log = true;
 static bool radio_type_uses_display_only(RadioType r);
-void apply_radio_profile_binding();   // visible to core_api.cpp
+void apply_radio_profile_binding();
 static void gps_runtime_tick();
 static std::string expand_comment_macros(const std::string& src);
 static std::string normalize_grid_maidenhead(const std::string& src);
-// Non-static so core_api.cpp's set_call / set_grid RPCs can refresh the
+// Non-static: un-staticked for core_api.cpp's set_call / set_grid RPCs
+// (913cbef); core_api is gone (B30). Re-static when the extern audit lands.
 // autoseq station info exactly like the on-device MENU/STATUS edits do.
 std::string grid_ft8_4(const std::string& grid);
 // Single-threaded TX state machine (replaces separate tx_send_task)
@@ -609,7 +590,7 @@ static int g_tx_last_ta_int = -1;          // For TA command deduplication
 static int g_tx_last_ta_frac = -1;
 
 static bool storage_should_guard_active_logs() {
-  return g_tx_active || g_decode_in_progress || audio_source_is_streaming() || host_bin_active;
+  return g_tx_active || g_decode_in_progress || audio_source_is_streaming();
 }
 
 static bool storage_reject_active_log_user_mutation(const std::string& name_or_path) {
@@ -625,43 +606,35 @@ static int menu_edit_idx = -1;
 // Tracks the protocol mode that has been saved to Station.txt and will take
 // effect on next reboot.  Initialised from g_protocol after load_station_data().
 // Differs from g_protocol when the user has toggled Mode but not yet rebooted.
-#if ENABLE_FT4
 static bool g_protocol_pending_ft4 = false;
-#endif
 static std::string menu_edit_buf;
 static int menu_cursor_edit_original = 0;
 static bool menu_long_edit = false;
-static enum { LONG_NONE, LONG_FT, LONG_COMMENT, LONG_ACTIVE, LONG_IGNORE } menu_long_kind = LONG_NONE;
+static MenuLongEdit menu_long_kind = MenuLongEdit::None;
 static std::string menu_long_buf;
-static std::string menu_long_backup;
 static int menu_flash_idx = -1;          // absolute index to flash highlight
 static int64_t menu_flash_deadline = 0;  // ms timestamp when flash ends
 static int rx_flash_idx = -1;
 static int64_t rx_flash_deadline = 0;
 bool g_streaming = false;
 static void draw_menu_view();
-static void draw_battery_icon(int x, int y, int w, int h, int level, bool charging);
 static void draw_status_view();
 static void draw_status_line(int idx, const std::string& text, bool highlight);
 void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool update_ui);
 static void update_countdown();
 static void redraw_countdown_now();
 static void consume_cdc_initial_sync();
-// Non-static so core_api.cpp can push band changes to the radio immediately.
+// Non-static: un-staticked for core_api.cpp's set_band RPC (0f71de1);
+// core_api is gone (B30). Re-static when the extern audit lands.
 bool sync_radio_to_current_band(const char* reason);
 static void menu_flash_tick();
 static void rx_flash_tick();
-static bool looks_like_grid(const std::string& s);
-static bool looks_like_report(const std::string& s, int& out);
 static std::string g_last_reply_text;
-void rebuild_active_bands();   // visible to core_api.cpp
+void rebuild_active_bands();
 static bool band_row_enabled(int index);
 static int s_menu_enter_page = -1;
 static bool s_band_config_menu = false;
-static void schedule_tx_if_idle();
 static int64_t s_last_tx_slot_idx = -1000;  // Track last TX slot for retry scheduling
-[[maybe_unused]] static bool g_sync_pending = false;
-[[maybe_unused]] static int g_sync_delta_ms = 0;
 static void enqueue_beacon_cq();
 static void arm_from_autoseq_or_beacon();
 static void qso_load_file_list();
@@ -681,7 +654,6 @@ static bool storage_append_text_locked_path(const std::string& path,
 static bool storage_write_cabrillo_fd_entry(const std::string& mycall,
                                              const std::string& location,
                                              const std::string& qso_line);
-#if !MIC_PROBE_APP
 void log_heap(const char* tag) {
   size_t free_sz = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   size_t min_free = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
@@ -768,11 +740,6 @@ static bool log_cabrillo_fd_entry(const std::string& dxcall, const std::string& 
   return storage_write_cabrillo_fd_entry(g_call, location, qso_line);
 }
 
-#else
-static inline void log_heap(const char*) {}
-static inline void log_mem_caps(const char*) {}
-static bool log_cabrillo_fd_entry(const std::string&, const std::string&) { return true; }
-#endif
 
 static bool storage_append_text_locked_path(const std::string& path,
                                              const std::string& line,
@@ -785,14 +752,7 @@ static bool storage_append_text_locked_path(const std::string& path,
 static bool storage_write_cabrillo_fd_entry(const std::string& mycall,
                                             const std::string& location,
                                             const std::string& qso_line) {
-#if !MIC_PROBE_APP
   return storage_file_append_cabrillo(mycall, location, qso_line);
-#else
-  (void)mycall;
-  (void)location;
-  (void)qso_line;
-  return true;
-#endif
 }
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter) {
@@ -1021,33 +981,20 @@ static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid,
   char freq_str[16];
   snprintf(freq_str, sizeof(freq_str), "%.3f", freq_mhz);
 
-  std::string comment_expanded = expand_comment_macros(g_comment1);
-  const std::string my_grid4 = grid_ft8_4(g_grid);
-  // Build rst_sent/rst_rcvd fragments — omit when -99 (no data),
-  // matching DXFT8 reference behavior (ADIF.c omits when value is 0).
-  char rst_sent_buf[32] = "";
-  char rst_rcvd_buf[32] = "";
-  if (rst_sent != -99) {
-    snprintf(rst_sent_buf, sizeof(rst_sent_buf), "<rst_sent:%d>%d ",
-             (int)snprintf(nullptr, 0, "%d", rst_sent), rst_sent);
-  }
-  if (rst_rcvd != -99) {
-    snprintf(rst_rcvd_buf, sizeof(rst_rcvd_buf), "<rst_rcvd:%d>%d ",
-             (int)snprintf(nullptr, 0, "%d", rst_rcvd), rst_rcvd);
-  }
-  const char* mode_name = g_protocol->name;
-  char line[512];
-  snprintf(line, sizeof(line),
-           "<call:%zu>%s <gridsquare:%zu>%s <mode:%zu>%s<qso_date:8>%s <time_on:6>%s <freq:%zu>%s <station_callsign:%zu>%s <my_gridsquare:%zu>%s %s%s<comment:%zu>%s <eor>\n",
-           dxcall.size(), dxcall.c_str(),
-           dxgrid.size(), dxgrid.c_str(),
-           strlen(mode_name), mode_name,
-           date, time_on,
-           strlen(freq_str), freq_str,
-           g_call.size(), g_call.c_str(),
-           my_grid4.size(), my_grid4.c_str(),
-           rst_sent_buf, rst_rcvd_buf,
-           comment_expanded.size(), comment_expanded.c_str());
+  AdifLogFields fields;
+  fields.call             = dxcall;
+  fields.gridsquare       = dxgrid;          // omitted when the DX sent no grid
+  fields.mode             = g_protocol->name;
+  fields.qso_date         = date;
+  fields.time_on          = time_on;
+  fields.freq             = freq_str;
+  fields.station_callsign = g_call;
+  fields.my_gridsquare    = grid_ft8_4(g_grid);
+  fields.rst_sent         = rst_sent;        // kAdifNoReport (-99) omits
+  fields.rst_rcvd         = rst_rcvd;
+  fields.comment          = expand_comment_macros(g_comment1);
+  const std::string line = adif_format_log_record(fields);
+
   bool ok = storage_append_text_locked_path(path, line, "ADIF EXPORT\n<eoh>\n", true);
   if (!ok) {
     ESP_LOGW(TAG, "ADIF write failed: %s owner=%s",
@@ -1060,16 +1007,6 @@ static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid,
 }
 
 
-static void ensure_usb() {
-  if (usb_ready) return;
-  usb_serial_jtag_driver_config_t cfg = {
-    .tx_buffer_size = 1024,
-    .rx_buffer_size = 4096,
-  };
-  if (usb_serial_jtag_driver_install(&cfg) == ESP_OK) {
-    usb_ready = true;
-  }
-}
 
 static bool uart_inject_last_was_cr = false;
 static bool g_debug_uart_pins_enabled = true;
@@ -1105,21 +1042,6 @@ static void poll_uart_inject_keys() {
   }
 }
 
-static void host_write_str(const std::string& s) {
-  ensure_usb();
-  if (usb_ready) {
-    const uint8_t* p = reinterpret_cast<const uint8_t*>(s.data());
-    size_t remaining = s.size();
-    while (remaining > 0) {
-      size_t chunk = remaining;
-      if (chunk > 256) chunk = 256;
-      int written = usb_serial_jtag_write_bytes(p, chunk, portMAX_DELAY);
-      if (written <= 0) break;
-      p += written;
-      remaining -= written;
-    }
-  }
-}
 
 // ================================================================
 // UART screen mirror
@@ -1128,29 +1050,10 @@ static void host_write_str(const std::string& s) {
 // keystroke arrives over the console UART, dump the text that would
 // have been displayed on the Cardputer LCD to the same UART TX, so
 // a terminal shows the current page contents.
-//
-// To disable: comment out the `#define UART_SCREEN_MIRROR 1` below.
 // ================================================================
-#define UART_SCREEN_MIRROR 1
-
-#if UART_SCREEN_MIRROR
 static volatile bool g_uart_mirror_pending = false;
 
-static const char* uart_mirror_mode_label(UIMode mode) {
-  switch (mode) {
-    case UIMode::RX:      return "RX";
-    case UIMode::TX:      return "TX";
-    case UIMode::BAND:    return "BAND";
-    case UIMode::MENU:    return "MENU";
-    case UIMode::DEBUG:   return "DEBUG";
-    case UIMode::STATUS:  return "STATUS";
-    case UIMode::QSO:     return "QSO";
-    case UIMode::GPS:     return "GPS";
-    case UIMode::PERF:    return "PERF";
-    case UIMode::BT:      return "BT";
-  }
-  return "?";
-}
+
 
 static void uart_mirror_dump_screen() {
   std::vector<std::string> lines;
@@ -1162,7 +1065,7 @@ static void uart_mirror_dump_screen() {
     ui_get_rx_page_info(cur, total);
   }
 
-  const char* label = uart_mirror_mode_label(ui_mode);
+  const char* label = screen_name(ui_mode);
   printf("\n---- [%s %d/%d] ----\n", label, cur, total);
   for (size_t i = 0; i < lines.size(); ++i) {
     printf("%s\n", lines[i].c_str());
@@ -1170,7 +1073,6 @@ static void uart_mirror_dump_screen() {
   printf("--------------------\n");
   fflush(stdout);
 }
-#endif  // UART_SCREEN_MIRROR
 
 static void set_gpio_floating_input(gpio_num_t pin) {
   gpio_reset_pin(pin);
@@ -1193,9 +1095,7 @@ static void apply_debug_uart_pin_policy() {
   } else {
     if (s_key_inject_queue) xQueueReset(s_key_inject_queue);
     uart_inject_last_was_cr = false;
-#if UART_SCREEN_MIRROR
     g_uart_mirror_pending = false;
-#endif
     set_gpio_floating_input(tx);
     set_gpio_floating_input(rx);
     const bool changed = g_debug_uart_pins_enabled;
@@ -1226,114 +1126,6 @@ struct WAVHeader {
   uint32_t data_size;
 };
 
-[[maybe_unused]] static esp_err_t decode_wav(const char* path) {
-  ESP_LOGI(TAG, "Decoding %s", path);
-  StorageStream* stream = storage_stream_open(path, StorageOpenMode::READ);
-  if (!stream) {
-    ESP_LOGE(TAG, "Failed to open %s", path);
-    return ESP_FAIL;
-  }
-
-  WAVHeader hdr;
-  if (storage_stream_read(stream, &hdr, sizeof(hdr)) != sizeof(hdr)) {
-    ESP_LOGE(TAG, "Failed to read WAV header");
-    storage_stream_close(stream);
-    return ESP_FAIL;
-  }
-  if (memcmp(hdr.riff, "RIFF", 4) != 0 || memcmp(hdr.wave, "WAVE", 4) != 0) {
-    ESP_LOGE(TAG, "Invalid WAV header");
-    storage_stream_close(stream);
-    return ESP_FAIL;
-  }
-  if (hdr.sample_rate != FT8_SAMPLE_RATE || hdr.num_channels != 1) {
-    ESP_LOGE(TAG, "WAV must be mono %d Hz (got %u Hz, %u ch)", FT8_SAMPLE_RATE, hdr.sample_rate, hdr.num_channels);
-    storage_stream_close(stream);
-    return ESP_FAIL;
-  }
-
-  const int bytes_per_sample = hdr.bits_per_sample / 8;
-
-  monitor_config_t mon_cfg;
-  mon_cfg.f_min = 200.0f;
-  mon_cfg.f_max = 2900.0f;
-  mon_cfg.sample_rate = FT8_SAMPLE_RATE;
-  mon_cfg.time_osr = g_time_osr;
-  mon_cfg.freq_osr = g_freq_osr;
-  mon_cfg.protocol = g_protocol->protocol_id;
-
-  monitor_t mon;
-  monitor_init(&mon, &mon_cfg);
-  monitor_reset(&mon);
-
-  float* chunk = (float*)malloc(sizeof(float) * mon.block_size);
-  if (!chunk) {
-    ESP_LOGE(TAG, "Chunk alloc failed");
-    storage_stream_close(stream);
-    monitor_free(&mon);
-    return ESP_ERR_NO_MEM;
-  }
-
-  bool eof = false;
-  while (!eof) {
-    int read_samples = 0;
-    while (read_samples < mon.block_size && !eof) {
-      float sample_value = 0.0f;
-      if (bytes_per_sample == 1) {
-        uint8_t sample = 0;
-        if (storage_stream_read(stream, &sample, 1) != 1) {
-          eof = true;
-          break;
-        }
-        int s = sample;
-        sample_value = ((float)s - 128.0f) / 128.0f;
-      } else if (bytes_per_sample == 2) {
-        uint8_t sample[2] = {};
-        if (storage_stream_read(stream, sample, sizeof(sample)) != sizeof(sample)) {
-          eof = true;
-          break;
-        }
-        int low = sample[0];
-        int high = sample[1];
-        int16_t s = (int16_t)((high << 8) | low);
-        sample_value = (float)s / 32768.0f;
-      } else {
-        eof = true;
-        break;
-      }
-      chunk[read_samples++] = sample_value;
-    }
-    if (read_samples == 0) break;
-    for (int i = read_samples; i < mon.block_size; ++i) {
-      chunk[i] = 0.0f;
-    }
-
-    // Simple per-block AGC to ~0.1 target level
-    double acc = 0.0;
-    for (int i = 0; i < mon.block_size; ++i) acc += fabsf(chunk[i]);
-    float level = (float)(acc / mon.block_size);
-    float gain = (level > 1e-6f) ? 0.1f / level : 1.0f;
-    if (gain < 0.1f) gain = 0.1f;
-    if (gain > 10.0f) gain = 10.0f;
-    for (int i = 0; i < mon.block_size; ++i) {
-      chunk[i] *= gain;
-    }
-
-    monitor_process(&mon, chunk);
-  }
-
-  free(chunk);
-  storage_stream_close(stream);
-
-  if (mon.wf.num_blocks == 0) {
-    ESP_LOGW(TAG, "No audio blocks processed");
-    monitor_free(&mon);
-    return ESP_FAIL;
-  }
-  decode_monitor_results(&mon, &mon_cfg, false); // defer UI to main loop on core1
-  monitor_free(&mon);
-
-  return ESP_OK;
-}
 
 static void redraw_tx_view() {
   // Get QSO states from autoseq for display
@@ -1810,8 +1602,8 @@ static bool ignorelist_matches_normalized_dxcall(const std::string& dxcall_norm)
 }
 
 static std::string clamp_ignore_prefix_text(const std::string& s) {
-  if (s.size() <= kIgnorePrefixTextMaxLen) return s;
-  return s.substr(0, kIgnorePrefixTextMaxLen);
+  if (s.size() <= kMenuIgnoreMaxLen) return s;
+  return s.substr(0, kMenuIgnoreMaxLen);
 }
 
 static std::string normalize_time_hms(const std::string& src) {
@@ -1873,37 +1665,6 @@ static const char* gps_source_name() {
   return g_gnss_lora_enabled ? "GNSS_LoRa" : "PORTA";
 }
 
-static std::string normalize_date_ymd(const std::string& src) {
-  auto date_in_range = [](int y, int M, int d) -> bool {
-    return (y >= 2024 && y <= 2099 && M >= 1 && M <= 12 && d >= 1 && d <= 31);
-  };
-
-  int y = 0, M = 0, d = 0;
-  if (sscanf(src.c_str(), "%d-%d-%d", &y, &M, &d) == 3 && date_in_range(y, M, d)) {
-    char out[16];
-    snprintf(out, sizeof(out), "%04d-%02d-%02d", y, M, d);
-    return out;
-  }
-
-  std::string digits;
-  digits.reserve(src.size());
-  for (unsigned char ch : src) {
-    if (std::isdigit(ch)) digits.push_back((char)ch);
-  }
-  if (digits.size() >= 8) {
-    y = (digits[0] - '0') * 1000 + (digits[1] - '0') * 100 +
-        (digits[2] - '0') * 10 + (digits[3] - '0');
-    M = (digits[4] - '0') * 10 + (digits[5] - '0');
-    d = (digits[6] - '0') * 10 + (digits[7] - '0');
-    if (date_in_range(y, M, d)) {
-      char out[16];
-      snprintf(out, sizeof(out), "%04d-%02d-%02d", y, M, d);
-      return out;
-    }
-  }
-
-  return "";
-}
 
 static std::string normalize_grid_maidenhead(const std::string& src) {
   size_t b = 0;
@@ -2065,9 +1826,81 @@ static bool charge_mode_set_cpu_mhz(uint32_t mhz) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// R-tap reply, TX cancel, and QSO drop.
+//
+// Inlined from core_api.cpp when that facade was removed (B30). The behaviour
+// is unchanged, including the two rules that were fixed against a live client
+// in 7d9a768 and are easy to lose: tapping arms the pending TX immediately,
+// and an in-flight TX is never replaced -- autoseq queues behind the live head
+// and the next slot arm picks it up when this TX ends.
+// ---------------------------------------------------------------------------
+
+// Reply to the decoded message at rx_list_idx. Returns false if the index is
+// stale, a QSO is already in progress, or the TX queue is full.
+static bool rx_tap_reply(int rx_list_idx) {
+  RxDecodeEntry entry{};
+  if (!ui_get_rx_entry(rx_list_idx, &entry)) return false;
+
+  // autoseq_on_touch() still takes a UiRxLine.
+  UiRxLine msg;
+  msg.text      = entry.text;
+  msg.field1    = entry.field1;
+  msg.field2    = entry.field2;
+  msg.field3    = entry.field3;
+  msg.snr       = entry.snr;
+  msg.offset_hz = entry.offset_hz;
+  msg.slot_id   = entry.slot_id;
+  msg.is_cq     = entry.is_cq;
+  msg.is_to_me  = entry.is_to_me;
+
+  const AutoseqTouchResult touch = autoseq_on_touch(msg, g_tx_active);
+  if (touch == AutoseqTouchResult::IgnoredInProgress) {
+    debug_log_line("QSO in progress");
+    g_tx_view_dirty = true;
+    return false;
+  }
+  if (touch == AutoseqTouchResult::NoRoom) {
+    debug_log_line("TX queue full");
+    return false;
+  }
+
+  // Do not replace the in-flight pending TX.
+  AutoseqTxEntry pending{};
+  if (!g_tx_active && autoseq_fetch_pending_tx(pending)) {
+    arm_pending_tx(pending);
+  }
+  g_tx_view_dirty = true;
+  return true;
+}
+
+// Abort the in-flight TX. tx_tick() reads g_tx_cancel_requested on its next
+// iteration; radio_control_end_tx() PTTs down immediately. The asynchrony here
+// is the standing suspect in B21 -- behaviour is deliberately unchanged.
+static void request_tx_cancel() {
+  g_tx_cancel_requested = true;
+  if (radio_control_ready()) radio_control_end_tx();
+  g_tx_view_dirty = true;
+}
+
+// Drop one active QSO by queue index.
+static bool drop_qso(int idx) {
+  const bool ok = autoseq_drop_index(idx);
+  if (ok) g_tx_view_dirty = true;
+  return ok;
+}
+
+// Called by the Station.txt save worker task once a write lands, so whichever
+// view is showing config (MENU/STATUS) re-evaluates on the next UI tick. Was
+// core_fire_config_changed() before core_api was removed (B30).
+void ui_mark_config_dirty(void) {
+  g_rx_dirty = true;
+  g_tx_view_dirty = true;
+}
+
 static void enter_charge_mode() {
   ESP_LOGI(TAG, "Entering charge mode (Launcher-style)");
-  core_cmd_cancel_tx();
+  request_tx_cancel();
   if (g_tx_active) {
     tx_tick();
   }
@@ -2158,7 +1991,7 @@ static void low_batt_apply_halt() {
   } else if (ui_mode == UIMode::TX) {
     redraw_tx_view();
   }
-  core_fire_qso_changed();
+  g_tx_view_dirty = true;
 }
 
 static void low_batt_apply_resume() {
@@ -2603,7 +2436,7 @@ static void check_slot_boundary() {
              (long long)slot_idx, slot_parity);
     autoseq_tick(slot_idx, slot_parity, 0);
     g_was_txing = false;
-    core_fire_qso_changed();  // propagates to all registered consumers
+    g_tx_view_dirty = true;
   }
 
   if (!g_was_txing && !g_tx_active &&
@@ -2819,42 +2652,7 @@ static void fft_waterfall_tx_tone(float tone_hz) {
   ui_push_tx_waterfall_row(row.data(), (int)row.size());
 }
 
-[[maybe_unused]] static bool is_grid4(const std::string& s) {
-  if (s.size() != 4) return false;
-  auto is_letter = [](char c){ return c >= 'A' && c <= 'R'; };
-  auto is_digitc = [](char c){ return c >= '0' && c <= '9'; };
-  return is_letter(toupper((unsigned char)s[0])) &&
-         is_letter(toupper((unsigned char)s[1])) &&
-         is_digitc(s[2]) &&
-         is_digitc(s[3]);
-}
 
-[[maybe_unused]] static int parse_report_snr(const std::string& f3) {
-  if (f3.empty()) return -99;
-  std::string s = f3;
-  if (!s.empty() && (s[0] == 'R' || s[0] == 'r')) {
-    s = s.substr(1);
-  }
-  if (s.empty()) return -99;
-  bool neg = false;
-  size_t idx = 0;
-  if (s[0] == '+' || s[0] == '-') {
-    neg = (s[0] == '-');
-    idx = 1;
-  }
-  int val = 0;
-  bool found = false;
-  for (; idx < s.size(); ++idx) {
-    char c = s[idx];
-    if (c < '0' || c > '9') break;
-    val = val * 10 + (c - '0');
-    found = true;
-    if (val > 99) break;
-  }
-  if (!found) return -99;
-  if (neg) val = -val;
-  return val;
-}
 
 // ---- Static decode workspace (zero heap allocation) ----
 // Use the shared RxDecodeEntry type from ui.h so we can hand it directly
@@ -2951,7 +2749,7 @@ static void keep_rx_list_stale(bool update_ui) {
   if (update_ui) {
     draw_rx_screen();
   } else {
-    core_fire_rx_changed();
+    g_rx_dirty = true;
   }
 }
 
@@ -3208,7 +3006,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
 
     if (!to_me_auto.empty()) {
       autoseq_on_decodes(to_me_auto);
-      core_fire_qso_changed();  // propagates to all registered consumers
+      g_tx_view_dirty = true;
       g_last_reply_text = to_me_auto.front().text;
     }
 
@@ -3224,7 +3022,7 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
       snprintf(buf, sizeof(buf), "Heap %u", heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
       debug_log_line(buf);
     } else {
-      core_fire_rx_changed();
+      g_rx_dirty = true;
     }
   } else {
     ESP_LOGD(TAG, "No messages decoded; keeping RX list");
@@ -3307,27 +3105,7 @@ static void encode_and_log_pending_tx() {
   log_tones(tones, g_protocol->total_symbols);
 }
 
-[[maybe_unused]] static bool looks_like_grid(const std::string& s) {
-  if (s.size() != 4) return false;
-  return std::isalpha((unsigned char)s[0]) && std::isalpha((unsigned char)s[1]) &&
-         std::isdigit((unsigned char)s[2]) && std::isdigit((unsigned char)s[3]);
-}
 
-[[maybe_unused]] static bool looks_like_report(const std::string& s, int& out) {
-  if (s.empty()) return false;
-  int sign = 1;
-  size_t idx = 0;
-  if (s[0] == '-') { sign = -1; idx = 1; }
-  else if (s[0] == '+') { idx = 1; }
-  if (idx >= s.size()) return false;
-  int val = 0;
-  for (; idx < s.size(); ++idx) {
-    if (!std::isdigit((unsigned char)s[idx])) return false;
-    val = val * 10 + (s[idx] - '0');
-  }
-  out = sign * val;
-  return true;
-}
 
 // Enqueue a beacon CQ. Parity is determined by beacon mode.
 // Duplicate prevention is handled by autoseq_start_cq().
@@ -3335,37 +3113,18 @@ static void encode_and_log_pending_tx() {
 static void enqueue_beacon_cq() {
   int target_parity = (g_beacon == BeaconMode::EVEN) ? 0 : 1;
   autoseq_start_cq(target_parity);
-  core_fire_qso_changed();  // propagates to all registered consumers
+  g_tx_view_dirty = true;
 }
 
-static bool autoseq_has_pending_tx() {
-  AutoseqTxEntry tmp;
-  return autoseq_fetch_pending_tx(tmp);
-}
 
 // Schedule a one-off pending TX (e.g., manual FreeText) without touching autoseq state.
 // Returns false if TX is already active or if scheduling failed.
 // Uses the single-threaded state machine - TX will trigger at next matching slot boundary.
-static bool schedule_manual_pending_tx(const AutoseqTxEntry& pending) {
-  // Already transmitting or TX pending?
-  if (g_tx_active || g_qso_xmit) {
-    return false;
-  }
-
-  arm_pending_tx(pending);
-  ESP_LOGI(TAG, "schedule_manual_pending_tx: queued TX=%s for parity=%d",
-           pending.text.c_str(), g_target_slot_parity);
-  return true;
-}
 
 // NOTE: This function is now mostly superseded by the state machine approach.
 // TX scheduling is done via g_qso_xmit and g_target_slot_parity flags,
 // and check_slot_boundary() triggers TX at the right time.
 // Keeping this as a no-op for now in case any code still calls it.
-[[maybe_unused]] static void schedule_tx_if_idle() {
-  // No-op: TX scheduling is now handled by decode_monitor_results setting
-  // g_qso_xmit and check_slot_boundary triggering TX at slot start.
-}
 
 // Helper to send TA command (deduplicated)
 static void tx_send_ta(float tone_hz) {
@@ -3501,7 +3260,7 @@ static void tx_tick() {
     g_pending_tx_valid = false;
     g_tx_cancel_requested = false;
     g_was_txing = false;  // TX was cancelled - don't call tick at slot boundary
-    core_fire_qso_changed();  // propagates to all registered consumers
+    g_tx_view_dirty = true;
     restore_rx_after_tx();
     return;
   }
@@ -3526,7 +3285,7 @@ static void tx_tick() {
     g_tx_active = false;
     g_pending_tx_valid = false;
     g_tx_cancel_requested = false;
-    core_fire_qso_changed();  // propagates to all registered consumers
+    g_tx_view_dirty = true;
     restore_rx_after_tx();
     return;
   }
@@ -3546,64 +3305,257 @@ static void tx_tick() {
   g_tx_next_tone_time = g_tx_slot_start_ms + g_tx_tone_idx * (int)roundf(g_protocol->symbol_period * 1000.0f);
 }
 
-static void draw_menu_view() {
-    if (menu_long_edit) {
-      draw_menu_long_edit();
-      return;
+// ===========================================================================
+// MENU model
+//
+// One row of the menu is one entry in kMenuItems. Before this, a single item
+// was defined in three disconnected places keyed by two different index
+// systems: its text was pushed positionally into a vector in draw_menu_view(),
+// its action lived in a nested if (menu_page == N) { if (c == '1') ... } chain
+// ~1800 lines away, and its edit behaviour was a magic absolute index (3, 4,
+// 7, 17). Nothing failed to compile if they disagreed.
+//
+// Layout is derived, not written down twice: item i is on page i / kMenuRows
+// and answers to key '1' + (i % kMenuRows). Adding or reordering an item means
+// editing one row of this table.
+// ===========================================================================
+
+// Layout, row identity and the edit character classes live in menu_model.h,
+// which is pure and host-tested (host_test_menu_model). This table binds a
+// label and an action to each of those rows, index-parallel.
+struct MenuItem {
+  const char*  id;              // must match menu_row_id(i)
+  std::string (*label)();       // the line as drawn
+  void       (*action)();       // key press on this row
+};
+
+// Absolute indices referenced by name. These are the numbers the old code
+// spelled as bare literals in several places each.
+static constexpr int kMenuIdxSendFreeText = 1;
+static constexpr int kMenuIdxCall         = 3;
+static constexpr int kMenuIdxGrid         = 4;
+static constexpr int kMenuIdxOffsetHz     = 7;
+static constexpr int kMenuIdxMaxRetry     = 17;
+
+// --- labels ---------------------------------------------------------------
+static std::string ml_cq_type() {
+  std::string s("CQ Type:");
+  if (g_cq_type == CqType::CQFREETEXT) s += g_cq_freetext;
+  else s += cq_type_name(g_cq_type);
+  return s;
+}
+static std::string ml_send_freetext() { return "Send FreeText"; }
+static std::string ml_freetext()      { return std::string("F:") + head_trim(g_free_text, 16); }
+static std::string ml_call() {
+  return std::string("Call:") + elide_right(menu_edit_idx == kMenuIdxCall ? menu_edit_buf : g_call);
+}
+static std::string ml_grid() {
+  std::string g = g_grid;
+  if (menu_edit_idx == kMenuIdxGrid) {
+    g = menu_edit_buf;
+  } else if (g_time_synced_from_gps && g_grid_from_gps && g_grid_gps_display8.size() == 8) {
+    g = g_grid_gps_display8;
+  }
+  return std::string("Grid:") + elide_right(g);
+}
+static std::string ml_sleep_batt()  { return menu_sleep_batt_line(); }
+static std::string ml_offset_src()  { return std::string("Offset:") + offset_name(g_offset_src); }
+static std::string ml_offset_hz() {
+  return std::string("Fixed:") +
+         (menu_edit_idx == kMenuIdxOffsetHz ? menu_edit_buf : std::to_string(g_offset_hz));
+}
+static std::string ml_radio()       { return std::string("Radio:") + radio_profile_name(g_radio); }
+static std::string ml_ignore()      { return std::string("IgnoreList:") + head_trim(g_ignore_prefix_text, 10); }
+static std::string ml_comment()     { return std::string("C:") + head_trim(expand_comment1(), 16); }
+static std::string ml_protocol() {
+  // Saved (pending) mode; '*' if it differs from the running boot mode, so the
+  // user knows a reboot is needed to apply the change.
+  const char* pending = g_protocol_pending_ft4 ? "FT4" : "FT8";
+  const bool needs_reboot = g_protocol_pending_ft4 != (g_protocol == &kProtocolFT4);
+  return std::string("Mode: ") + pending + (needs_reboot ? "*" : "");
+}
+static std::string ml_rxtx_log()    { return std::string("RxTxLog:") + (g_rxtx_log ? "ON" : "OFF"); }
+static std::string ml_skip_tx1()    { return std::string("SkipTX1:") + (g_skip_tx1 ? "ON" : "OFF"); }
+static std::string ml_band_config() { return "Band config"; }
+static std::string ml_gnss_lora()   { return std::string("GNSS_LoRa:") + (g_gnss_lora_enabled ? "ON" : "OFF"); }
+static std::string ml_copy_to_sd()  { return copy_to_sd_menu_item(rtc_now_ms()); }
+static std::string ml_max_retry() {
+  return std::string("Max Retry:") +
+         (menu_edit_idx == kMenuIdxMaxRetry ? menu_edit_buf : std::to_string(g_autoseq_max_retry));
+}
+
+// --- actions --------------------------------------------------------------
+static void ma_cq_type() {
+  g_cq_type = (CqType)(((int)g_cq_type + 1) % 6);
+  if (g_cq_type == CqType::CQFREETEXT) g_cq_freetext = g_free_text;
+  save_station_data();
+  update_autoseq_cq_type();
+  draw_menu_view();
+}
+static void ma_send_freetext() {
+  // FT is a one-shot entry that sorts to the FRONT of the active queue, so the
+  // next TX is the FT, preempting any active QSO. The QSO ctx is preserved and
+  // resumes on the slot after FT fires. Parity inherits from queue[0] when
+  // non-empty; otherwise the next-slot fallback below.
+  const int64_t now_slot = rtc_now_ms() / g_protocol->slot_time_ms;
+  const int fallback_parity = (int)((now_slot + 1) & 1);
+  if (!autoseq_schedule_freetext(g_free_text, fallback_parity)) return;
+  // Re-arm so the FT replaces any QSO TX armed by a prior decode cycle.
+  AutoseqTxEntry pending;
+  if (autoseq_fetch_pending_tx(pending)) arm_pending_tx(pending);
+  menu_flash_idx = kMenuIdxSendFreeText;
+  menu_flash_deadline = rtc_now_ms() + 500;
+  draw_menu_view();
+  debug_log_line(std::string("Queued: ") + g_free_text);
+}
+static void ma_long_edit(MenuLongEdit kind, const std::string& cur) {
+  // No backup is kept: the live value is only written on Enter, so cancelling
+  // is just dropping the scratch buffer. The old menu_long_backup was assigned
+  // here and cleared on exit but never read.
+  menu_long_edit = true;
+  menu_long_kind = kind;
+  menu_long_buf = cur;
+  draw_menu_view();
+}
+static void ma_freetext()  { ma_long_edit(MenuLongEdit::FreeText, g_free_text); }
+static void ma_ignore()    { ma_long_edit(MenuLongEdit::IgnoreList, g_ignore_prefix_text); }
+static void ma_comment()   { ma_long_edit(MenuLongEdit::Comment, g_comment1); }
+static void ma_inline_edit(int abs_idx, const std::string& cur) {
+  menu_edit_idx = abs_idx;
+  menu_edit_buf = cur;
+  draw_menu_view();
+}
+static void ma_call()      { ma_inline_edit(kMenuIdxCall, g_call); }
+static void ma_grid()      { ma_inline_edit(kMenuIdxGrid, g_grid); }
+static void ma_max_retry() { ma_inline_edit(kMenuIdxMaxRetry, std::to_string(g_autoseq_max_retry)); }
+static void ma_offset_hz() {
+  menu_cursor_edit_original = g_offset_hz;
+  ma_inline_edit(kMenuIdxOffsetHz, std::to_string(g_offset_hz));
+}
+static void ma_sleep_batt() { enter_charge_mode(); }
+static void ma_offset_src() {
+  g_offset_src = (OffsetSrc)(((int)g_offset_src + 1) % 3);
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_radio() {
+  const RadioType old_radio = radio_profile_canonical(g_radio);
+  const audio_source_backend_t old_audio = radio_profile_get(old_radio).audio_backend;
+  const bool was_streaming = audio_source_is_streaming();
+  g_radio = radio_profile_next(g_radio);
+  const RadioType new_radio = radio_profile_canonical(g_radio);
+  const audio_source_backend_t new_audio = radio_profile_get(new_radio).audio_backend;
+  if (was_streaming && old_audio != new_audio) {
+    ESP_LOGI(TAG, "Stopping audio for radio change %s/%s -> %s/%s",
+             radio_profile_name(old_radio), audio_source_backend_name(old_audio),
+             radio_profile_name(new_radio), audio_source_backend_name(new_audio));
+    debug_log_line(std::string("Audio stop ") + radio_profile_name(old_radio));
+    audio_source_stop();
+  }
+  apply_radio_profile_binding();
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_protocol() {
+  // g_protocol stays as-is for this boot session; takes effect on next reboot.
+  g_protocol_pending_ft4 = !g_protocol_pending_ft4;
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_rxtx_log() {
+  g_rxtx_log = !g_rxtx_log;
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_skip_tx1() {
+  g_skip_tx1 = !g_skip_tx1;
+  autoseq_set_skip_tx1(g_skip_tx1);
+  save_station_data();
+  draw_menu_view();
+}
+static void ma_band_config() {
+  s_band_config_menu = true;
+  band_config_reset((int)g_bands.size());
+  enter_mode(UIMode::BAND);
+}
+static void ma_gnss_lora() {
+  gps_stop();
+  porta_stop();
+  g_gnss_lora_enabled = !g_gnss_lora_enabled;
+  apply_debug_uart_pin_policy();
+  save_station_data();
+  apply_radio_profile_binding();
+  draw_menu_view();
+}
+static void ma_copy_to_sd() {
+  CopyBlockInputs in;
+  in.writes_blocked   = storage_writes_blocked();
+  in.tx_active        = g_tx_active;
+  in.decode_active    = g_decode_in_progress;
+  in.audio_streaming  = audio_source_is_streaming();
+  in.firmware_owns    = (storage_service_owner() == StorageOwner::FIRMWARE);
+  in.open_streams     = storage_service_open_stream_count();
+  if (copy_to_sd_press(in, today_qso_file_name(), today_rt_file_name(),
+                       rtc_now_ms()) == CopyToSdPress::RedrawMenu) {
+    draw_menu_view();
+  }
+}
+
+// --- the table ------------------------------------------------------------
+// Order is the on-screen order and must match kMenuRows in menu_model.cpp;
+// menu_assert_model_in_sync() checks that at startup.
+static const MenuItem kMenuItems[] = {
+  // page 0
+  { "cq_type",     ml_cq_type,      ma_cq_type },
+  { "send_ft",     ml_send_freetext,ma_send_freetext },
+  { "freetext",    ml_freetext,     ma_freetext },
+  { "call",        ml_call,         ma_call },
+  { "grid",        ml_grid,         ma_grid },
+  { "sleep_batt",  ml_sleep_batt,   ma_sleep_batt },
+  // page 1
+  { "offset_src",  ml_offset_src,   ma_offset_src },
+  { "offset_hz",   ml_offset_hz,    ma_offset_hz },
+  { "radio",       ml_radio,        ma_radio },
+  { "ignore_list", ml_ignore,       ma_ignore },
+  { "comment",     ml_comment,      ma_comment },
+  { "protocol",    ml_protocol,     ma_protocol },
+  // page 2
+  { "rxtx_log",    ml_rxtx_log,     ma_rxtx_log },
+  { "skip_tx1",    ml_skip_tx1,     ma_skip_tx1 },
+  { "band_config", ml_band_config,  ma_band_config },
+  { "gnss_lora",   ml_gnss_lora,    ma_gnss_lora },
+  { "copy_to_sd",  ml_copy_to_sd,   ma_copy_to_sd },
+  { "max_retry",   ml_max_retry,    ma_max_retry },
+};
+static constexpr int kMenuItemCount = (int)(sizeof(kMenuItems) / sizeof(kMenuItems[0]));
+static_assert(kMenuItemCount == 18, "menu item count changed; check menu_model.cpp");
+
+// The two tables must stay index-parallel. Checked once at startup rather than
+// at compile time because menu_row_id() is not constexpr; a mismatch here means
+// a label or action has drifted onto the wrong row.
+static void menu_assert_model_in_sync() {
+  if (menu_row_count() != kMenuItemCount) {
+    ESP_LOGE(TAG, "MENU desync: model %d rows, table %d", menu_row_count(), kMenuItemCount);
+    return;
+  }
+  for (int i = 0; i < kMenuItemCount; ++i) {
+    if (std::strcmp(kMenuItems[i].id, menu_row_id(i)) != 0) {
+      ESP_LOGE(TAG, "MENU desync at %d: table \"%s\" vs model \"%s\"",
+               i, kMenuItems[i].id, menu_row_id(i));
     }
-  int64_t now = rtc_now_ms();
+  }
+}
+
+static void draw_menu_view() {
+  if (menu_long_edit) {
+    draw_menu_long_edit();
+    return;
+  }
+  const int64_t now = rtc_now_ms();
 
   std::vector<std::string> lines;
-  lines.reserve(12);
-
-  std::string cq_line = std::string("CQ Type:");
-  if (g_cq_type == CqType::CQFREETEXT) cq_line += g_cq_freetext;
-  else cq_line += cq_type_name(g_cq_type);
-  lines.push_back(cq_line);
-  lines.push_back("Send FreeText");
-  lines.push_back(std::string("F:") + head_trim(g_free_text, 16));
-  lines.push_back(std::string("Call:") + elide_right(menu_edit_idx == 3 ? menu_edit_buf : g_call));
-  std::string display_grid = g_grid;
-  if (menu_edit_idx == 4) {
-    display_grid = menu_edit_buf;
-  } else if (g_time_synced_from_gps && g_grid_from_gps && g_grid_gps_display8.size() == 8) {
-    display_grid = g_grid_gps_display8;
-  }
-  lines.push_back(std::string("Grid:") + elide_right(display_grid));
-  lines.push_back(menu_sleep_batt_line());
-
-  lines.push_back(std::string("Offset:") + offset_name(g_offset_src));
-  if (menu_edit_idx == 7) {
-    lines.push_back(std::string("Fixed:") + menu_edit_buf);
-  } else {
-    lines.push_back(std::string("Fixed:") + std::to_string(g_offset_hz));
-  }
-  lines.push_back(std::string("Radio:") + radio_profile_name(g_radio));
-  lines.push_back(std::string("IgnoreList:") + head_trim(g_ignore_prefix_text, 10));
-  lines.push_back(std::string("C:") + head_trim(expand_comment1(), 16));
-#if ENABLE_FT4
-  {
-    // Show the saved (pending) mode.  Add '*' if it differs from the running
-    // boot mode so the user knows a reboot is needed to apply the change.
-    const char* pending_name = g_protocol_pending_ft4 ? "FT4" : "FT8";
-    bool needs_reboot = g_protocol_pending_ft4 != (g_protocol == &kProtocolFT4);
-    lines.push_back(std::string("Mode: ") + pending_name + (needs_reboot ? "*" : ""));
-  }
-#else
-  lines.push_back("USB:Manual S->2");
-#endif
-
-  // Page 2 content (index 12+)
-  lines.push_back(std::string("RxTxLog:") + (g_rxtx_log ? "ON" : "OFF"));
-  lines.push_back(std::string("SkipTX1:") + (g_skip_tx1 ? "ON" : "OFF"));
-  lines.push_back("Band config");
-  lines.push_back(std::string("GNSS_LoRa:") + (g_gnss_lora_enabled ? "ON" : "OFF"));
-  lines.push_back(copy_to_sd_menu_item(now));
-  if (menu_edit_idx == 17) {
-    lines.push_back(std::string("Max Retry:") + menu_edit_buf);
-  } else {
-    lines.push_back(std::string("Max Retry:") + std::to_string(g_autoseq_max_retry));
-  }
+  lines.reserve(kMenuItemCount);
+  for (const MenuItem& item : kMenuItems) lines.push_back(item.label());
 
   int highlight_abs = -1;
   if (menu_edit_idx >= 0) {
@@ -3615,25 +3567,10 @@ static void draw_menu_view() {
   } else {
     menu_flash_idx = -1;
   }
-  // Auto-clear flash after timeout
   if (menu_flash_idx >= 0 && now >= menu_flash_deadline) {
-    menu_flash_idx = -1;
+    menu_flash_idx = -1;   // auto-clear flash after timeout
   }
   ui_draw_list(lines, menu_page, highlight_abs);
-  // Draw battery icon on visible battery line
-  int battery_abs_idx = 5;
-  if (menu_page == (battery_abs_idx / 6)) {
-    int line_on_page = battery_abs_idx % 6;
-    const int line_h = 19;
-    const int start_y = UI_START_Y;
-    (void)line_on_page;
-    (void)line_h;
-    (void)start_y;
-    //int y = start_y + line_on_page * line_h + 3;
-    //int level = (int)M5.Power.getBatteryLevel();
-    //bool charging = M5.Power.isCharging();
-    //draw_battery_icon(190, y, 24, 12, level, charging);
-  }
 }
 
 static std::string status_sync_line() {
@@ -4104,365 +4041,15 @@ static void debug_log_line(const std::string& msg) {
   debug_page = (int)((g_debug_lines.size() - 1) / 6);
 }
 
-static std::string trim_copy(const std::string& s) {
-  size_t b = 0, e = s.size();
-  while (b < e && isspace((unsigned char)s[b])) ++b;
-  while (e > b && isspace((unsigned char)s[e - 1])) --e;
-  return s.substr(b, e - b);
-}
 
-static void ascii_upper_inplace(std::string& s) {
-  for (auto& ch : s) {
-    ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
-  }
-}
 
-static std::string trim_upper_copy(const std::string& s) {
-  std::string out = trim_copy(s);
-  ascii_upper_inplace(out);
-  return out;
-}
 
-static uint32_t parse_crc_hex(const std::string& hex) {
-  if (hex.empty()) return 0;
-  char* end = nullptr;
-  unsigned long v = strtoul(hex.c_str(), &end, 16);
-  if (end == hex.c_str() || *end != '\0') return 0;
-  return (uint32_t)v;
-}
 
-static uint32_t crc32_update(uint32_t crc, const uint8_t* data, size_t len) {
-  crc = crc ^ 0xFFFFFFFFu;
-  for (size_t i = 0; i < len; ++i) {
-    crc ^= data[i];
-    for (int j = 0; j < 8; ++j) {
-      uint32_t mask = -(crc & 1u);
-      crc = (crc >> 1) ^ (0xEDB88320u & mask);
-    }
-  }
-  return crc ^ 0xFFFFFFFFu;
-}
 
-static void host_debug_hex8(const char* prefix, const uint8_t* b) {
-  char buf[64];
-  int n = snprintf(buf, sizeof(buf), "%s ", prefix);
-  for (int i = 0; i < 8 && n + 3 < (int)sizeof(buf); ++i) {
-    n += snprintf(buf + n, sizeof(buf) - n, "%02X ", b[i]);
-  }
-  if (n > 0 && buf[n - 1] == ' ') buf[n - 1] = 0;
-  host_write_str(std::string(buf) + "\r\n");
-}
 
-static void host_handle_line(const std::string& line_in) {
-  bool send_prompt = true;
-  std::string line = trim_copy(line_in);
-  if (line.empty()) { /* host_write_str(HOST_PROMPT);*/ return; }
-  debug_log_line(std::string("[HOST RX] ") + line);
-  //std::string echo = std::string("ECHO: ") + line + "\r\n";
-  //host_write_str(echo);
 
-  auto to_upper = [](std::string s) {
-    for (auto& c : s) c = toupper((unsigned char)c);
-    return s;
-  };
-  std::istringstream iss(line);
-  std::string cmd;
-  iss >> cmd;
-  std::string cmd_up = to_upper(cmd);
-  std::string rest;
-  std::getline(iss, rest);
-  rest = trim_copy(rest);
 
-  auto send = [](const std::string& msg) { host_write_str(msg + "\r\n"); };
 
-  if (cmd_up == "WRITE" || cmd_up == "APPEND") {
-    std::istringstream rs(rest);
-    std::string fname;
-    rs >> fname;
-    std::string content;
-    std::getline(rs, content);
-    content = trim_copy(content);
-    if (fname.empty()) {
-      send("ERROR: filename required");
-    } else if (cmd_up == "WRITE" && storage_reject_active_log_user_mutation(fname)) {
-      send("ERROR: active log protected");
-    } else {
-      if (cmd_up == "WRITE") {
-        send(storage_file_write_atomic(fname, content) ? "OK" : "ERROR: write failed");
-      } else {
-        send(storage_file_append(fname, content, "", true) ? "OK" : "ERROR: write failed");
-      }
-    }
-  } else if (cmd_up == "READ") {
-    if (rest.empty()) send("ERROR: filename required");
-    else {
-      StorageStream* stream = storage_stream_open(rest, StorageOpenMode::READ);
-      if (!stream) send("ERROR: open failed");
-      else {
-        char buf[128];
-        while (storage_stream_read_line(stream, buf, sizeof(buf))) {
-          host_write_str(std::string(buf));
-        }
-        storage_stream_close(stream);
-        send_prompt = false;
-      }
-    }
-  } else if (cmd_up == "DELETE") {
-    if (rest.empty()) send("ERROR: filename required");
-    else if (storage_reject_active_log_user_mutation(rest)) send("ERROR: active log protected");
-    else {
-      if (storage_file_remove(rest)) send("OK"); else send("ERROR: delete failed");
-    }
-  } else if (cmd_up == "LIST") {
-    std::vector<std::string> files;
-    if (!storage_file_list(files)) send("ERROR: storage unavailable");
-    else {
-      for (const auto& file : files) send(file);
-      send("OK");
-    }
-  } else if (cmd_up == "WRITEBIN") {
-    std::istringstream rs(rest);
-    std::string fname;
-    size_t size = 0;
-    std::string crc_hex;
-    rs >> fname >> size >> crc_hex;
-    uint32_t crc_exp = parse_crc_hex(crc_hex);
-    if (fname.empty() || size == 0 || crc_hex.empty()) {
-      send("ERROR: filename, size, crc32_hex required");
-    } else if (host_bin_active) {
-      send("ERROR: binary upload in progress");
-    } else if (storage_reject_active_log_user_mutation(fname)) {
-      send("ERROR: active log protected");
-    } else {
-      StorageStream* stream = storage_stream_open(fname, StorageOpenMode::WRITE_TRUNCATE);
-      if (!stream) {
-        send("ERROR: open failed");
-      } else {
-          host_bin_path = fname;
-          host_bin_active = true;
-          host_bin_remaining = size;
-          host_bin_stream = stream;
-          host_bin_crc = 0;
-          host_bin_expected_crc = crc_exp;
-          host_bin_received = 0;
-          host_bin_buf.clear();
-          host_bin_buf.reserve(HOST_BIN_CHUNK);
-          host_bin_chunk_expect = (host_bin_remaining < HOST_BIN_CHUNK) ? host_bin_remaining : HOST_BIN_CHUNK;
-          host_bin_first_filled = 0;
-          memset(host_bin_first8, 0, sizeof(host_bin_first8));
-          memset(host_bin_last8, 0, sizeof(host_bin_last8));
-          host_write_str("OK: send " + std::to_string(size) + " bytes, chunk " + std::to_string(HOST_BIN_CHUNK) + " +4crc\r\n");
-          send_prompt = false; // prompt after binary upload completes
-      }
-    }
-  } else if (cmd_up == "DATE") {
-    if (rest.empty()) {
-      send("DATE " + g_date);
-    } else {
-      int y, M, d;
-      if (sscanf(rest.c_str(), "%d-%d-%d", &y, &M, &d) != 3 ||
-          y < 2024 || y > 2099 || M < 1 || M > 12 || d < 1 || d > 31) {
-        send("ERROR: use DATE YYYY-MM-DD");
-      } else {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%04d-%02d-%02d", y, M, d);
-        g_date = buf;
-        if (rtc_apply_manual_time_from_strings()) { save_station_data(); send("OK"); }
-        else send("ERROR: invalid date");
-      }
-    }
-  } else if (cmd_up == "TIME") {
-    if (rest.empty()) {
-      send("TIME " + g_time);
-    } else {
-      int h, m, s;
-      if (sscanf(rest.c_str(), "%d:%d:%d", &h, &m, &s) != 3 ||
-          h < 0 || h > 23 || m < 0 || m > 59 || s < 0 || s > 59) {
-        send("ERROR: use TIME HH:MM:SS");
-      } else {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
-        g_time = buf;
-        if (rtc_apply_manual_time_from_strings()) { save_station_data(); send("OK"); }
-        else send("ERROR: invalid time");
-      }
-    }
-  } else if (cmd_up == "SLEEP") {
-    if (rtc_valid) {
-      // Compute current time in milliseconds, round up to next second boundary
-      int64_t elapsed_ms = esp_timer_get_time() / 1000 - rtc_ms_start;
-      int64_t now_ms = (time_t)rtc_epoch_base * 1000LL + elapsed_ms;
-      int64_t frac = now_ms % 1000;
-      int64_t wait_ms = (frac > 0) ? (1000 - frac) : 0;
-      time_t sleep_epoch = (time_t)((now_ms + 999) / 1000);  // ceil to next second
-
-      // Wait until the second boundary, then set ESP RTC and sleep
-      if (wait_ms > 0) vTaskDelay(pdMS_TO_TICKS(wait_ms));
-      station_save_worker_flush();
-      file_list_worker_flush();
-      struct timeval tv = { .tv_sec = sleep_epoch, .tv_usec = 0 };
-      settimeofday(&tv, NULL);
-    }
-    send("OK: entering deep sleep");
-    M5.Display.sleep();
-    vTaskDelay(pdMS_TO_TICKS(10));
-    esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
-    esp_deep_sleep_start();
-  } else if (cmd_up == "INFO") {
-    send("Heap: " + std::to_string(heap_caps_get_free_size(MALLOC_CAP_DEFAULT)));
-    send("OK");
-  } else if (cmd_up == "HELP") {
-    send("Commands: INFO, LIST, READ <file>, HELP, EXIT");
-  } else if (cmd_up == "EXIT") {
-    send("OK: exit host");
-    enter_mode(UIMode::RX);
-    return;
-  } else {
-    send("ERROR: Unknown command. Type HELP.");
-  }
-
-  if (send_prompt) host_write_str(std::string(HOST_PROMPT));
-}
-
-static void host_bin_close_release() {
-  if (host_bin_stream) {
-    storage_stream_sync(host_bin_stream);
-    storage_stream_close(host_bin_stream);
-    host_bin_stream = nullptr;
-  }
-  host_bin_active = false;
-  host_bin_remaining = 0;
-  host_bin_buf.clear();
-}
-
-static void host_process_bytes(const uint8_t* buf, size_t len) {
-  ESP_LOGD(TAG, "host_process_bytes len=%u", (unsigned)len);
-  for (size_t i = 0; i < len; ) {
-    if (host_bin_active) {
-      // Skip any stray CR/LF before first payload byte
-      if (host_bin_received == 0 && host_bin_buf.empty() && (buf[i] == '\r' || buf[i] == '\n')) {
-        ++i;
-        continue;
-      }
-      size_t payload_need = host_bin_chunk_expect;
-      size_t total_need = payload_need + 4; // payload + crc32 trailer
-      size_t avail = len - i;
-      size_t copy = total_need - host_bin_buf.size();
-      if (copy > avail) copy = avail;
-      host_bin_buf.insert(host_bin_buf.end(), buf + i, buf + i + copy);
-      i += copy;
-
-      if (host_bin_buf.size() >= total_need) {
-        size_t payload_len = payload_need;
-        uint32_t recv_crc = (uint32_t(host_bin_buf[payload_len])) |
-                            (uint32_t(host_bin_buf[payload_len + 1]) << 8) |
-                            (uint32_t(host_bin_buf[payload_len + 2]) << 16) |
-                            (uint32_t(host_bin_buf[payload_len + 3]) << 24);
-        uint32_t calc_crc = crc32_update(0, host_bin_buf.data(), payload_len);
-        if (calc_crc != recv_crc) {
-          char dbg[128];
-          snprintf(dbg, sizeof(dbg), "ERROR: chunk crc off=%u len=%u calc=%08X recv=%08X\r\n",
-                   (unsigned)(host_bin_received + payload_len), (unsigned)payload_len,
-                   (unsigned)calc_crc, (unsigned)recv_crc);
-          host_write_str(std::string(dbg));
-          // Send first/last bytes of the chunk to compare
-          if (payload_len >= 8) host_debug_hex8("DBG CHUNK FIRST8", host_bin_buf.data());
-          if (payload_len >= 8) host_debug_hex8("DBG CHUNK LAST8", host_bin_buf.data() + payload_len - 8);
-          if (payload_len < 8) host_debug_hex8("DBG CHUNK PART", host_bin_buf.data());
-          // Also report the CRC trailer bytes as seen
-          uint8_t crc_bytes[4] = {
-            host_bin_buf[payload_len],
-            host_bin_buf[payload_len + 1],
-            host_bin_buf[payload_len + 2],
-            host_bin_buf[payload_len + 3]
-          };
-          host_debug_hex8("DBG CRC BYTES", crc_bytes);
-          host_bin_close_release();
-          host_write_str(std::string(HOST_PROMPT));
-          continue;
-        }
-
-        // Capture first/last bytes for debugging
-        if (host_bin_first_filled < 8) {
-          size_t need = 8 - host_bin_first_filled;
-          if (need > payload_len) need = payload_len;
-          memcpy(host_bin_first8 + host_bin_first_filled, host_bin_buf.data(), need);
-          host_bin_first_filled += need;
-        }
-        // update last8 buffer
-        if (payload_len >= 8) {
-          memcpy(host_bin_last8, host_bin_buf.data() + payload_len - 8, 8);
-        } else {
-          // shift existing and append
-          size_t shift = (payload_len + 8 > 8) ? (payload_len) : payload_len;
-          if (shift > 0) {
-            memmove(host_bin_last8, host_bin_last8 + shift, 8 - shift);
-            memcpy(host_bin_last8 + (8 - payload_len), host_bin_buf.data(), payload_len);
-          }
-        }
-
-        size_t written = storage_stream_write(host_bin_stream, host_bin_buf.data(), payload_len);
-        if (written != payload_len) {
-          host_write_str("ERROR: write failed\r\n");
-          host_bin_close_release();
-          host_write_str(std::string(HOST_PROMPT));
-          continue;
-        }
-        host_bin_crc = crc32_update(host_bin_crc, host_bin_buf.data(), payload_len);
-        host_bin_remaining -= payload_len;
-        host_bin_received += payload_len;
-        host_bin_buf.clear();
-        host_write_str("ACK " + std::to_string(host_bin_received) + "\r\n");
-
-        if (host_bin_remaining == 0) {
-          uint32_t crc_final = host_bin_crc;
-          host_bin_close_release();
-          // Reopen file to send first/last 8 bytes for debugging
-          host_debug_hex8("DBG FIRST8", host_bin_first8);
-          host_debug_hex8("DBG LAST8", host_bin_last8);
-          char crc_line[64];
-          snprintf(crc_line, sizeof(crc_line), "DBG CRC %08X EXPECT %08X\r\n",
-                   (unsigned)crc_final, (unsigned)host_bin_expected_crc);
-          host_write_str(std::string(crc_line));
-          if (crc_final != host_bin_expected_crc) {
-            host_write_str("ERROR: crc mismatch\r\n");
-          } else {
-            host_write_str("OK crc " + std::to_string(crc_final) + "\r\n");
-          }
-          host_write_str(std::string(HOST_PROMPT));
-        } else {
-          host_bin_chunk_expect = (host_bin_remaining < HOST_BIN_CHUNK) ? host_bin_remaining : HOST_BIN_CHUNK;
-        }
-      }
-      continue;
-    }
-    char ch = (char)buf[i++];
-    if (ch == '\r' || ch == '\n') {
-      if (!host_input.empty()) {
-    //ESP_LOGI(TAG, "HOST line: %s", host_input.c_str());
-        host_handle_line(host_input);
-        host_input.clear();
-      } else {
-        //host_write_str(std::string(HOST_PROMPT));
-      }
-    } else if (ch == 0x08 || ch == 0x7f) {
-      if (!host_input.empty()) host_input.pop_back();
-    } else if (ch >= 32 && ch < 127) {
-      host_input.push_back(ch);
-    }
-  }
-}
-
-[[maybe_unused]] static void poll_host_uart() {
-  ensure_usb();
-  if (!usb_ready) return;
-  uint8_t buf[512];
-  while (true) {
-    int r = usb_serial_jtag_read_bytes(buf, sizeof(buf), 0);
-    if (r <= 0) break;
-    host_process_bytes(buf, (size_t)r);
-  }
-}
 
 static std::string station_read_stream_text(StorageStream* stream) {
   std::string text;
@@ -4491,15 +4078,9 @@ static void station_copy_bands_from_runtime(StationSettings* s, bool ft4_keys) {
 
 static void station_fill_from_globals(StationSettings* s) {
   station_settings_init(s);
-#if ENABLE_FT4
   const bool ft4_keys = (g_protocol == &kProtocolFT4);
   s->serialize_ft4_band_keys = ft4_keys;
   s->protocol_ft4 = g_protocol_pending_ft4;
-#else
-  const bool ft4_keys = false;
-  s->serialize_ft4_band_keys = false;
-  s->protocol_ft4 = false;
-#endif
   station_copy_bands_from_runtime(s, ft4_keys);
   s->offset_hz = g_offset_hz;
   s->band_sel = g_band_sel;
@@ -4521,7 +4102,6 @@ static void station_fill_from_globals(StationSettings* s) {
 }
 
 static void station_apply_to_globals(const StationSettings& s) {
-#if ENABLE_FT4
   const bool use_ft4_bands = s.protocol_ft4;
   if (use_ft4_bands) {
     g_protocol = &kProtocolFT4;
@@ -4532,9 +4112,6 @@ static void station_apply_to_globals(const StationSettings& s) {
     };
     ESP_LOGI(TAG, "Station.txt: protocol_mode=FT4 — reset bands to FT4 defaults");
   }
-#else
-  const bool use_ft4_bands = false;
-#endif
   const bool* freq_set = use_ft4_bands ? s.ft4_band_freq_set : s.band_freq_set;
   const float* freqs = use_ft4_bands ? s.ft4_band_freq : s.band_freq;
   for (int i = 0; i < kStationBandCount; ++i) {
@@ -4611,9 +4188,7 @@ static void load_station_data() {
   rebuild_active_bands();
   rebuild_ignore_prefixes();
   g_beacon = BeaconMode::OFF;
-#if ENABLE_FT4
   g_protocol_pending_ft4 = (g_protocol == &kProtocolFT4);
-#endif
 }
 
 void save_station_data() {
@@ -4652,7 +4227,7 @@ static void enter_mode(UIMode new_mode) {
       bool was_off = (g_beacon == BeaconMode::OFF);
       g_beacon = g_status_beacon_temp;
       save_station_data();
-      core_fire_qso_changed();  // propagates to all registered consumers
+      g_tx_view_dirty = true;
 
       if (g_beacon == BeaconMode::OFF) {
         autoseq_cancel_cq(g_tx_active);
@@ -4876,20 +4451,9 @@ static void app_task_core0(void* /*param*/) {
   // Initialize autoseq engine
   autoseq_init();
 
-  // Initialize the functional-core API (creates internal sync primitives).
-  // After this, UI consumers can call core_get_*, core_cmd_*, and register
-  // callbacks.
-  core_init();
+  // MENU table and menu_model.cpp must stay index-parallel.
+  menu_assert_model_in_sync();
 
-  // Register the Cardputer UI as a core_api consumer. The callbacks just set
-  // the existing dirty flags — the UI main loop drains them on each tick.
-  // Trivial handlers only (spec in docs/NATIVE_CLIENT_ARCHITECTURE.md).
-  core_on_rx_changed    ([]{ g_rx_dirty = true; });
-  core_on_qso_changed   ([]{ g_tx_view_dirty = true; });
-  // config changes redraw whatever view is showing them (MENU/STATUS);
-  // set both dirty flags so the next UI tick re-evaluates.
-  core_on_config_changed([]{ g_rx_dirty = true; g_tx_view_dirty = true; });
-  
 autoseq_set_adif_callback(log_adif_entry);
 autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
 
@@ -4983,13 +4547,10 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       if (xQueueReceive(s_key_inject_queue, &injected, 0) == pdTRUE) {
         c = injected;
         last_key = 0;  // Reset debounce so same-key injection works
-#if UART_SCREEN_MIRROR
         g_uart_mirror_pending = true;  // dump screen at top of next iteration
-#endif
       }
     }
 
-#if UART_SCREEN_MIRROR
     // Dump screen on the iteration AFTER a UART keypress was consumed,
     // once the UI has had a chance to process the key and redraw.
     static bool s_uart_mirror_fire = false;
@@ -5004,7 +4565,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       g_uart_mirror_pending = false;
       s_uart_mirror_fire = true;  // fire on the next iteration
     }
-#endif
     gps_runtime_tick();
     TickType_t now_ticks = xTaskGetTickCount();
     if ((now_ticks - g_app_core0_stack_last_sample_tick) >= pdMS_TO_TICKS(1000)) {
@@ -5154,7 +4714,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     if (c == '`' &&
         (ui_mode == UIMode::RX || ui_mode == UIMode::TX || ui_mode == UIMode::STATUS) &&
         status_edit_idx == -1) {
-      core_cmd_cancel_tx();
+      request_tx_cancel();
       debug_log_line("TX cancel requested");
       last_key = c;
       vTaskDelay(pdMS_TO_TICKS(10));
@@ -5264,80 +4824,43 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
   };
   if (!(ui_mode == UIMode::MENU && (menu_edit_idx >= 0 || menu_long_edit))) {
       // Mode switch keys (disabled while editing in MENU)
-      if (c == 'r' || c == 'R') { cancel_status_edit(); enter_mode(UIMode::RX); switched = true; }
-      else if (c == 't' || c == 'T') { cancel_status_edit(); enter_mode(ui_mode == UIMode::TX ? UIMode::RX : UIMode::TX); switched = true; }
-      else if (c == 'b' || c == 'B') { cancel_status_edit(); enter_mode(ui_mode == UIMode::BAND ? UIMode::RX : UIMode::BAND); switched = true; }
-      else if (c == 'm' || c == 'M') {
-        cancel_status_edit();
-        if (ui_mode == UIMode::MENU) {
-          if (menu_page == 0) {
-            enter_mode(UIMode::RX);
-          } else {
-            menu_page = 0;
+      const ScreenNav nav = screen_nav_for_key(c, ui_mode, menu_page, perf_page);
+      switch (nav.action) {
+        case ScreenAction::Enter:
+          cancel_status_edit();
+          enter_mode(nav.screen);
+          switched = true;
+          break;
+        case ScreenAction::EnterMenuPage:
+          cancel_status_edit();
+          enter_mode(UIMode::MENU);
+          if (nav.page != menu_page) {
+            menu_page = nav.page;
             draw_menu_view();
           }
-        } else {
-          enter_mode(UIMode::MENU);
-        }
-        switched = true;
-      }
-      else if (c == 'n' || c == 'N') {
-        cancel_status_edit();
-        if (ui_mode == UIMode::MENU) {
-          if (menu_page == 1) {
-            enter_mode(UIMode::RX);
-          } else {
-            menu_page = 1;
-            draw_menu_view();
-          }
-        } else {
-          menu_page = 0;
-          enter_mode(UIMode::MENU);
-          if (menu_page < 2) menu_page++;  // one "." press
+          switched = true;
+          break;
+        case ScreenAction::SetMenuPage:
+          cancel_status_edit();
+          menu_page = nav.page;
           draw_menu_view();
-        }
-        switched = true;
-      }
-      else if (c == 'o' || c == 'O') {
-        cancel_status_edit();
-        if (ui_mode == UIMode::MENU) {
-          if (menu_page == 2) {
-            enter_mode(UIMode::RX);
-          } else {
-            menu_page = 2;
-            draw_menu_view();
-          }
-        } else {
-          menu_page = 0;
-          enter_mode(UIMode::MENU);
-          if (menu_page < 2) menu_page++;  // first "."
-          if (menu_page < 2) menu_page++;  // second "."
-          draw_menu_view();
-        }
-        switched = true;
-      }
-      else if (c == 'q' || c == 'Q') { cancel_status_edit(); enter_mode(ui_mode == UIMode::QSO ? UIMode::RX : UIMode::QSO); switched = true; }
-      else if (c == 'd' || c == 'D') { cancel_status_edit(); enter_mode(ui_mode == UIMode::DEBUG ? UIMode::RX : UIMode::DEBUG); switched = true; }
-      else if (c == 's' || c == 'S') { cancel_status_edit(); enter_mode(ui_mode == UIMode::STATUS ? UIMode::RX : UIMode::STATUS); switched = true; }
-      else if (c == 'g' || c == 'G') { cancel_status_edit(); enter_mode(ui_mode == UIMode::GPS ? UIMode::RX : UIMode::GPS); switched = true; }
-      else if (c == 'h' || c == 'H') { cancel_status_edit(); enter_mode(ui_mode == UIMode::BT ? UIMode::RX : UIMode::BT); switched = true; }
-      else if (c == 'p' || c == 'P') {
-        cancel_status_edit();
-        // Perf screen doubles as the log viewer's second page (perf_page):
-        // 'p' cycles RX -> stats -> log -> RX, matching how 'n'/'o' already
-        // cycle through MENU's own pages elsewhere in this block.
-        if (ui_mode == UIMode::PERF) {
-          if (perf_page == 0) {
-            perf_page = 1;
-            debug_page = g_debug_lines.empty() ? 0 : (int)((g_debug_lines.size() - 1) / 6);
-            ui_draw_list(g_debug_lines, debug_page, -1);
-          } else {
-            enter_mode(UIMode::RX);
-          }
-        } else {
-          enter_mode(UIMode::PERF);
-        }
-        switched = true;
+          switched = true;
+          break;
+        case ScreenAction::ShowPerfLog:
+          // PERF's second page is the debug log, opened at its last page.
+          cancel_status_edit();
+          perf_page = 1;
+          debug_page = g_debug_lines.empty() ? 0 : (int)((g_debug_lines.size() - 1) / 6);
+          ui_draw_list(g_debug_lines, debug_page, -1);
+          switched = true;
+          break;
+        case ScreenAction::LeaveToRx:
+          cancel_status_edit();
+          enter_mode(UIMode::RX);
+          switched = true;
+          break;
+        case ScreenAction::None:
+          break;
       }
     }
 
@@ -5379,8 +4902,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       }
       case UIMode::RX: {
         int sel = ui_handle_rx_key(c);
-        if (sel >= 0 && core_cmd_tap_rx(sel)) {
-          // TX-state arming lives inside core_cmd_tap_rx for every UI path.
+        if (sel >= 0 && rx_tap_reply(sel)) {
+          // TX-state arming lives inside rx_tap_reply() for every UI path.
           rx_flash_idx = sel;
           rx_flash_deadline = rtc_now_ms() + 500;
           draw_rx_screen(rx_flash_idx);
@@ -5400,7 +4923,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
           if (start_idx + 5 < qso_count) { tx_page++; redraw_tx_view(); }
         } else if (c >= '2' && c <= '6') {
           int idx = start_idx + (c - '2');
-          if (core_cmd_drop_qso(idx)) {  // routes through core_api (fires qso_changed)
+          if (drop_qso(idx)) {
             g_pending_tx_valid = false;
             redraw_tx_view();
             // Re-evaluate TX after queue change
@@ -5537,10 +5060,18 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 draw_status_view();
               }
               else if (c == '5') {
-                status_edit_idx = 4; status_edit_buffer = g_date; status_cursor_pos = 0; while (status_cursor_pos < (int)status_edit_buffer.size() && (status_edit_buffer[status_cursor_pos] == '-')) status_cursor_pos++; draw_status_view();
+                status_edit_idx = 4;
+                status_edit_buffer = g_date;
+                status_cursor_pos = datetime_field_cursor_first(status_edit_buffer.c_str(),
+                                                                status_edit_buffer.size());
+                draw_status_view();
               }
               else if (c == '6') {
-                status_edit_idx = 5; status_edit_buffer = g_time; status_cursor_pos = 0; while (status_cursor_pos < (int)status_edit_buffer.size() && (status_edit_buffer[status_cursor_pos] == ':')) status_cursor_pos++; draw_status_view();
+                status_edit_idx = 5;
+                status_edit_buffer = g_time;
+                status_cursor_pos = datetime_field_cursor_first(status_edit_buffer.c_str(),
+                                                                status_edit_buffer.size());
+                draw_status_view();
               }
             } else {
               if (status_edit_idx == 1) {
@@ -5552,31 +5083,45 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 else if (c == '\n') { save_station_data(); status_edit_idx = -1; draw_status_view(); }
               } else if (status_edit_idx == 4 || status_edit_idx == 5) {
                 if (c == '`') { status_edit_idx = -1; status_edit_buffer.clear(); status_cursor_pos = -1; draw_status_view(); }
-                else if (c == ',') { // left
-                  int pos = status_cursor_pos - 1;
-                  while (pos >= 0 && (status_edit_buffer[pos] == '-' || status_edit_buffer[pos] == ':')) pos--;
-                  if (pos >= 0) status_cursor_pos = pos;
+                else if (c == ',') {   // left
+                  status_cursor_pos = datetime_field_cursor_left(
+                      status_edit_buffer.c_str(), status_edit_buffer.size(), status_cursor_pos);
                   draw_status_view();
-                } else if (c == '/') { // right
-                  int pos = status_cursor_pos + 1;
-                  while (pos < (int)status_edit_buffer.size() && (status_edit_buffer[pos] == '-' || status_edit_buffer[pos] == ':')) pos++;
-                  if (pos < (int)status_edit_buffer.size()) status_cursor_pos = pos;
+                } else if (c == '/') {  // right
+                  status_cursor_pos = datetime_field_cursor_right(
+                      status_edit_buffer.c_str(), status_edit_buffer.size(), status_cursor_pos);
                   draw_status_view();
                 } else if (c >= '0' && c <= '9') {
-                  if (status_cursor_pos >= 0 && status_cursor_pos < (int)status_edit_buffer.size()) {
-                    status_edit_buffer[status_cursor_pos] = c;
-                    int pos = status_cursor_pos + 1;
-                    while (pos < (int)status_edit_buffer.size() && (status_edit_buffer[pos] == '-' || status_edit_buffer[pos] == ':')) pos++;
-                    if (pos < (int)status_edit_buffer.size()) status_cursor_pos = pos;
-                  }
+                  status_cursor_pos = datetime_field_set_digit(
+                      &status_edit_buffer[0], status_edit_buffer.size(), status_cursor_pos, c);
                   draw_status_view();
                 } else if (c == '\n') {
-                  if (status_edit_idx == 4) g_date = status_edit_buffer;
-                  else g_time = normalize_time_hms(status_edit_buffer);
-                  if (rtc_apply_manual_time_from_strings()) {
-                    save_station_data();
-                  } else {
+                  // Validate before assigning. The old path wrote the buffer
+                  // into g_date/g_time first and relied on mktime() to reject
+                  // bad input -- but mktime normalises out-of-range fields
+                  // instead of failing, so "2026-02-30" became 2026-03-02 and
+                  // was written to the RTC. A rejected entry now leaves the
+                  // running clock untouched.
+                  const std::string candidate = (status_edit_idx == 4)
+                                                    ? status_edit_buffer
+                                                    : normalize_time_hms(status_edit_buffer);
+                  const bool ok = (status_edit_idx == 4)
+                                      ? datetime_field_date_valid(candidate.c_str())
+                                      : datetime_field_time_valid(candidate.c_str());
+                  if (!ok) {
                     debug_log_line("Invalid date/time");
+                  } else {
+                    const std::string prev_date = g_date;
+                    const std::string prev_time = g_time;
+                    if (status_edit_idx == 4) g_date = candidate;
+                    else                      g_time = candidate;
+                    if (rtc_apply_manual_time_from_strings()) {
+                      save_station_data();
+                    } else {
+                      g_date = prev_date;   // RTC refused it; put the clock back
+                      g_time = prev_time;
+                      debug_log_line("Invalid date/time");
+                    }
                   }
                   status_edit_idx = -1;
                   status_cursor_pos = -1;
@@ -5678,41 +5223,38 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
           if (ui_mode == UIMode::MENU) {
             if (menu_long_edit) {
               if (c == '\n' || c == '\r') {
-                if (menu_long_kind == LONG_FT) {
-                  g_free_text = menu_long_buf;
-                  if (g_cq_type == CqType::CQFREETEXT) g_cq_freetext = g_free_text;
-                  update_autoseq_cq_type();
-                } else if (menu_long_kind == LONG_COMMENT) {
-                  g_comment1 = menu_long_buf;
-                } else if (menu_long_kind == LONG_ACTIVE) {
-                  g_active_band_text = menu_long_buf;
-                  rebuild_active_bands();
-                } else if (menu_long_kind == LONG_IGNORE) {
-                  g_ignore_prefix_text = clamp_ignore_prefix_text(menu_long_buf);
-                  rebuild_ignore_prefixes();
+                switch (menu_long_kind) {
+                  case MenuLongEdit::FreeText:
+                    g_free_text = menu_long_buf;
+                    if (g_cq_type == CqType::CQFREETEXT) g_cq_freetext = g_free_text;
+                    update_autoseq_cq_type();
+                    break;
+                  case MenuLongEdit::Comment:
+                    g_comment1 = menu_long_buf;
+                    break;
+                  case MenuLongEdit::IgnoreList:
+                    g_ignore_prefix_text = clamp_ignore_prefix_text(menu_long_buf);
+                    rebuild_ignore_prefixes();
+                    break;
+                  case MenuLongEdit::None:
+                    break;
                 }
                 save_station_data();
                 menu_long_edit = false;
-                menu_long_kind = LONG_NONE;
+                menu_long_kind = MenuLongEdit::None;
                 menu_long_buf.clear();
-                menu_long_backup.clear();
                 draw_menu_view();
               } else if (c == '`') {
                 menu_long_edit = false;
-                menu_long_kind = LONG_NONE;
+                menu_long_kind = MenuLongEdit::None;
                 menu_long_buf.clear();
-                menu_long_backup.clear();
                 draw_menu_view();
               } else if (c == 0x08 || c == 0x7f) {
                 if (!menu_long_buf.empty()) menu_long_buf.pop_back();
                 draw_menu_view();
               } else if (c >= 32 && c < 127) {
-                char ch = c;
-                if (menu_long_kind == LONG_FT || menu_long_kind == LONG_IGNORE) {
-                  ch = toupper((unsigned char)ch);
-                }
-                if (!(menu_long_kind == LONG_IGNORE &&
-                      menu_long_buf.size() >= kIgnorePrefixTextMaxLen)) {
+                char ch = 0;
+                if (menu_long_accepts(menu_long_kind, (char)c, menu_long_buf.size(), &ch)) {
                   menu_long_buf.push_back(ch);
                 }
                 draw_menu_view();
@@ -5722,8 +5264,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               if (c == '\n' || c == '\r') {
                 bool should_save = true;
                 // Absolute indices across pages
-                if (menu_edit_idx == 3) { g_call = menu_edit_buf; autoseq_set_station(g_call, grid_ft8_4(g_grid)); }
-                else if (menu_edit_idx == 4) {
+                if (menu_edit_idx == kMenuIdxCall) { g_call = menu_edit_buf; autoseq_set_station(g_call, grid_ft8_4(g_grid)); }
+                else if (menu_edit_idx == kMenuIdxGrid) {
                   const std::string norm_grid = normalize_grid_maidenhead(menu_edit_buf);
                   if (!norm_grid.empty()) {
                     g_grid = norm_grid;
@@ -5735,9 +5277,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                     debug_log_line("Grid format: AA00/AA00aa/AA00aa00");
                   }
                 }
-                else if (menu_edit_idx == 7) { g_offset_hz = atoi(menu_edit_buf.c_str()); redraw_countdown_now(); }
-                else if (menu_edit_idx == 10) { g_comment1 = menu_edit_buf; }
-                else if (menu_edit_idx == 17) {
+                else if (menu_edit_idx == kMenuIdxOffsetHz) { g_offset_hz = atoi(menu_edit_buf.c_str()); redraw_countdown_now(); }
+                else if (menu_edit_idx == kMenuIdxMaxRetry) {
                   char* end = nullptr;
                   long v = std::strtol(menu_edit_buf.c_str(), &end, 10);
                   if (end != menu_edit_buf.c_str() && end && *end == '\0') {
@@ -5755,19 +5296,19 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
               } else if (c == 0x08 || c == 0x7f) {
                 if (!menu_edit_buf.empty()) menu_edit_buf.pop_back();
                 draw_menu_view();
-                if (menu_edit_idx == 7) {
+                if (menu_edit_idx == kMenuIdxOffsetHz) {
                   g_offset_hz = atoi(menu_edit_buf.c_str());
                   redraw_countdown_now();
                 }
               } else if (c == '`') {
-                if (menu_edit_idx == 7) {
+                if (menu_edit_idx == kMenuIdxOffsetHz) {
                   g_offset_hz = menu_cursor_edit_original;
                   redraw_countdown_now();
                 }
                 menu_edit_idx = -1;
                 menu_edit_buf.clear();
                 draw_menu_view();
-              } else if (menu_edit_idx == 7 && (c == ';' || c == '.' || c == ',' || c == '/')) {
+              } else if (menu_edit_idx == kMenuIdxOffsetHz && (c == ';' || c == '.' || c == ',' || c == '/')) {
                 // Arrow mode starts from the currently shown edit value.
                 int cursor_val = g_offset_hz;
                 if (!menu_edit_buf.empty()) {
@@ -5785,26 +5326,16 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                 draw_menu_view();
                 redraw_countdown_now();
               } else if (c >= 32 && c < 127) {
-                char ch = c;
-                if (menu_edit_idx == 15) {
-                  const bool is_sign = (ch == '+' || ch == '-');
-                  const bool is_digit = (ch >= '0' && ch <= '9');
-                  if (is_sign) {
-                    if (!menu_edit_buf.empty()) break;
-                  } else if (!is_digit) {
-                    break;
-                  }
-                  if (menu_edit_buf.size() >= 11) break;
-                } else if (menu_edit_idx == 17) {
-                  if (ch < '0' || ch > '9') break;
-                  if (menu_edit_buf.size() >= 10) break;
-                }
-                if (menu_edit_idx % 6 == 3 || menu_edit_idx % 6 == 4 || menu_edit_idx % 6 == 5) {
-                  ch = toupper((unsigned char)ch);
+                // Character class comes from the table row being edited, not
+                // from arithmetic on its index.
+                char ch = 0;
+                if (!menu_edit_accepts(menu_edit_class(menu_edit_idx), (char)c,
+                                       menu_edit_buf.size(), &ch)) {
+                  break;                // rejected: no push, no redraw
                 }
                 menu_edit_buf.push_back(ch);
                 draw_menu_view();
-                if (menu_edit_idx == 7) {
+                if (menu_edit_idx == kMenuIdxOffsetHz) {
                   g_offset_hz = atoi(menu_edit_buf.c_str());
                   redraw_countdown_now();
                 }
@@ -5815,147 +5346,14 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         if (c == ';') {
           if (menu_page > 0) { menu_page--; draw_menu_view(); }
         } else if (c == '.') {
-          if (menu_page < 2) { menu_page++; draw_menu_view(); }
-        } else if (menu_page == 0) {
-              if (c == '1') {
-                g_cq_type = (CqType)(((int)g_cq_type + 1) % 6);
-                if (g_cq_type == CqType::CQFREETEXT) g_cq_freetext = g_free_text;
-                save_station_data();
-                update_autoseq_cq_type();
-                draw_menu_view();
-              } else if (c == '2') {
-                // Send Free Text via autoseq queue. FT is a one-shot entry
-                // that sorts to the FRONT of the active queue — guarantees
-                // the next TX is the FT, preempting any active QSO. The QSO
-                // ctx is preserved (FT is one-shot, popped after TX) and
-                // resumes on the slot after FT fires.
-                // Slot parity: inherits from queue[0] if non-empty (joins
-                // the current activation period); uses next-slot fallback
-                // if empty.
-                int64_t now_slot = rtc_now_ms() / g_protocol->slot_time_ms;
-                int fallback_parity = (int)((now_slot + 1) & 1);
-                if (autoseq_schedule_freetext(g_free_text, fallback_parity)) {
-                  // Re-fetch and update g_pending_tx so the FT replaces any
-                  // previously-scheduled QSO TX. Without this, a QSO TX
-                  // that was already armed by a prior decode cycle would
-                  // still fire instead of the FT.
-                  AutoseqTxEntry pending;
-                  if (autoseq_fetch_pending_tx(pending)) {
-                    arm_pending_tx(pending);
-                  }
-                  menu_flash_idx = 1; // absolute index of "Send FreeText"
-                  menu_flash_deadline = rtc_now_ms() + 500;
-                  draw_menu_view();
-                  debug_log_line(std::string("Queued: ") + g_free_text);
-                }
-              } else if (c == '3') {
-                menu_long_edit = true;
-                menu_long_kind = LONG_FT;
-                menu_long_buf = g_free_text;
-                menu_long_backup = g_free_text;
-                draw_menu_view();
-              } else if (c == '4') {
-                menu_edit_idx = 3; // Call (line index 3)
-                menu_edit_buf = g_call;
-                draw_menu_view();
-              } else if (c == '5') {
-                menu_edit_idx = 4; // Grid (line index 4)
-                menu_edit_buf = g_grid;
-                draw_menu_view();
-              } else if (c == '6') {
-                enter_charge_mode();
-              }
-            } else if (menu_page == 1) {
-                if (c == '1') {
-                  g_offset_src = (OffsetSrc)(((int)g_offset_src + 1) % 3);
-                  save_station_data();
-                  draw_menu_view();
-                } else if (c == '2') {
-                  menu_edit_idx = 7; // Cursor line
-                  menu_cursor_edit_original = g_offset_hz;
-                  menu_edit_buf = std::to_string(g_offset_hz);
-                  draw_menu_view();
-                } else if (c == '3') {
-                  RadioType old_radio = radio_profile_canonical(g_radio);
-                  audio_source_backend_t old_audio = radio_profile_get(old_radio).audio_backend;
-                  bool was_streaming = audio_source_is_streaming();
-                  g_radio = radio_profile_next(g_radio);
-                  RadioType new_radio = radio_profile_canonical(g_radio);
-                  audio_source_backend_t new_audio = radio_profile_get(new_radio).audio_backend;
-                  if (was_streaming && old_audio != new_audio) {
-                    ESP_LOGI(TAG, "Stopping audio for radio change %s/%s -> %s/%s",
-                             radio_profile_name(old_radio),
-                             audio_source_backend_name(old_audio),
-                             radio_profile_name(new_radio),
-                             audio_source_backend_name(new_audio));
-                    debug_log_line(std::string("Audio stop ") + radio_profile_name(old_radio));
-                    audio_source_stop();
-                  }
-                  apply_radio_profile_binding();
-                  save_station_data();
-                  draw_menu_view();
-                } else if (c == '4') {
-                  menu_long_edit = true;
-                  menu_long_kind = LONG_IGNORE;
-                  menu_long_buf = g_ignore_prefix_text;
-                  menu_long_backup = g_ignore_prefix_text;
-                  draw_menu_view();
-                } else if (c == '5') {
-                  menu_long_edit = true;
-                  menu_long_kind = LONG_COMMENT;
-                  menu_long_buf = g_comment1;
-                  menu_long_backup = g_comment1;
-                  draw_menu_view();
-                } else if (c == '6') {
-#if ENABLE_FT4
-                  // Toggle the pending protocol mode (FT8 <-> FT4).
-                  // g_protocol stays as-is for this boot session; the change
-                  // takes effect on next reboot.
-                  g_protocol_pending_ft4 = !g_protocol_pending_ft4;
-                  save_station_data();
-                  draw_menu_view();
-#endif
-                }
-            } else if (menu_page == 2) {
-              if (c == '1') {
-                g_rxtx_log = !g_rxtx_log;
-                save_station_data();
-                draw_menu_view();
-              } else if (c == '2') {
-                g_skip_tx1 = !g_skip_tx1;
-                autoseq_set_skip_tx1(g_skip_tx1);
-                save_station_data();
-                draw_menu_view();
-              } else if (c == '3') {
-                s_band_config_menu = true;
-                band_config_reset((int)g_bands.size());
-                enter_mode(UIMode::BAND);
-              } else if (c == '4') {
-                gps_stop();
-                porta_stop();
-                g_gnss_lora_enabled = !g_gnss_lora_enabled;
-                apply_debug_uart_pin_policy();
-                save_station_data();
-                apply_radio_profile_binding();
-                draw_menu_view();
-              } else if (c == '5') {
-                CopyBlockInputs in;
-                in.writes_blocked = storage_writes_blocked();
-                in.tx_active = g_tx_active;
-                in.decode_active = g_decode_in_progress;
-                in.audio_streaming = audio_source_is_streaming();
-                in.host_bin_active = host_bin_active;
-                in.firmware_owns = (storage_service_owner() == StorageOwner::FIRMWARE);
-                in.open_streams = storage_service_open_stream_count();
-                if (copy_to_sd_press(in, today_qso_file_name(), today_rt_file_name(),
-                                     rtc_now_ms()) == CopyToSdPress::RedrawMenu) {
-                  draw_menu_view();
-                }
-              } else if (c == '6') {
-                menu_edit_idx = 17; // Max Retry line
-                menu_edit_buf = std::to_string(g_autoseq_max_retry);
-                draw_menu_view();
-              }
+          if (menu_page < menu_page_count() - 1) { menu_page++; draw_menu_view(); }
+        } else {
+          // One dispatch for every row on every page; the model maps
+          // (page, key) to a row, so an item's key follows its position.
+          const int idx = menu_index_for(menu_page, c);
+          if (idx >= 0 && kMenuItems[idx].action) {
+            kMenuItems[idx].action();
+          }
             }
           }
           break;
@@ -5985,29 +5383,4 @@ static void draw_status_line(int idx, const std::string& text, bool highlight) {
   std::snprintf(buf, sizeof(buf), "%d %s", idx + 1, text.c_str());
   ui_set_visible_text_line(idx, buf);
   M5.Display.printf("%s", buf);
-}
-[[maybe_unused]] static void draw_battery_icon(int x, int y, int w, int h, int level, bool charging) {
-  if (level < 0) level = 0;
-  if (level > 100) level = 100;
-  // Outline
-  M5.Display.startWrite();
-  M5.Display.fillRect(x, y, w, h, TFT_BLACK);
-  M5.Display.drawRect(x, y, w - 3, h, TFT_WHITE);
-  M5.Display.fillRect(x + w - 3, y + h / 4, 3, h / 2, TFT_WHITE); // tab
-  // Fill
-  int inner_w = w - 5;
-  int inner_h = h - 4;
-  int fill_w = (inner_w * level) / 100;
-  uint16_t fill_color = (level > 30) ? M5.Display.color565(0, 200, 0)
-                        : (level > 15) ? M5.Display.color565(200, 180, 0)
-                                        : M5.Display.color565(200, 0, 0);
-  M5.Display.fillRect(x + 2, y + 2, fill_w, inner_h, fill_color);
-  // Charging bolt
-  if (charging) {
-    int bx = x + w / 2 - 2;
-    int by = y + 2;
-    M5.Display.fillTriangle(bx, by, bx + 4, by + h / 2, bx + 2, by, M5.Display.color565(255, 255, 0));
-    M5.Display.fillTriangle(bx + 2, by + h / 2, bx + 6, by + h - 2, bx + 4, by + h - 2, M5.Display.color565(255, 255, 0));
-  }
-  M5.Display.endWrite();
 }

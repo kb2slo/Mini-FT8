@@ -1,9 +1,11 @@
 #include "stream_uac.h"
+#include "decode_tx_state.h"
+#include "main_services.h"
+
 #include "usb_c_presence.h"
 #include "ft8_audio_pipeline.h"
 #include "resample.h"
 #include "dds_q15.h"
-#include "feature_flags.h"
 #include "protocol.h"
 
 #include "freertos/FreeRTOS.h"
@@ -20,15 +22,13 @@
 #include "usb/usb_types_ch9.h"
 
 #include <cstring>
+#include <string>
 #include <cmath>
 #include <inttypes.h>
 
 static const char* TAG = "UAC_STREAM";
-extern void log_heap(const char* tag);
 
 // External references from main.cpp
-extern bool g_streaming;
-extern volatile bool g_cdc_initial_sync_pending;
 int64_t rtc_now_ms();
 
 // Task priorities and stack sizes
@@ -88,6 +88,19 @@ static cdc_acm_dev_hdl_t s_cdc_handle = NULL;
 static TaskHandle_t s_usb_task_handle = NULL;
 static TaskHandle_t s_uac_task_handle = NULL;
 static volatile bool s_host_installed = false;
+// Set by usb_lib_task when usb_host_install() fails and the task deletes
+// itself. Without it, the task's own "s_usb_task_handle = NULL" can be
+// overwritten by the xTaskCreate that spawned it (the task can run and fail
+// before xTaskCreate returns), leaving handle != NULL with the host not
+// installed -- a state uac_host_ensure_started() could never leave, so one
+// transient failure disabled audio until a power cycle. B36.
+static volatile bool s_host_install_failed = false;
+// The esp_err_t from the failed usb_host_install(), recorded by the task and
+// reported by whoever calls uac_host_ensure_started(). The task must not call
+// debug_log_line_public() itself: that appends to an unlocked std::vector owned
+// by the main loop, and doing it from another task risks a realloc race in
+// exactly the error path this is meant to make survivable.
+static volatile int s_host_install_err = 0;
 static volatile bool s_host_stop_requested = false;
 
 // Speaker (UAC OUT) is captured and fully allocated during enumeration.
@@ -119,8 +132,6 @@ static constexpr uint16_t k_qmx_vid = 0x0483;
 static constexpr uint16_t k_qmx_pid = 0xA34C;
 
 // Debug display buffers
-static char s_debug_line1[64] = "";
-static char s_debug_line2[64] = "";
 
 // Resampler state
 static resample_state_t s_resample_state;
@@ -484,6 +495,8 @@ static void usb_lib_task(void* arg) {
     esp_err_t err = usb_host_install(&host_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to install USB host: %s", esp_err_to_name(err));
+        s_host_install_err = (int)err;  // reported by ensure_started(), not here
+        s_host_install_failed = true;   // let ensure_started() retry (B36)
         s_usb_task_handle = NULL;
         vTaskDelete(NULL);
         return;
@@ -689,7 +702,6 @@ static void uac_lib_task(void* arg) {
                     // FT4's decoder needs a larger stack than FT8. Keep the
                     // FT8 stack static and allocate the FT4 stack on demand.
                     if (s_stream_task_handle == NULL) {
-#if ENABLE_FT4
                         if (g_protocol == &kProtocolFT4) {
                             BaseType_t cr = xTaskCreatePinnedToCore(
                                 stream_uac_task, "stream_uac",
@@ -702,27 +714,24 @@ static void uac_lib_task(void* arg) {
                                 s_stream_task_handle = NULL;
                             }
                         } else {
-#endif
-                        // FT8 uses the existing static 8 KB stack.
-                        static StackType_t  s_stream_task_stack[8192 / sizeof(StackType_t)];
-                        static StaticTask_t s_stream_task_tcb;
-                        size_t free_before = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-                        size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-                        ESP_LOGI(TAG, "Pre-task-create heap: free=%u largest=%u",
-                                 (unsigned)free_before, (unsigned)largest);
-                        s_stream_task_handle = xTaskCreateStaticPinnedToCore(
-                            stream_uac_task, "stream_uac",
-                            8192 / sizeof(StackType_t), NULL,
-                            UAC_STREAM_TASK_PRIORITY,
-                            s_stream_task_stack, &s_stream_task_tcb, 1);
-                        if (!s_stream_task_handle) {
-                            ESP_LOGE(TAG, "stream_uac_task create FAILED "
-                                     "(static FT8) free=%u largest=%u",
+                            // FT8 uses the existing static 8 KB stack.
+                            static StackType_t  s_stream_task_stack[8192 / sizeof(StackType_t)];
+                            static StaticTask_t s_stream_task_tcb;
+                            size_t free_before = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+                            size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+                            ESP_LOGI(TAG, "Pre-task-create heap: free=%u largest=%u",
                                      (unsigned)free_before, (unsigned)largest);
+                            s_stream_task_handle = xTaskCreateStaticPinnedToCore(
+                                stream_uac_task, "stream_uac",
+                                8192 / sizeof(StackType_t), NULL,
+                                UAC_STREAM_TASK_PRIORITY,
+                                s_stream_task_stack, &s_stream_task_tcb, 1);
+                            if (!s_stream_task_handle) {
+                                ESP_LOGE(TAG, "stream_uac_task create FAILED "
+                                         "(static FT8) free=%u largest=%u",
+                                         (unsigned)free_before, (unsigned)largest);
+                            }
                         }
-#if ENABLE_FT4
-                        }
-#endif
                     }
 
                 } else if (evt.driver.event == UAC_HOST_DRIVER_EVENT_TX_CONNECTED) {
@@ -895,25 +904,7 @@ static int uac_read_ft8_samples(void* ctx, float* out, int max_samples) {
             continue;
         }
         int num_frames = bytes_read / frame_bytes;
-        int remainder = bytes_read % frame_bytes;
         if (num_frames == 0) continue;
-
-        int32_t val = 0;
-        if (s_format.bit_resolution == 24) {
-            val = usb_buffer[0] | (usb_buffer[1] << 8) | (usb_buffer[2] << 16);
-            if (val & 0x800000) val |= 0xFF000000;
-        } else {
-            int16_t v16 = (int16_t)(usb_buffer[0] | (usb_buffer[1] << 8));
-            val = v16;
-        }
-        snprintf(s_debug_line1, sizeof(s_debug_line1),
-                 "fmt=%lu/%u/%u v=%ld",
-                 (unsigned long)s_format.sample_freq,
-                 s_format.bit_resolution,
-                 s_format.channels,
-                 (long)val);
-        snprintf(s_debug_line2, sizeof(s_debug_line2),
-                 "rd=%lu fb=%d rem=%d", (unsigned long)bytes_read, frame_bytes, remainder);
 
         return uac_pcm_to_ft8_samples(&s_resample_state, usb_buffer,
                                       (int)bytes_read, out,
@@ -936,27 +927,50 @@ static void uac_on_block_processed(void* ctx) {
 }
 
 // Public API implementation
-uac_stream_state_t uac_get_state(void) {
-    return s_state;
-}
 
 bool uac_is_streaming(void) {
     return s_state == UAC_STATE_STREAMING && s_mic_handle != NULL;
 }
 
-bool uac_get_latest_waterfall_row(uint8_t* out_row, int out_len) {
-    return ft8_audio_pipeline_get_latest_waterfall_row(out_row, out_len);
+// Wait up to ~1 s for the host to come up, reporting how long it took so a
+// marginal install is distinguishable from one that never happened.
+static bool uac_host_wait_installed(const char* where) {
+    const int64_t t0 = rtc_now_ms();
+    for (int i = 0; i < 50 && !s_host_installed; ++i) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    const int64_t waited = rtc_now_ms() - t0;
+    if (s_host_installed) {
+        if (waited > 100) {
+            ESP_LOGW(TAG, "USB host install slow: %lldms (%s)", (long long)waited, where);
+            debug_log_line_public("USB host slow " + std::to_string((long long)waited) + "ms");
+        }
+        return true;
+    }
+    ESP_LOGE(TAG, "USB host did not install within %lldms (%s)", (long long)waited, where);
+    debug_log_line_public(std::string("USB host timeout (") + where + ")");
+    return false;
 }
 
 esp_err_t uac_host_ensure_started(void) {
+    // A previous attempt failed to install and its task is gone. Clear the
+    // stale handle so the create path below runs again instead of waiting on
+    // a task that no longer exists. Before B36 this state was terminal.
+    if (s_host_install_failed) {
+        const esp_err_t prev = (esp_err_t)s_host_install_err;
+        s_host_install_failed = false;
+        s_host_install_err = 0;
+        s_usb_task_handle = NULL;
+        ESP_LOGW(TAG, "Retrying USB host install after %s", esp_err_to_name(prev));
+        debug_log_line_public(std::string("USB host retry after ") + esp_err_to_name(prev));
+    }
+
     if (s_host_installed && s_usb_task_handle != NULL) {
         return ESP_OK;
     }
     if (s_usb_task_handle != NULL && !s_host_installed) {
-        for (int i = 0; i < 50 && !s_host_installed; ++i) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-        return s_host_installed ? ESP_OK : ESP_ERR_TIMEOUT;
+        // Task is up but has not installed yet -- someone else started it.
+        return uac_host_wait_installed("joining") ? ESP_OK : ESP_ERR_TIMEOUT;
     }
 
     s_host_stop_requested = false;
@@ -966,22 +980,27 @@ esp_err_t uac_host_ensure_started(void) {
                                              &s_usb_task_handle, 0);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create USB task");
+        debug_log_line_public("USB task create failed");
         s_usb_task_handle = NULL;
         return ESP_FAIL;
     }
-    for (int i = 0; i < 50 && !s_host_installed; ++i) {
-        vTaskDelay(pdMS_TO_TICKS(20));
+    // The task may have already failed and NULLed the handle before
+    // xTaskCreate returned; the flag, not the handle, is what tells us.
+    if (s_host_install_failed) {
+        const esp_err_t why = (esp_err_t)s_host_install_err;
+        s_host_install_failed = false;
+        s_host_install_err = 0;
+        s_usb_task_handle = NULL;
+        debug_log_line_public(std::string("USB host install: ") + esp_err_to_name(why));
+        return ESP_FAIL;
     }
-    if (!s_host_installed) {
-        ESP_LOGE(TAG, "USB host did not install");
-        return ESP_ERR_TIMEOUT;
-    }
-    return ESP_OK;
+    return uac_host_wait_installed("starting") ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 bool uac_start_with_profile(uac_stream_profile_t profile) {
     if (s_state != UAC_STATE_IDLE) {
         ESP_LOGW(TAG, "UAC already started");
+        debug_log_line_public("UAC already started");
         return false;
     }
 
@@ -992,7 +1011,6 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
     s_format.sample_freq = UAC_SAMPLE_RATE;
     s_format.bit_resolution = UAC_BIT_RESOLUTION;
     s_format.channels = UAC_CHANNELS;
-    ft8_audio_pipeline_clear_latest_waterfall_row();
 
     ESP_LOGI(TAG, "Starting UAC profile=%s (host already up=%d)",
              profile_name(s_profile), s_host_installed ? 1 : 0);
@@ -1006,6 +1024,7 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
     s_event_queue = xQueueCreate(10, sizeof(uac_event_t));
     if (!s_event_queue) {
         ESP_LOGE(TAG, "Failed to create event queue");
+        debug_log_line_public("UAC event queue failed");
         return false;
     }
 
@@ -1015,6 +1034,7 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
                                               &s_uac_task_handle, 0);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UAC task");
+        debug_log_line_public("UAC task create failed");
         vQueueDelete(s_event_queue);
         s_event_queue = NULL;
         return false;
@@ -1026,14 +1046,6 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
     s_state = UAC_STATE_WAITING;
     snprintf(s_status_string, sizeof(s_status_string), "Waiting for %s", profile_name(s_profile));
     return true;
-}
-
-bool uac_start(void) {
-    return uac_start_with_profile(UAC_PROFILE_QMX);
-}
-
-bool uac_qmx_detected(void) {
-  return s_mic_handle != NULL || s_cdc_handle != NULL;
 }
 
 void uac_stop(void) {
@@ -1066,13 +1078,8 @@ void uac_stop(void) {
     }
 
     s_state = UAC_STATE_IDLE;
-    ft8_audio_pipeline_clear_latest_waterfall_row();
     snprintf(s_status_string, sizeof(s_status_string), "Idle");
     ESP_LOGI(TAG, "UAC stopped");
-}
-
-bool uac_usb_host_released(void) {
-    return !s_host_installed && s_usb_task_handle == NULL;
 }
 
 esp_err_t uac_ensure_host_uninstalled(void) {
@@ -1229,18 +1236,6 @@ void uac_tx_end(void) {
 
     ESP_LOGI(TAG, "UAC OUT stopped packets=%u errors=%u",
              (unsigned)s_spk_packets_sent, (unsigned)s_spk_write_errors);
-}
-
-const char* uac_get_status_string(void) {
-    return s_status_string;
-}
-
-const char* uac_get_debug_line1(void) {
-    return s_debug_line1;
-}
-
-const char* uac_get_debug_line2(void) {
-    return s_debug_line2;
 }
 
 bool cat_cdc_ready(void) {

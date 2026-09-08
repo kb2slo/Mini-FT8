@@ -1,4 +1,7 @@
 #include "ft8_audio_pipeline.h"
+#include "decode_tx_state.h"
+#include "main_services.h"
+
 #include "protocol.h"
 
 #include <cmath>
@@ -9,7 +12,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/portmacro.h"
-#include "core_api_internal.h"
 #include "ui.h"
 
 extern "C" {
@@ -18,25 +20,12 @@ extern "C" {
 #include "ft8/decode.h"
 }
 
-extern void log_heap(const char* tag);
-extern bool g_decode_enabled;
-extern int g_time_osr;
-extern int g_freq_osr;
-extern int64_t g_decode_slot_idx;
-extern volatile bool g_decode_in_progress;
-extern volatile int64_t g_decode_applied_slot_idx;
-extern volatile bool g_tx_active;
-extern volatile bool g_was_txing;
 void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool update_ui);
 int64_t rtc_now_ms();
 
 #ifndef FT8_SAMPLE_RATE
 #define FT8_SAMPLE_RATE 6000
 #endif
-
-static uint8_t s_latest_waterfall_row[FT8_AUDIO_WATERFALL_ROW_WIDTH] = {0};
-static bool s_latest_waterfall_row_valid = false;
-static portMUX_TYPE s_latest_waterfall_row_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static void push_waterfall_latest(const monitor_t& mon)
 {
@@ -70,34 +59,6 @@ static void push_waterfall_latest(const monitor_t& mon)
     }
 
     ui_push_waterfall_row(scaled, FT8_AUDIO_WATERFALL_ROW_WIDTH);
-    taskENTER_CRITICAL(&s_latest_waterfall_row_lock);
-    memcpy(s_latest_waterfall_row, scaled, FT8_AUDIO_WATERFALL_ROW_WIDTH);
-    s_latest_waterfall_row_valid = true;
-    taskEXIT_CRITICAL(&s_latest_waterfall_row_lock);
-
-    core_fire_waterfall_row(block, collapsed, num_bins,
-                            /*swr=*/1.5f, /*pwr=*/2.0f, /*ptt=*/false);
-}
-
-void ft8_audio_pipeline_clear_latest_waterfall_row(void)
-{
-    taskENTER_CRITICAL(&s_latest_waterfall_row_lock);
-    memset(s_latest_waterfall_row, 0, sizeof(s_latest_waterfall_row));
-    s_latest_waterfall_row_valid = false;
-    taskEXIT_CRITICAL(&s_latest_waterfall_row_lock);
-}
-
-bool ft8_audio_pipeline_get_latest_waterfall_row(uint8_t* out_row, int out_len)
-{
-    if (!out_row || out_len < FT8_AUDIO_WATERFALL_ROW_WIDTH) return false;
-    bool valid = false;
-    taskENTER_CRITICAL(&s_latest_waterfall_row_lock);
-    valid = s_latest_waterfall_row_valid;
-    if (valid) {
-        memcpy(out_row, s_latest_waterfall_row, FT8_AUDIO_WATERFALL_ROW_WIDTH);
-    }
-    taskEXIT_CRITICAL(&s_latest_waterfall_row_lock);
-    return valid;
 }
 
 void ft8_audio_pipeline_run(const ft8_audio_pipeline_config_t* cfg)
