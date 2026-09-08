@@ -1851,9 +1851,73 @@ static bool charge_mode_set_cpu_mhz(uint32_t mhz) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// R-tap reply, TX cancel, and QSO drop.
+//
+// Inlined from core_api.cpp when that facade was removed (B30). The behaviour
+// is unchanged, including the two rules that were fixed against a live client
+// in 7d9a768 and are easy to lose: tapping arms the pending TX immediately,
+// and an in-flight TX is never replaced -- autoseq queues behind the live head
+// and the next slot arm picks it up when this TX ends.
+// ---------------------------------------------------------------------------
+
+// Reply to the decoded message at rx_list_idx. Returns false if the index is
+// stale, a QSO is already in progress, or the TX queue is full.
+static bool rx_tap_reply(int rx_list_idx) {
+  RxDecodeEntry entry{};
+  if (!ui_get_rx_entry(rx_list_idx, &entry)) return false;
+
+  // autoseq_on_touch() still takes a UiRxLine.
+  UiRxLine msg;
+  msg.text      = entry.text;
+  msg.field1    = entry.field1;
+  msg.field2    = entry.field2;
+  msg.field3    = entry.field3;
+  msg.snr       = entry.snr;
+  msg.offset_hz = entry.offset_hz;
+  msg.slot_id   = entry.slot_id;
+  msg.is_cq     = entry.is_cq;
+  msg.is_to_me  = entry.is_to_me;
+
+  const AutoseqTouchResult touch = autoseq_on_touch(msg, g_tx_active);
+  if (touch == AutoseqTouchResult::IgnoredInProgress) {
+    debug_log_line("QSO in progress");
+    g_tx_view_dirty = true;
+    return false;
+  }
+  if (touch == AutoseqTouchResult::NoRoom) {
+    debug_log_line("TX queue full");
+    return false;
+  }
+
+  // Do not replace the in-flight pending TX.
+  AutoseqTxEntry pending{};
+  if (!g_tx_active && autoseq_fetch_pending_tx(pending)) {
+    arm_pending_tx(pending);
+  }
+  g_tx_view_dirty = true;
+  return true;
+}
+
+// Abort the in-flight TX. tx_tick() reads g_tx_cancel_requested on its next
+// iteration; radio_control_end_tx() PTTs down immediately. The asynchrony here
+// is the standing suspect in B21 -- behaviour is deliberately unchanged.
+static void request_tx_cancel() {
+  g_tx_cancel_requested = true;
+  if (radio_control_ready()) radio_control_end_tx();
+  g_tx_view_dirty = true;
+}
+
+// Drop one active QSO by queue index.
+static bool drop_qso(int idx) {
+  const bool ok = autoseq_drop_index(idx);
+  if (ok) g_tx_view_dirty = true;
+  return ok;
+}
+
 static void enter_charge_mode() {
   ESP_LOGI(TAG, "Entering charge mode (Launcher-style)");
-  core_cmd_cancel_tx();
+  request_tx_cancel();
   if (g_tx_active) {
     tx_tick();
   }
@@ -4482,7 +4546,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     if (c == '`' &&
         (ui_mode == UIMode::RX || ui_mode == UIMode::TX || ui_mode == UIMode::STATUS) &&
         status_edit_idx == -1) {
-      core_cmd_cancel_tx();
+      request_tx_cancel();
       debug_log_line("TX cancel requested");
       last_key = c;
       vTaskDelay(pdMS_TO_TICKS(10));
@@ -4707,8 +4771,8 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       }
       case UIMode::RX: {
         int sel = ui_handle_rx_key(c);
-        if (sel >= 0 && core_cmd_tap_rx(sel)) {
-          // TX-state arming lives inside core_cmd_tap_rx for every UI path.
+        if (sel >= 0 && rx_tap_reply(sel)) {
+          // TX-state arming lives inside rx_tap_reply() for every UI path.
           rx_flash_idx = sel;
           rx_flash_deadline = rtc_now_ms() + 500;
           draw_rx_screen(rx_flash_idx);
@@ -4728,7 +4792,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
           if (start_idx + 5 < qso_count) { tx_page++; redraw_tx_view(); }
         } else if (c >= '2' && c <= '6') {
           int idx = start_idx + (c - '2');
-          if (core_cmd_drop_qso(idx)) {  // routes through core_api (fires qso_changed)
+          if (drop_qso(idx)) {
             g_pending_tx_valid = false;
             redraw_tx_view();
             // Re-evaluate TX after queue change
