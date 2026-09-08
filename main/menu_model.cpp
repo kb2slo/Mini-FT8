@@ -31,40 +31,53 @@ const MenuRow kMenuRows[] = {
 
 static constexpr int kRowCount = (int)(sizeof(kMenuRows) / sizeof(kMenuRows[0]));
 
-int menu_row_count(void) { return kRowCount; }
+int menu_row_count(void)
+{
+    return kRowCount;
+}
 
-int menu_page_count(void) {
+int menu_page_count(void)
+{
     return (kRowCount + kMenuRowsPerPage - 1) / kMenuRowsPerPage;
 }
 
-static bool in_range(int idx) { return idx >= 0 && idx < kRowCount; }
+static bool in_range(int idx)
+{
+    return idx >= 0 && idx < kRowCount;
+}
 
-int menu_page_of(int idx) {
+int menu_page_of(int idx)
+{
     if (!in_range(idx)) return -1;
     return idx / kMenuRowsPerPage;
 }
 
-char menu_key_of(int idx) {
+char menu_key_of(int idx)
+{
     if (!in_range(idx)) return 0;
     return (char)('1' + (idx % kMenuRowsPerPage));
 }
 
-int menu_index_for(int page, char key) {
+int menu_index_for(int page, char key)
+{
     if (page < 0 || page >= menu_page_count()) return -1;
     if (key < '1' || key >= '1' + kMenuRowsPerPage) return -1;
     const int idx = page * kMenuRowsPerPage + (key - '1');
     return in_range(idx) ? idx : -1;
 }
 
-MenuEdit menu_edit_class(int idx) {
+MenuEdit menu_edit_class(int idx)
+{
     return in_range(idx) ? kMenuRows[idx].edit : MenuEdit::None;
 }
 
-const char* menu_row_id(int idx) {
+const char* menu_row_id(int idx)
+{
     return in_range(idx) ? kMenuRows[idx].id : "";
 }
 
-bool menu_edit_accepts(MenuEdit kind, char c, size_t current_len, char* out_ch) {
+bool menu_edit_accepts(MenuEdit kind, char c, size_t current_len, char* out_ch)
+{
     if (c < 32 || c >= 127) return false;   // non-printable never appends
     switch (kind) {
     case MenuEdit::Numeric:

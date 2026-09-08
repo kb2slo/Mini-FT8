@@ -15,7 +15,7 @@ Run by the agent locally, and by CI on every PR. No hardware.
 
 | Harness | Command | Covers |
 | --- | --- | --- |
-| `host_mock` (18 binaries) | `make -C host_mock && host_mock/host_test*` | See table below. CI globs the binaries rather than listing them, so a new test runs as soon as the Makefile builds it |
+| `host_mock` (19 binaries) | `make -C host_mock && host_mock/host_test*` | See table below. CI globs the binaries rather than listing them, so a new test runs as soon as the Makefile builds it |
 | `tests/tx_e2e` | CTest, CI job **Host tests** | L1 encoder, TA format, golden WAV RX decode |
 | Firmware build | `idf.py build` | `main/` under `-Werror`; merged image; must be **warning-free** |
 | Sidekick build | CI job **Sidekick (ESP32-C6)** | Companion firmware compiles and stages |
@@ -42,13 +42,15 @@ Run by the agent locally, and by CI on every PR. No hardware.
 | `host_test_tx_hud_banner` | TX HUD banner state |
 | `host_test_rx_list_stale` | RX list staleness marking |
 | `host_test_usb_c_presence` | USB-C presence detection policy |
+| `host_test_screen_model` | Screen navigation: key to screen, R never toggling, the seven plain toggles, M/N/O sharing MENU across three pages, P cycling stats to log to RX, and `C` staying inert after B23 |
 | `host_test_menu_model` | MENU layout arithmetic (page/key round-trip for all 18 rows), row identity and order, edit character classes, and the inline-edit filter. Carries regression cases for both defects B32 fixed |
 
 ### What automation cannot see
 
 Named explicitly so nobody mistakes a green run for coverage. None of the following has a harness:
 
-- **The UI rendering.** No test covers any `draw_*` function or `UIMode` transitions. The MENU is now
+- **The UI rendering.** No test covers any `draw_*` function; what each screen actually *paints* is
+  unverified. Screen *navigation* is covered by `host_test_screen_model`, and the MENU is now
   partly covered: `host_test_menu_model` pins layout, row order, and the edit filter, and
   `menu_assert_model_in_sync()` logs at startup if the label/action table drifts off the model. What stays
   uncovered is whether a row's *label* and *action* actually belong together — that pairing is still only
@@ -215,6 +217,7 @@ commits below changed live code.
 | waterfall buffer | Waterfall still renders normally while streaming | owed |
 | B30 (core_api removal) | R-tap a decode to reply; backtick cancel during TX; drop a QSO from the `T` list | owed |
 | B31 (extern audit) | none — linkage and visibility only, byte-identical binary | n/a |
+| B33 (screen registry) | Section 1 (reachability) plus the M/N/O paging rows in section 2. Navigation rules are host-tested now; what is operator-only is whether each screen paints the right thing when reached | owed |
 | B32 (menu table) | **All of section 2**, every item on every page. Layout, row order and the edit filter are now host-tested; what remains operator-only is whether each label sits with its own action | owed |
 | all | Sections 0, 1, 3–7 — one full pass | owed |
 

@@ -76,6 +76,7 @@ static const char* STATION_FILE = "Station.txt";
 
 #include "protocol.h"
 #include "menu_model.h"
+#include "screen_model.h"
 #include "decode_tx_state.h"
 #include "main_services.h"
 
@@ -359,7 +360,7 @@ static bool rewrite_dxpedition_for_mycall(const std::string& raw_text,
 }
 
 static const char* TAG = "FT8";
-enum class UIMode { RX, TX, BAND, MENU, DEBUG, STATUS, QSO, GPS, PERF, BT };
+// UIMode and the key->screen rules live in screen_model.h (host-tested).
 enum class RtcTimeSource : uint8_t {
   SAVED = 0,
   ESP_RTC,
@@ -1066,21 +1067,7 @@ static void poll_uart_inject_keys() {
 // ================================================================
 static volatile bool g_uart_mirror_pending = false;
 
-static const char* uart_mirror_mode_label(UIMode mode) {
-  switch (mode) {
-    case UIMode::RX:      return "RX";
-    case UIMode::TX:      return "TX";
-    case UIMode::BAND:    return "BAND";
-    case UIMode::MENU:    return "MENU";
-    case UIMode::DEBUG:   return "DEBUG";
-    case UIMode::STATUS:  return "STATUS";
-    case UIMode::QSO:     return "QSO";
-    case UIMode::GPS:     return "GPS";
-    case UIMode::PERF:    return "PERF";
-    case UIMode::BT:      return "BT";
-  }
-  return "?";
-}
+
 
 static void uart_mirror_dump_screen() {
   std::vector<std::string> lines;
@@ -1092,7 +1079,7 @@ static void uart_mirror_dump_screen() {
     ui_get_rx_page_info(cur, total);
   }
 
-  const char* label = uart_mirror_mode_label(ui_mode);
+  const char* label = screen_name(ui_mode);
   printf("\n---- [%s %d/%d] ----\n", label, cur, total);
   for (size_t i = 0; i < lines.size(); ++i) {
     printf("%s\n", lines[i].c_str());
@@ -4849,80 +4836,43 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
   };
   if (!(ui_mode == UIMode::MENU && (menu_edit_idx >= 0 || menu_long_edit))) {
       // Mode switch keys (disabled while editing in MENU)
-      if (c == 'r' || c == 'R') { cancel_status_edit(); enter_mode(UIMode::RX); switched = true; }
-      else if (c == 't' || c == 'T') { cancel_status_edit(); enter_mode(ui_mode == UIMode::TX ? UIMode::RX : UIMode::TX); switched = true; }
-      else if (c == 'b' || c == 'B') { cancel_status_edit(); enter_mode(ui_mode == UIMode::BAND ? UIMode::RX : UIMode::BAND); switched = true; }
-      else if (c == 'm' || c == 'M') {
-        cancel_status_edit();
-        if (ui_mode == UIMode::MENU) {
-          if (menu_page == 0) {
-            enter_mode(UIMode::RX);
-          } else {
-            menu_page = 0;
+      const ScreenNav nav = screen_nav_for_key(c, ui_mode, menu_page, perf_page);
+      switch (nav.action) {
+        case ScreenAction::Enter:
+          cancel_status_edit();
+          enter_mode(nav.screen);
+          switched = true;
+          break;
+        case ScreenAction::EnterMenuPage:
+          cancel_status_edit();
+          enter_mode(UIMode::MENU);
+          if (nav.page != menu_page) {
+            menu_page = nav.page;
             draw_menu_view();
           }
-        } else {
-          enter_mode(UIMode::MENU);
-        }
-        switched = true;
-      }
-      else if (c == 'n' || c == 'N') {
-        cancel_status_edit();
-        if (ui_mode == UIMode::MENU) {
-          if (menu_page == 1) {
-            enter_mode(UIMode::RX);
-          } else {
-            menu_page = 1;
-            draw_menu_view();
-          }
-        } else {
-          menu_page = 0;
-          enter_mode(UIMode::MENU);
-          if (menu_page < 2) menu_page++;  // one "." press
+          switched = true;
+          break;
+        case ScreenAction::SetMenuPage:
+          cancel_status_edit();
+          menu_page = nav.page;
           draw_menu_view();
-        }
-        switched = true;
-      }
-      else if (c == 'o' || c == 'O') {
-        cancel_status_edit();
-        if (ui_mode == UIMode::MENU) {
-          if (menu_page == 2) {
-            enter_mode(UIMode::RX);
-          } else {
-            menu_page = 2;
-            draw_menu_view();
-          }
-        } else {
-          menu_page = 0;
-          enter_mode(UIMode::MENU);
-          if (menu_page < 2) menu_page++;  // first "."
-          if (menu_page < 2) menu_page++;  // second "."
-          draw_menu_view();
-        }
-        switched = true;
-      }
-      else if (c == 'q' || c == 'Q') { cancel_status_edit(); enter_mode(ui_mode == UIMode::QSO ? UIMode::RX : UIMode::QSO); switched = true; }
-      else if (c == 'd' || c == 'D') { cancel_status_edit(); enter_mode(ui_mode == UIMode::DEBUG ? UIMode::RX : UIMode::DEBUG); switched = true; }
-      else if (c == 's' || c == 'S') { cancel_status_edit(); enter_mode(ui_mode == UIMode::STATUS ? UIMode::RX : UIMode::STATUS); switched = true; }
-      else if (c == 'g' || c == 'G') { cancel_status_edit(); enter_mode(ui_mode == UIMode::GPS ? UIMode::RX : UIMode::GPS); switched = true; }
-      else if (c == 'h' || c == 'H') { cancel_status_edit(); enter_mode(ui_mode == UIMode::BT ? UIMode::RX : UIMode::BT); switched = true; }
-      else if (c == 'p' || c == 'P') {
-        cancel_status_edit();
-        // Perf screen doubles as the log viewer's second page (perf_page):
-        // 'p' cycles RX -> stats -> log -> RX, matching how 'n'/'o' already
-        // cycle through MENU's own pages elsewhere in this block.
-        if (ui_mode == UIMode::PERF) {
-          if (perf_page == 0) {
-            perf_page = 1;
-            debug_page = g_debug_lines.empty() ? 0 : (int)((g_debug_lines.size() - 1) / 6);
-            ui_draw_list(g_debug_lines, debug_page, -1);
-          } else {
-            enter_mode(UIMode::RX);
-          }
-        } else {
-          enter_mode(UIMode::PERF);
-        }
-        switched = true;
+          switched = true;
+          break;
+        case ScreenAction::ShowPerfLog:
+          // PERF's second page is the debug log, opened at its last page.
+          cancel_status_edit();
+          perf_page = 1;
+          debug_page = g_debug_lines.empty() ? 0 : (int)((g_debug_lines.size() - 1) / 6);
+          ui_draw_list(g_debug_lines, debug_page, -1);
+          switched = true;
+          break;
+        case ScreenAction::LeaveToRx:
+          cancel_status_edit();
+          enter_mode(UIMode::RX);
+          switched = true;
+          break;
+        case ScreenAction::None:
+          break;
       }
     }
 
