@@ -73,14 +73,30 @@ viewer is `P`, second page.
 
 ### 0. Smoke — do this first, it gates the rest
 
+**Sync the clock before expecting any decode.** FT8 slots are 15 s and the decoder
+needs UTC within roughly a second; an unsynced clock produces an empty R list that looks exactly like a dead
+audio path. On a cold unit with no DS3231 backup, decodes will not appear no matter what else is right.
+
+There is an ordering constraint here that is easy to trip over: **phone sync needs the radio unplugged from
+USB-C** (BLE and USB host cannot both own that port), while **audio needs it plugged in**. So the clock step
+comes first, with the radio disconnected.
+
 | # | Do | Expect |
 |---|---|---|
-| 0.1 | Power on | Boots to the `R` screen, no crash loop |
-| 0.2 | Wait 1–2 slots | Decodes appear in the R list |
-| 0.3 | `S` then `2` | Audio starts; waterfall moves; status shows `Sync to QMX` |
-| 0.4 | Return to `R` | Countdown bar animates in step with the slot |
+| 0.1 | Power on, radio **not** connected | Boots to the `R` screen, no crash loop |
+| 0.2 | `S`, read the Time line suffix | ` R` = DS3231, ` G` = GPS, ` P` = phone. **No suffix means the clock is not from a trusted source** — continue to 0.3 |
+| 0.3 | If unsynced, `H` then `1` ("Start sync"), pair from nRF Connect / LightBlue to `Mini-FT8-<call>` | Sync completes; `S` Time line now reads correct UTC with a ` P` suffix |
+| 0.4 | Alternatives if no phone: `G` and wait for a GPS fix, or `S` `5` / `6` to set date and time by hand | Time line shows correct UTC (` G` for GPS; manual entry shows no suffix) |
+| 0.5 | Confirm the time against a known-good clock | Within about a second of UTC |
+| 0.6 | Connect the radio to USB-C | — |
+| 0.7 | `S` then `2` | Audio starts; waterfall moves; status shows `Sync to QMX` |
+| 0.8 | Return to `R`, wait 1–2 slots | Decodes appear; countdown bar animates in step with the slot |
 
-If 0.3 fails, stop — everything below assumes audio.
+If 0.7 fails, stop — everything below assumes audio. If 0.7 works but 0.8 shows nothing, **re-check 0.2**
+before suspecting the audio or decode path; an unsynced clock is the more common cause and looks identical.
+
+Once a DS3231 is fitted and set, it holds time across power cycles, so 0.2 should read ` R` on later boots
+and steps 0.3–0.5 can be skipped.
 
 ### 1. Screen reachability
 
@@ -193,7 +209,7 @@ For each row: press the key, confirm the effect, and confirm no *other* row chan
 | 6.4 | `D` on today's active log | Row shows `LOCK <file>`; the file is **not** deleted |
 | 6.5 | `G` | Live GPS telemetry: source, fix, satellites, UTC, grid |
 | 6.6 | `P` | Performance stats. Press `P` again for the debug log, `P` again returns to `R` |
-| 6.7 | `H` then `1` | BLE time sync starts (radio unplugged from USB-C first) |
+| 6.7 | `H` | Shows `1: Start sync`, and `2: Flash Sidekick` when a Nano is present. `1` runs the phone time sync (radio unplugged from USB-C first — see 0.3); `2` field-flashes the sidekick |
 
 ### 7. End-to-end
 
