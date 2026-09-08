@@ -981,33 +981,20 @@ static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid,
   char freq_str[16];
   snprintf(freq_str, sizeof(freq_str), "%.3f", freq_mhz);
 
-  std::string comment_expanded = expand_comment_macros(g_comment1);
-  const std::string my_grid4 = grid_ft8_4(g_grid);
-  // Build rst_sent/rst_rcvd fragments — omit when -99 (no data),
-  // matching DXFT8 reference behavior (ADIF.c omits when value is 0).
-  char rst_sent_buf[32] = "";
-  char rst_rcvd_buf[32] = "";
-  if (rst_sent != -99) {
-    snprintf(rst_sent_buf, sizeof(rst_sent_buf), "<rst_sent:%d>%d ",
-             (int)snprintf(nullptr, 0, "%d", rst_sent), rst_sent);
-  }
-  if (rst_rcvd != -99) {
-    snprintf(rst_rcvd_buf, sizeof(rst_rcvd_buf), "<rst_rcvd:%d>%d ",
-             (int)snprintf(nullptr, 0, "%d", rst_rcvd), rst_rcvd);
-  }
-  const char* mode_name = g_protocol->name;
-  char line[512];
-  snprintf(line, sizeof(line),
-           "<call:%zu>%s <gridsquare:%zu>%s <mode:%zu>%s<qso_date:8>%s <time_on:6>%s <freq:%zu>%s <station_callsign:%zu>%s <my_gridsquare:%zu>%s %s%s<comment:%zu>%s <eor>\n",
-           dxcall.size(), dxcall.c_str(),
-           dxgrid.size(), dxgrid.c_str(),
-           strlen(mode_name), mode_name,
-           date, time_on,
-           strlen(freq_str), freq_str,
-           g_call.size(), g_call.c_str(),
-           my_grid4.size(), my_grid4.c_str(),
-           rst_sent_buf, rst_rcvd_buf,
-           comment_expanded.size(), comment_expanded.c_str());
+  AdifLogFields fields;
+  fields.call             = dxcall;
+  fields.gridsquare       = dxgrid;          // omitted when the DX sent no grid
+  fields.mode             = g_protocol->name;
+  fields.qso_date         = date;
+  fields.time_on          = time_on;
+  fields.freq             = freq_str;
+  fields.station_callsign = g_call;
+  fields.my_gridsquare    = grid_ft8_4(g_grid);
+  fields.rst_sent         = rst_sent;        // kAdifNoReport (-99) omits
+  fields.rst_rcvd         = rst_rcvd;
+  fields.comment          = expand_comment_macros(g_comment1);
+  const std::string line = adif_format_log_record(fields);
+
   bool ok = storage_append_text_locked_path(path, line, "ADIF EXPORT\n<eoh>\n", true);
   if (!ok) {
     ESP_LOGW(TAG, "ADIF write failed: %s owner=%s",

@@ -118,6 +118,124 @@ static bool comment_for_call_time(const std::string& file,
     return false;
 }
 
+// --- logger record formatting ------------------------------------------
+
+static void expect_eq_str(const std::string& got, const std::string& want, const char* msg) {
+    if (got != want) {
+        fprintf(stderr, "FAIL: %s\n  got  [%s]\n  want [%s]\n", msg, got.c_str(), want.c_str());
+        ++g_fails;
+    }
+}
+
+static AdifLogFields sample_fields() {
+    AdifLogFields f;
+    f.call             = "KE4PLU";
+    f.gridsquare       = "EM58";
+    f.mode             = "FT8";
+    f.qso_date         = "20260908";
+    f.time_on          = "142600";
+    f.freq             = "14.074";
+    f.station_callsign = "KB2SLO";
+    f.my_gridsquare    = "EM10";
+    f.rst_sent         = 14;
+    f.rst_rcvd         = -9;
+    f.comment          = "MiniFT8";
+    return f;
+}
+
+static void test_log_record_byte_compatible() {
+    // Byte-for-byte against a real record from a field log (2026-09-08), so a
+    // refactor cannot silently change the on-disk layout. Note there is no
+    // space between <mode:3>FT8 and <qso_date:8>: that is how this logger has
+    // always written it, and merge keys depend on the record text.
+    const std::string want =
+        "<call:6>KE4PLU <gridsquare:4>EM58 <mode:3>FT8<qso_date:8>20260908 "
+        "<time_on:6>142600 <freq:6>14.074 <station_callsign:6>KB2SLO "
+        "<my_gridsquare:4>EM10 <rst_sent:2>14 <rst_rcvd:2>-9 <comment:7>MiniFT8 <eor>\n";
+    expect_eq_str(adif_format_log_record(sample_fields()), want, "log record byte layout");
+}
+
+static void test_log_record_omits_empty_grid() {
+    // REGRESSION: a QSO where the DX never sent a grid used to emit
+    // "<gridsquare:0> ". Observed twice in the 2026-09-08 field log (N2FSM,
+    // W4MAA). The field must be absent, not zero-length.
+    AdifLogFields f = sample_fields();
+    f.call = "N2FSM";
+    f.gridsquare.clear();
+    const std::string out = adif_format_log_record(f);
+    expect_true(out.find("<gridsquare:") == std::string::npos,
+                "REGRESSION: empty grid must omit the field, not write <gridsquare:0>");
+    expect_true(out.find("<call:5>N2FSM <mode:3>FT8") != std::string::npos,
+                "call runs straight into mode when the grid is absent");
+}
+
+static void test_log_record_omits_unset_fields() {
+    AdifLogFields f = sample_fields();
+    f.rst_sent = kAdifNoReport;
+    f.rst_rcvd = kAdifNoReport;
+    f.comment.clear();
+    f.my_gridsquare.clear();
+    const std::string out = adif_format_log_record(f);
+    expect_true(out.find("<rst_sent:") == std::string::npos, "unset rst_sent omitted");
+    expect_true(out.find("<rst_rcvd:") == std::string::npos, "unset rst_rcvd omitted");
+    expect_true(out.find("<comment:") == std::string::npos, "empty comment omitted");
+    expect_true(out.find("<my_gridsquare:") == std::string::npos, "empty my_gridsquare omitted");
+    // A report of 0 is a real value and must survive; only -99 means "none".
+    f.rst_sent = 0;
+    expect_true(adif_format_log_record(f).find("<rst_sent:1>0 ") != std::string::npos,
+                "rst_sent 0 is a real report, not 'unset'");
+}
+
+static void test_log_record_lengths_match_values() {
+    // The length prefix is where a hand-built record goes wrong silently.
+    // Check every field of a record with awkward values.
+    AdifLogFields f = sample_fields();
+    f.call        = "VU2OY";
+    f.gridsquare  = "MK68";
+    f.rst_sent    = -100;      // 4 chars including the sign
+    f.rst_rcvd    = 5;         // 1 char
+    f.comment     = "MiniFT8 QMX /P";
+    const std::string out = adif_format_log_record(f);
+    size_t pos = 0;
+    while ((pos = out.find('<', pos)) != std::string::npos) {
+        size_t colon = out.find(':', pos);
+        size_t close = out.find('>', pos);
+        if (colon == std::string::npos || close == std::string::npos || colon > close) break;
+        const std::string tag = out.substr(pos + 1, colon - pos - 1);
+        if (tag == "eor") break;
+        const int declared = atoi(out.substr(colon + 1, close - colon - 1).c_str());
+        // The value runs to the next '<'.
+        size_t next = out.find('<', close);
+        std::string value = out.substr(close + 1, next - close - 1);
+        while (!value.empty() && value.back() == ' ') value.pop_back();
+        if ((int)value.size() != declared) {
+            fprintf(stderr, "FAIL: <%s:%d> but value \"%s\" is %d bytes\n",
+                    tag.c_str(), declared, value.c_str(), (int)value.size());
+            ++g_fails;
+        }
+        pos = close;
+    }
+}
+
+static void test_log_record_roundtrips_through_parser() {
+    // The formatter and the parser must agree: a freshly written record has to
+    // survive adif_parse(), which is what copy-to-SD merge runs on.
+    const std::string doc = "ADIF EXPORT\n<eoh>\n" + adif_format_log_record(sample_fields());
+    std::vector<AdifRecord> recs;
+    expect_true(adif_parse(doc, recs), "formatted record parses");
+    expect_true(recs.size() == 1, "one record parsed");
+    if (recs.size() == 1) {
+        expect_true(!recs[0].key.empty(), "parsed record has a merge key");
+    }
+    // And the same for a record with the grid omitted.
+    AdifLogFields f = sample_fields();
+    f.gridsquare.clear();
+    const std::string doc2 = "ADIF EXPORT\n<eoh>\n" + adif_format_log_record(f);
+    std::vector<AdifRecord> recs2;
+    expect_true(adif_parse(doc2, recs2), "grid-less record parses");
+    expect_true(recs2.size() == 1, "one grid-less record parsed");
+}
+
 int main() {
     expect_true(adif_is_adi_filename("20260817.adi"), "daily adi");
     expect_true(adif_is_adi_filename("/storage/20260817.ADI"), "path + upper ext");
@@ -337,6 +455,16 @@ int main() {
         fprintf(stderr, "%d failure(s)\n", g_fails);
         return 1;
     }
-    printf("PASS: adif merge export and logger dedupe\n");
+    test_log_record_byte_compatible();
+    test_log_record_omits_empty_grid();
+    test_log_record_omits_unset_fields();
+    test_log_record_lengths_match_values();
+    test_log_record_roundtrips_through_parser();
+
+    if (g_fails) {
+        fprintf(stderr, "FAILED: %d check(s)\n", g_fails);
+        return 1;
+    }
+    printf("PASS: adif merge export, logger dedupe, and record formatting\n");
     return 0;
 }

@@ -52,6 +52,42 @@ AdifMergeStatus adif_merge_stdio(std::FILE* archive, std::FILE* incoming, std::F
 
 // In-memory same-call window for the live logger. Not used by merge/export.
 // Callers pass a normalized call (uppercase, <> stripped). Empty call is ignored.
+// ---------------------------------------------------------------------------
+// Logger record formatting
+//
+// One QSO as an ADIF record line, terminated by <eor> and a newline. Lives here
+// rather than inline in main.cpp so the field lengths and the omit rules are
+// host-testable -- a wrong <tag:N> length is invisible on the radio and only
+// shows up when someone imports the log months later.
+//
+// Omit rules: a field whose value is unknown is left out entirely rather than
+// written as a zero-length tag. main.cpp already did this for rst_sent and
+// rst_rcvd (citing DXFT8's ADIF.c) but not for gridsquare, so a QSO where the
+// DX never sent a grid produced "<gridsquare:0> ". Legal ADIF, but
+// inconsistent with the same record's own rst handling and picky importers
+// dislike it.
+// ---------------------------------------------------------------------------
+
+// -99 means "no report" and omits the field, matching the autoseq sentinel.
+inline constexpr int kAdifNoReport = -99;
+
+struct AdifLogFields {
+    std::string call;              // required
+    std::string gridsquare;        // omitted when empty
+    std::string mode;              // required
+    std::string qso_date;          // YYYYMMDD
+    std::string time_on;           // HHMMSS
+    std::string freq;              // MHz, e.g. "14.074"
+    std::string station_callsign;
+    std::string my_gridsquare;     // omitted when empty
+    int         rst_sent = kAdifNoReport;
+    int         rst_rcvd = kAdifNoReport;
+    std::string comment;           // omitted when empty
+};
+
+// Returns the record line including the trailing "<eor>\n".
+std::string adif_format_log_record(const AdifLogFields& f);
+
 static constexpr std::int64_t kAdifLoggerDedupeWindowMs = 10 * 60 * 1000LL;
 static constexpr std::size_t kAdifLoggerDedupeMaxEntries = 32;
 

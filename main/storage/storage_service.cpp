@@ -795,22 +795,6 @@ void storage_event_callback(tinyusb_msc_storage_handle_t,
     ESP_LOGI(TAG, "MSC storage event=%d mount=%d", event->id, event->mount_point);
 }
 
-esp_err_t set_storage_mount_point_locked(tinyusb_msc_mount_point_t mount_point) {
-    s_mount_transition_result = MountTransitionResult::NONE;
-    s_mount_transition_point = mount_point;
-
-    const esp_err_t err = tinyusb_msc_set_storage_mount_point(s_msc_storage, mount_point);
-    if (err != ESP_OK) {
-        return err;
-    }
-    if (s_mount_transition_result != MountTransitionResult::COMPLETE ||
-        s_mount_transition_point != mount_point) {
-        ESP_LOGE(TAG, "FATFS ownership transition to mount=%d was not confirmed",
-                 mount_point);
-        return ESP_FAIL;
-    }
-    return ESP_OK;
-}
 
 }  // namespace
 

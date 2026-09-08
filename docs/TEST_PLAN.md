@@ -32,7 +32,7 @@ surfaced in CI. The commands below are the full local set.
 | `host_test` | Autoseq engine: JSON-driven QSO, Field Day, beacon, reincarnation, deadlock, freetext scenarios |
 | `host_test_unique_callsign` | Unique-callsign touch dedupe and promote |
 | `host_test_beacon_cancel` | Beacon-off cancels a queued CQ |
-| `host_test_adif_merge` | ADIF merge export and the logger's 10-minute dedupe window |
+| `host_test_adif_merge` | ADIF merge export, the logger's 10-minute dedupe window, and record formatting: byte-for-byte layout against a real field record, the omit rules for empty grid / unset reports / empty comment, `<tag:N>` lengths matching their values, and a round-trip back through `adif_parse()` |
 | `host_test_station` | `Station.txt` parse / serialize round-trip |
 | `host_test_station_save_queue` | Save coalescing off the slot loop |
 | `host_test_qso_browse` | Daily `.adi` filter, record page, list lines |
@@ -224,6 +224,7 @@ For each row: press the key, confirm the effect, and confirm no *other* row chan
 |---|---|---|
 | 7.1 | Complete one full QSO | Sequence runs to signoff without manual help |
 | 7.2 | `Q` | The QSO is in today's `.adi` and readable |
+| 7.5 | Work a station that never sends a grid, then read the `.adi` | The record has **no** `gridsquare` field at all — not `<gridsquare:0>`. Two such QSOs appeared in the 2026-09-08 log (N2FSM, W4MAA) |
 | 7.3 | `O` `5` | Copy to SD reports `Copied OK`; files land on the card |
 | 7.4 | Reboot | Call, grid, band, and every menu toggle survived |
 
