@@ -3,7 +3,6 @@
 #include "ft8_audio_pipeline.h"
 #include "resample.h"
 #include "dds_q15.h"
-#include "feature_flags.h"
 #include "protocol.h"
 
 #include "freertos/FreeRTOS.h"
@@ -689,7 +688,6 @@ static void uac_lib_task(void* arg) {
                     // FT4's decoder needs a larger stack than FT8. Keep the
                     // FT8 stack static and allocate the FT4 stack on demand.
                     if (s_stream_task_handle == NULL) {
-#if ENABLE_FT4
                         if (g_protocol == &kProtocolFT4) {
                             BaseType_t cr = xTaskCreatePinnedToCore(
                                 stream_uac_task, "stream_uac",
@@ -702,27 +700,24 @@ static void uac_lib_task(void* arg) {
                                 s_stream_task_handle = NULL;
                             }
                         } else {
-#endif
-                        // FT8 uses the existing static 8 KB stack.
-                        static StackType_t  s_stream_task_stack[8192 / sizeof(StackType_t)];
-                        static StaticTask_t s_stream_task_tcb;
-                        size_t free_before = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
-                        size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
-                        ESP_LOGI(TAG, "Pre-task-create heap: free=%u largest=%u",
-                                 (unsigned)free_before, (unsigned)largest);
-                        s_stream_task_handle = xTaskCreateStaticPinnedToCore(
-                            stream_uac_task, "stream_uac",
-                            8192 / sizeof(StackType_t), NULL,
-                            UAC_STREAM_TASK_PRIORITY,
-                            s_stream_task_stack, &s_stream_task_tcb, 1);
-                        if (!s_stream_task_handle) {
-                            ESP_LOGE(TAG, "stream_uac_task create FAILED "
-                                     "(static FT8) free=%u largest=%u",
+                            // FT8 uses the existing static 8 KB stack.
+                            static StackType_t  s_stream_task_stack[8192 / sizeof(StackType_t)];
+                            static StaticTask_t s_stream_task_tcb;
+                            size_t free_before = heap_caps_get_free_size(MALLOC_CAP_DEFAULT);
+                            size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+                            ESP_LOGI(TAG, "Pre-task-create heap: free=%u largest=%u",
                                      (unsigned)free_before, (unsigned)largest);
+                            s_stream_task_handle = xTaskCreateStaticPinnedToCore(
+                                stream_uac_task, "stream_uac",
+                                8192 / sizeof(StackType_t), NULL,
+                                UAC_STREAM_TASK_PRIORITY,
+                                s_stream_task_stack, &s_stream_task_tcb, 1);
+                            if (!s_stream_task_handle) {
+                                ESP_LOGE(TAG, "stream_uac_task create FAILED "
+                                         "(static FT8) free=%u largest=%u",
+                                         (unsigned)free_before, (unsigned)largest);
+                            }
                         }
-#if ENABLE_FT4
-                        }
-#endif
                     }
 
                 } else if (evt.driver.event == UAC_HOST_DRIVER_EVENT_TX_CONNECTED) {

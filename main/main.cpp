@@ -77,7 +77,6 @@ extern "C" {
 
 static const char* STATION_FILE = "Station.txt";
 
-#include "feature_flags.h"
 #include "protocol.h"
 
 // Active protocol for this boot session — set once by load_station_data() from
@@ -625,9 +624,7 @@ static int menu_edit_idx = -1;
 // Tracks the protocol mode that has been saved to Station.txt and will take
 // effect on next reboot.  Initialised from g_protocol after load_station_data().
 // Differs from g_protocol when the user has toggled Mode but not yet rebooted.
-#if ENABLE_FT4
 static bool g_protocol_pending_ft4 = false;
-#endif
 static std::string menu_edit_buf;
 static int menu_cursor_edit_original = 0;
 static bool menu_long_edit = false;
@@ -3581,7 +3578,6 @@ static void draw_menu_view() {
   lines.push_back(std::string("Radio:") + radio_profile_name(g_radio));
   lines.push_back(std::string("IgnoreList:") + head_trim(g_ignore_prefix_text, 10));
   lines.push_back(std::string("C:") + head_trim(expand_comment1(), 16));
-#if ENABLE_FT4
   {
     // Show the saved (pending) mode.  Add '*' if it differs from the running
     // boot mode so the user knows a reboot is needed to apply the change.
@@ -3589,9 +3585,6 @@ static void draw_menu_view() {
     bool needs_reboot = g_protocol_pending_ft4 != (g_protocol == &kProtocolFT4);
     lines.push_back(std::string("Mode: ") + pending_name + (needs_reboot ? "*" : ""));
   }
-#else
-  lines.push_back("USB:Manual S->2");
-#endif
 
   // Page 2 content (index 12+)
   lines.push_back(std::string("RxTxLog:") + (g_rxtx_log ? "ON" : "OFF"));
@@ -4491,15 +4484,9 @@ static void station_copy_bands_from_runtime(StationSettings* s, bool ft4_keys) {
 
 static void station_fill_from_globals(StationSettings* s) {
   station_settings_init(s);
-#if ENABLE_FT4
   const bool ft4_keys = (g_protocol == &kProtocolFT4);
   s->serialize_ft4_band_keys = ft4_keys;
   s->protocol_ft4 = g_protocol_pending_ft4;
-#else
-  const bool ft4_keys = false;
-  s->serialize_ft4_band_keys = false;
-  s->protocol_ft4 = false;
-#endif
   station_copy_bands_from_runtime(s, ft4_keys);
   s->offset_hz = g_offset_hz;
   s->band_sel = g_band_sel;
@@ -4521,7 +4508,6 @@ static void station_fill_from_globals(StationSettings* s) {
 }
 
 static void station_apply_to_globals(const StationSettings& s) {
-#if ENABLE_FT4
   const bool use_ft4_bands = s.protocol_ft4;
   if (use_ft4_bands) {
     g_protocol = &kProtocolFT4;
@@ -4532,9 +4518,6 @@ static void station_apply_to_globals(const StationSettings& s) {
     };
     ESP_LOGI(TAG, "Station.txt: protocol_mode=FT4 — reset bands to FT4 defaults");
   }
-#else
-  const bool use_ft4_bands = false;
-#endif
   const bool* freq_set = use_ft4_bands ? s.ft4_band_freq_set : s.band_freq_set;
   const float* freqs = use_ft4_bands ? s.ft4_band_freq : s.band_freq;
   for (int i = 0; i < kStationBandCount; ++i) {
@@ -4611,9 +4594,7 @@ static void load_station_data() {
   rebuild_active_bands();
   rebuild_ignore_prefixes();
   g_beacon = BeaconMode::OFF;
-#if ENABLE_FT4
   g_protocol_pending_ft4 = (g_protocol == &kProtocolFT4);
-#endif
 }
 
 void save_station_data() {
@@ -5907,14 +5888,12 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
                   menu_long_backup = g_comment1;
                   draw_menu_view();
                 } else if (c == '6') {
-#if ENABLE_FT4
                   // Toggle the pending protocol mode (FT8 <-> FT4).
                   // g_protocol stays as-is for this boot session; the change
                   // takes effect on next reboot.
                   g_protocol_pending_ft4 = !g_protocol_pending_ft4;
                   save_station_data();
                   draw_menu_view();
-#endif
                 }
             } else if (menu_page == 2) {
               if (c == '1') {
