@@ -34,6 +34,16 @@ Update `ROADMAP.md` in the **same turn** as the work:
 
 Each row is an ID plus a name. Do not mix a feature change with an unrelated fix in the same commit.
 
+**Fix defects in the slice.** A defect found while working in an area gets fixed in that slice, not filed for later. It still gets a `ROADMAP.md` row, but the row records what was wrong and why — it is not a promise to act later. Single-operator workflow: the reasons to defer (protecting someone else's sprint, batching context switches across a team) do not apply, and deferred fixes here have a poor track record of ever landing.
+
+Judge by **verifiability**, not size, and say which of the three applied:
+
+1. **You can prove it** — host test, dead-code proof (linker map plus `nm`, byte-identical binary), or the compiler. Fix it and prove it in the same commit.
+2. **Only the operator can prove it** — anything needing the radio. Fix it and add the bench check to [TEST_PLAN.md](TEST_PLAN.md) **Pending** with the exact keys and expected result.
+3. **Neither can, yet** — an unreproducible hardware or timing bug. Prefer a change whose **worst case is no worse than current behaviour**, and ship the logging that makes the next occurrence diagnosable. Never let an unverified fix blend in with verified work: say plainly, in the commit and in chat, that it is unproven.
+
+An unproven fix is still worth making. Pretending it is proven is not.
+
 **Test plan matches the work too.** [TEST_PLAN.md](TEST_PLAN.md) is the same kind of living file as the roadmap, and gets updated in the **same turn** as the work:
 
 - Added or changed a host-testable unit (parse / format / policy) → add or update its row under `host_mock` coverage, in the same commit as the code.

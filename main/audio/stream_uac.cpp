@@ -22,6 +22,7 @@
 #include "usb/usb_types_ch9.h"
 
 #include <cstring>
+#include <string>
 #include <cmath>
 #include <inttypes.h>
 
@@ -87,6 +88,19 @@ static cdc_acm_dev_hdl_t s_cdc_handle = NULL;
 static TaskHandle_t s_usb_task_handle = NULL;
 static TaskHandle_t s_uac_task_handle = NULL;
 static volatile bool s_host_installed = false;
+// Set by usb_lib_task when usb_host_install() fails and the task deletes
+// itself. Without it, the task's own "s_usb_task_handle = NULL" can be
+// overwritten by the xTaskCreate that spawned it (the task can run and fail
+// before xTaskCreate returns), leaving handle != NULL with the host not
+// installed -- a state uac_host_ensure_started() could never leave, so one
+// transient failure disabled audio until a power cycle. B36.
+static volatile bool s_host_install_failed = false;
+// The esp_err_t from the failed usb_host_install(), recorded by the task and
+// reported by whoever calls uac_host_ensure_started(). The task must not call
+// debug_log_line_public() itself: that appends to an unlocked std::vector owned
+// by the main loop, and doing it from another task risks a realloc race in
+// exactly the error path this is meant to make survivable.
+static volatile int s_host_install_err = 0;
 static volatile bool s_host_stop_requested = false;
 
 // Speaker (UAC OUT) is captured and fully allocated during enumeration.
@@ -481,6 +495,8 @@ static void usb_lib_task(void* arg) {
     esp_err_t err = usb_host_install(&host_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to install USB host: %s", esp_err_to_name(err));
+        s_host_install_err = (int)err;  // reported by ensure_started(), not here
+        s_host_install_failed = true;   // let ensure_started() retry (B36)
         s_usb_task_handle = NULL;
         vTaskDelete(NULL);
         return;
@@ -916,15 +932,45 @@ bool uac_is_streaming(void) {
     return s_state == UAC_STATE_STREAMING && s_mic_handle != NULL;
 }
 
+// Wait up to ~1 s for the host to come up, reporting how long it took so a
+// marginal install is distinguishable from one that never happened.
+static bool uac_host_wait_installed(const char* where) {
+    const int64_t t0 = rtc_now_ms();
+    for (int i = 0; i < 50 && !s_host_installed; ++i) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    const int64_t waited = rtc_now_ms() - t0;
+    if (s_host_installed) {
+        if (waited > 100) {
+            ESP_LOGW(TAG, "USB host install slow: %lldms (%s)", (long long)waited, where);
+            debug_log_line_public("USB host slow " + std::to_string((long long)waited) + "ms");
+        }
+        return true;
+    }
+    ESP_LOGE(TAG, "USB host did not install within %lldms (%s)", (long long)waited, where);
+    debug_log_line_public(std::string("USB host timeout (") + where + ")");
+    return false;
+}
+
 esp_err_t uac_host_ensure_started(void) {
+    // A previous attempt failed to install and its task is gone. Clear the
+    // stale handle so the create path below runs again instead of waiting on
+    // a task that no longer exists. Before B36 this state was terminal.
+    if (s_host_install_failed) {
+        const esp_err_t prev = (esp_err_t)s_host_install_err;
+        s_host_install_failed = false;
+        s_host_install_err = 0;
+        s_usb_task_handle = NULL;
+        ESP_LOGW(TAG, "Retrying USB host install after %s", esp_err_to_name(prev));
+        debug_log_line_public(std::string("USB host retry after ") + esp_err_to_name(prev));
+    }
+
     if (s_host_installed && s_usb_task_handle != NULL) {
         return ESP_OK;
     }
     if (s_usb_task_handle != NULL && !s_host_installed) {
-        for (int i = 0; i < 50 && !s_host_installed; ++i) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-        return s_host_installed ? ESP_OK : ESP_ERR_TIMEOUT;
+        // Task is up but has not installed yet -- someone else started it.
+        return uac_host_wait_installed("joining") ? ESP_OK : ESP_ERR_TIMEOUT;
     }
 
     s_host_stop_requested = false;
@@ -934,22 +980,27 @@ esp_err_t uac_host_ensure_started(void) {
                                              &s_usb_task_handle, 0);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create USB task");
+        debug_log_line_public("USB task create failed");
         s_usb_task_handle = NULL;
         return ESP_FAIL;
     }
-    for (int i = 0; i < 50 && !s_host_installed; ++i) {
-        vTaskDelay(pdMS_TO_TICKS(20));
+    // The task may have already failed and NULLed the handle before
+    // xTaskCreate returned; the flag, not the handle, is what tells us.
+    if (s_host_install_failed) {
+        const esp_err_t why = (esp_err_t)s_host_install_err;
+        s_host_install_failed = false;
+        s_host_install_err = 0;
+        s_usb_task_handle = NULL;
+        debug_log_line_public(std::string("USB host install: ") + esp_err_to_name(why));
+        return ESP_FAIL;
     }
-    if (!s_host_installed) {
-        ESP_LOGE(TAG, "USB host did not install");
-        return ESP_ERR_TIMEOUT;
-    }
-    return ESP_OK;
+    return uac_host_wait_installed("starting") ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 bool uac_start_with_profile(uac_stream_profile_t profile) {
     if (s_state != UAC_STATE_IDLE) {
         ESP_LOGW(TAG, "UAC already started");
+        debug_log_line_public("UAC already started");
         return false;
     }
 
@@ -973,6 +1024,7 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
     s_event_queue = xQueueCreate(10, sizeof(uac_event_t));
     if (!s_event_queue) {
         ESP_LOGE(TAG, "Failed to create event queue");
+        debug_log_line_public("UAC event queue failed");
         return false;
     }
 
@@ -982,6 +1034,7 @@ bool uac_start_with_profile(uac_stream_profile_t profile) {
                                               &s_uac_task_handle, 0);
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UAC task");
+        debug_log_line_public("UAC task create failed");
         vQueueDelete(s_event_queue);
         s_event_queue = NULL;
         return false;

@@ -95,6 +95,7 @@ comes first, with the radio disconnected.
 | 0.6 | Connect the radio to USB-C | — |
 | 0.7 | `S` then `2` | Audio starts; waterfall moves; status shows `Sync to QMX` |
 | 0.8 | Return to `R`, wait 1–2 slots | Decodes appear; countdown bar animates in step with the slot |
+| 0.9 | **If `S`→`2` ever fails, press it again before power-cycling** | It must be able to succeed on a retry. Before B36 one failed USB host install was terminal for the boot: `Audio start fail` repeated until a power cycle. The `D` log now names the reason — `USB host retry after …`, `USB host timeout (…)`, `USB host install: …`, `UAC already started` — instead of only `Audio start fail` |
 
 If 0.7 fails, stop — everything below assumes audio. If 0.7 works but 0.8 shows nothing, **re-check 0.2**
 before suspecting the audio or decode path; an unsynced clock is the more common cause and looks identical.
@@ -245,6 +246,7 @@ commits below changed live code.
 | B30 (core_api removal) | R-tap a decode to reply; backtick cancel during TX; drop a QSO from the `T` list | owed |
 | B31 (extern audit) | none — linkage and visibility only, byte-identical binary | n/a |
 | B35 (menu long edit) | MENU P1 `3` and P2 `4`/`5`: each long editor saves on Enter, discards on `` ` ``, and applies its own case rule. Character rules are host-tested; what is operator-only is that the long-edit screen paints and the value reaches `Station.txt` | owed |
+| B36 (USB host retry) | 0.9, and opportunistically: if `S`→`2` fails, does a second press recover it without a reboot? **This fix is unproven** — the race is not reproducible on the bench, so the field is the only evidence available | owed |
 | B34 (date/time editor) | Section 5 rows 5.5-5.11. The validation and cursor rules are host-tested now; what is operator-only is that the STATUS screen redraws the edited line correctly and the RTC actually takes a valid setting | owed |
 | B33 (screen registry) | Section 1 (reachability) plus the M/N/O paging rows in section 2. Navigation rules are host-tested now; what is operator-only is whether each screen paints the right thing when reached | owed |
 | B32 (menu table) | **All of section 2**, every item on every page. Layout, row order and the edit filter are now host-tested; what remains operator-only is whether each label sits with its own action | owed |
