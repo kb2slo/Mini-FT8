@@ -678,7 +678,6 @@ static bool storage_append_text_locked_path(const std::string& path,
 static bool storage_write_cabrillo_fd_entry(const std::string& mycall,
                                              const std::string& location,
                                              const std::string& qso_line);
-#if !MIC_PROBE_APP
 void log_heap(const char* tag) {
   size_t free_sz = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   size_t min_free = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
@@ -765,11 +764,6 @@ static bool log_cabrillo_fd_entry(const std::string& dxcall, const std::string& 
   return storage_write_cabrillo_fd_entry(g_call, location, qso_line);
 }
 
-#else
-static inline void log_heap(const char*) {}
-static inline void log_mem_caps(const char*) {}
-static bool log_cabrillo_fd_entry(const std::string&, const std::string&) { return true; }
-#endif
 
 static bool storage_append_text_locked_path(const std::string& path,
                                              const std::string& line,
@@ -782,14 +776,7 @@ static bool storage_append_text_locked_path(const std::string& path,
 static bool storage_write_cabrillo_fd_entry(const std::string& mycall,
                                             const std::string& location,
                                             const std::string& qso_line) {
-#if !MIC_PROBE_APP
   return storage_file_append_cabrillo(mycall, location, qso_line);
-#else
-  (void)mycall;
-  (void)location;
-  (void)qso_line;
-  return true;
-#endif
 }
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter) {
@@ -1125,12 +1112,7 @@ static void host_write_str(const std::string& s) {
 // keystroke arrives over the console UART, dump the text that would
 // have been displayed on the Cardputer LCD to the same UART TX, so
 // a terminal shows the current page contents.
-//
-// To disable: comment out the `#define UART_SCREEN_MIRROR 1` below.
 // ================================================================
-#define UART_SCREEN_MIRROR 1
-
-#if UART_SCREEN_MIRROR
 static volatile bool g_uart_mirror_pending = false;
 
 static const char* uart_mirror_mode_label(UIMode mode) {
@@ -1167,7 +1149,6 @@ static void uart_mirror_dump_screen() {
   printf("--------------------\n");
   fflush(stdout);
 }
-#endif  // UART_SCREEN_MIRROR
 
 static void set_gpio_floating_input(gpio_num_t pin) {
   gpio_reset_pin(pin);
@@ -1190,9 +1171,7 @@ static void apply_debug_uart_pin_policy() {
   } else {
     if (s_key_inject_queue) xQueueReset(s_key_inject_queue);
     uart_inject_last_was_cr = false;
-#if UART_SCREEN_MIRROR
     g_uart_mirror_pending = false;
-#endif
     set_gpio_floating_input(tx);
     set_gpio_floating_input(rx);
     const bool changed = g_debug_uart_pins_enabled;
@@ -4964,13 +4943,10 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       if (xQueueReceive(s_key_inject_queue, &injected, 0) == pdTRUE) {
         c = injected;
         last_key = 0;  // Reset debounce so same-key injection works
-#if UART_SCREEN_MIRROR
         g_uart_mirror_pending = true;  // dump screen at top of next iteration
-#endif
       }
     }
 
-#if UART_SCREEN_MIRROR
     // Dump screen on the iteration AFTER a UART keypress was consumed,
     // once the UI has had a chance to process the key and redraw.
     static bool s_uart_mirror_fire = false;
@@ -4985,7 +4961,6 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       g_uart_mirror_pending = false;
       s_uart_mirror_fire = true;  // fire on the next iteration
     }
-#endif
     gps_runtime_tick();
     TickType_t now_ticks = xTaskGetTickCount();
     if ((now_ticks - g_app_core0_stack_last_sample_tick) >= pdMS_TO_TICKS(1000)) {
