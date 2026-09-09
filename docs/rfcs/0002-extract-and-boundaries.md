@@ -87,11 +87,13 @@ Third-party source we did not write:
 - Pin is the git submodule `components/ft8_lib/vendor` → [kb2slo/ft8_lib](https://github.com/kb2slo/ft8_lib) (fork of [wcheng95/ft8_lib](https://github.com/wcheng95/ft8_lib) / [kgoba/ft8_lib](https://github.com/kgoba/ft8_lib)). Clone Mini-FT8 with `--recurse-submodules`.
 - Mini-FT8 wrappers only, in `components/ft8_lib/` (not in the submodule): `common/fft_wrapper`, `common/monitor` (static BSS arenas), IDF `CMakeLists.txt`, `common/stpcpy_compat` (Windows host only). Do not compile `vendor/common/monitor.c`.
 - Protocol patches live as rebaseable commits on `kb2slo/ft8_lib`: Wei’s Field Day (`d8a41e6`, `bb3d94d`, also [kgoba#54](https://github.com/kgoba/ft8_lib/pull/54)) and DXpedition type 0.1 (`5d095f4`). Nonstd is already upstream (`9fec6ca`). Do not push DXpedition onto Wei’s `master` or onto #54.
+- **Wei patches his in-tree copy, not `wcheng95/ft8_lib`.** That repo is stale at `bb3d94d` (2026-03) and fully absorbed here; his live protocol work lands in Mini-FT8 `upstream`’s `components/ft8_lib/ft8/`. Because his tree has no submodule and ours no in-tree copy, **merging `upstream/main` cannot deliver a protocol fix** — it resurrects a `ft8/message.c` that neither build compiles and leaves the pin untouched. Port by hand. B41 is the worked example.
 - Contribute back only Karlis-shaped fixes (correctness, protocol). Never “make it compile on ESP32-S3.”
 - Do not clang-format or re-indent that tree.
 - **Bump:**
   1. `git -C components/ft8_lib/vendor fetch origin`
   2. `git -C components/ft8_lib/vendor fetch https://github.com/kgoba/ft8_lib.git master`
+  2b. Diff Wei’s in-tree `components/ft8_lib/ft8/` against the pin (see `docs/README.md` “Upstream pin watch”) and port anything of his by hand.
   3. 3-way merge kgoba into the fork (`git -C components/ft8_lib/vendor merge FETCH_HEAD`). Keep protocol commits rebaseable; do not fold in ESP glue.
   4. Push the fork, then move the submodule pin (`git add components/ft8_lib/vendor`).
   5. `tx_e2e` golden RX/encode must be green before the pin moves. Goldens fail → no bump.

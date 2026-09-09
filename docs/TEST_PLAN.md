@@ -20,7 +20,7 @@ surfaced in CI. The commands below are the full local set.
 | Harness | Command | Covers |
 | --- | --- | --- |
 | `host_mock` (20 binaries) | `make -C host_mock && host_mock/host_test*` | See table below. CI globs the binaries rather than listing them, so a new test runs as soon as the Makefile builds it |
-| `tests/tx_e2e` | `cmake -S tests/tx_e2e -B tests/tx_e2e/build && cmake --build tests/tx_e2e/build -j4 && (cd tests/tx_e2e/build && ctest --output-on-failure)` | L1 encoder, TX state machine, poll timing, timer isolation, golden WAV RX decode, TA format — 6 tests |
+| `tests/tx_e2e` | `cmake -S tests/tx_e2e -B tests/tx_e2e/build && cmake --build tests/tx_e2e/build -j4 && (cd tests/tx_e2e/build && ctest --output-on-failure)` | L1 encoder, TX state machine, poll timing, timer isolation, golden WAV RX decode, telemetry decode overflow, TA format — 7 tests |
 | Firmware build | `idf.py build` | `main/` under `-Werror`; merged image; must be **warning-free** |
 | Sidekick build | CI job **Sidekick (ESP32-C6)** | Companion firmware compiles and stages |
 | README audit | CI job **README audit** | A PR removing a `UIMode` enumerator or changing a key binding under `main/` must touch `README.md` |

@@ -114,7 +114,9 @@ The grooming *workflow* is still TBD. Until then:
 
 Once per session start, same rules as grooming (once, do not interrupt coding). Network fail → skip.
 
-`ft8_lib` only ([RFC 0002](rfcs/0002-extract-and-boundaries.md) §6). Do not watch `wcheng95/ft8_lib` or Mini-FT8 `upstream`. GitHub **Sync fork** on `kb2slo/ft8_lib` is off (parent is Wei, not Karlis).
+`ft8_lib` only ([RFC 0002](rfcs/0002-extract-and-boundaries.md) §6) — not Mini-FT8 `upstream`’s firmware, which is not ours to track. But the pin has **two** parents and both need watching. GitHub **Sync fork** on `kb2slo/ft8_lib` is off (parent is Wei, not Karlis).
+
+**Karlis** — protocol upstream:
 
 ```bash
 git ls-remote https://github.com/kgoba/ft8_lib.git refs/heads/master
@@ -122,6 +124,20 @@ git -C components/ft8_lib/vendor merge-base --is-ancestor <kgoba-sha> HEAD
 ```
 
 If the submodule is missing, skip. If Karlis’s SHA **is** an ancestor of the pin, we already have him. If it is **not**, he moved.
+
+**Wei** — the other parent. Do **not** watch `wcheng95/ft8_lib`: that repo is stale at `bb3d94d` (2026-03) and already fully absorbed into the pin. His protocol fixes land in Mini-FT8’s *in-tree* `components/ft8_lib/ft8/` instead, and reach us only by hand — his tree has no submodule, so merging `upstream/main` cannot move our pin:
+
+```bash
+git fetch upstream
+for f in $(git ls-tree -r --name-only upstream/main components/ft8_lib/ft8/ | sed 's|.*/ft8/||'); do
+  diff -q <(git show upstream/main:components/ft8_lib/ft8/$f) \
+          <(git -C components/ft8_lib/vendor show HEAD:ft8/$f) >/dev/null 2>&1 || echo "DIFFERS $f"
+done
+```
+
+Expect `message.c` to differ by our own `stpcpy_compat` removal (`f211146`); anything else is his.
+
+**Why both.** Written 2026-09-08, after this watch missed a live stack overflow (B41): Karlis’s master has not moved since **2025-08-23**, while the one protocol fix worth having in that window came from Wei. Watching only Karlis watches the quiet parent.
 
 Then draft a Backlog row in chat. Do not commit it yet. Do not merge, bump the submodule, or open a kgoba PR in that turn. Done-when: written take (sync now / wait / drop). Sync uses RFC 0002 §6 and is a separate Now. Goldens gate the pin. If a row for that SHA already exists, remind; do not duplicate.
 
