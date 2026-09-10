@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -27,32 +28,61 @@ bool sidekick_flasher_embedded_version(char* out, size_t out_size);
 
 typedef enum {
     SIDEKICK_FLASHER_STATUS_UNKNOWN = 0,    // connect/read itself failed
-    SIDEKICK_FLASHER_STATUS_NOT_INSTALLED,  // esp_app_desc project_name != "sidekick"
+    SIDEKICK_FLASHER_STATUS_FOREIGN,        // chip matches, but the app is not ours (or unreadable)
+    SIDEKICK_FLASHER_STATUS_OUTDATED,       // ours, version differs from the embedded build
     SIDEKICK_FLASHER_STATUS_UP_TO_DATE,     // project_name + version both match embedded build
-    SIDEKICK_FLASHER_STATUS_UPDATED,        // was NOT_INSTALLED or a different version; now flashed
+    SIDEKICK_FLASHER_STATUS_UPDATED,        // was OUTDATED or an authorized FOREIGN; now flashed
 } sidekick_flasher_status_t;
 
+// What a probe or a flash found on the other end. `project_name` and
+// `version` are the connected device's own esp_app_desc_t fields, empty when
+// they could not be read; `chip_id` is the ESP image chip id the ROM reported.
+typedef struct {
+    sidekick_flasher_status_t status;
+    char project_name[33];
+    char version[33];
+    int  chip_id;
+} sidekick_flasher_info_t;
+
+// Connect, verify the chip, read the identity, disconnect. Never writes.
+//
+// This exists because the chip family stopped being an identity check. With
+// the NanoC6 it was one: nothing else an operator would plug into that port
+// is a C6, so "it is a C6" was very nearly "it is the sidekick". The AtomS3
+// Lite is an ESP32-S3, and so is the Cardputer ADV itself, and so is every
+// other S3 board on the bench -- so the flasher can no longer tell from the
+// chip alone whether it is looking at a sidekick or at something the
+// operator would very much rather keep. Probe first, name what is there, and
+// let the operator decide.
+esp_err_t sidekick_flasher_probe(uint16_t vid, uint16_t pid,
+                                 sidekick_flasher_info_t* out_info,
+                                 char* out_diag, size_t out_diag_size);
+
 // Connects once (ROM bootloader over USB-C — this resets whatever's
-// currently running on the Nano, same as any esp_loader session), checks
-// the ROM-reported chip family is actually ESP32-C6 (refuses to write
-// otherwise — VID/PID-based presence detection is a heuristic and can
-// false-positive on another Espressif-VID device), then reads the
-// esp_app_desc_t off its flash and compares project_name/version against
-// the embedded sidekick build (RFC 0001 §5.2b) before deciding whether to
-// write anything:
-//   - chip family isn't ESP32-C6             -> refuse (UNKNOWN, no write)
-//   - not recognized as "sidekick"          -> flash (NOT_INSTALLED path)
-//   - recognized, version differs           -> flash (update path)
-//   - recognized, version matches           -> skip the write entirely
-// out_status and out_remote_version (if non-NULL; pass a buffer of at least
-// 33 bytes) report what was found, even on the skip-write path.
+// currently running on the target, same as any esp_loader session), checks
+// the ROM-reported chip against the embedded payload's own chip id, then
+// reads the esp_app_desc_t off its flash and compares project_name/version
+// against the embedded sidekick build (RFC 0001 §5.2b) before deciding
+// whether to write anything:
+//   - chip does not match the payload    -> refuse (UNKNOWN, no write)
+//   - recognized, version matches        -> skip the write entirely
+//   - recognized, version differs        -> flash (OUTDATED -> UPDATED)
+//   - not recognized as "sidekick"       -> FOREIGN, and written ONLY when
+//                                           allow_overwrite is true
+// `allow_overwrite` is the operator's answer to "this is not a sidekick --
+// overwrite it anyway?", and must come from an actual prompt that named
+// what was found. Passing true unconditionally reinstates the hazard this
+// guard exists to close: a factory part and someone's own S3 board are
+// indistinguishable to everything except the identity read.
+// out_info (if non-NULL) reports what was found, even on the skip-write and
+// refused paths.
 // Caller must have already parked any other USB host client
 // (usb_c_presence_yield_device()) and must not touch the USB host from
 // another task while this runs. Blocking; runs on the calling task.
 // Field-only — real hardware required, cannot be host-tested.
-esp_err_t sidekick_flasher_flash_embedded(uint16_t vid, uint16_t pid,
-                                       sidekick_flasher_status_t* out_status,
-                                       char* out_remote_version, size_t out_remote_version_size);
+esp_err_t sidekick_flasher_flash_embedded(uint16_t vid, uint16_t pid, bool allow_overwrite,
+                                       sidekick_flasher_info_t* out_info,
+                                       char* out_diag, size_t out_diag_size);
 
 // PORTA UART variant (RFC 0001 §5.2c "Update flash over PORTA") — same
 // read-then-decide/write logic and out_status/out_remote_version contract
@@ -102,9 +132,8 @@ esp_err_t sidekick_flasher_flash_embedded(uint16_t vid, uint16_t pid,
 // row budget) reports which stage failed — PORTA has no serial console
 // fallback, so unlike a bring-up aid this is a lasting diagnostic.
 esp_err_t sidekick_flasher_flash_embedded_uart(uart_port_t uart, gpio_num_t tx_pin, gpio_num_t rx_pin,
-                                            uint32_t baud_rate,
-                                            sidekick_flasher_status_t* out_status,
-                                            char* out_remote_version, size_t out_remote_version_size,
+                                            uint32_t baud_rate, bool allow_overwrite,
+                                            sidekick_flasher_info_t* out_info,
                                             char* out_diag, size_t out_diag_size);
 
 #ifdef __cplusplus

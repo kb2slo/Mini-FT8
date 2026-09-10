@@ -186,33 +186,28 @@ int chip_id_for_target(target_chip_t target) {
 // keep it under ~16 chars) reports which stage failed — PORTA has no
 // serial console fallback the way USB-C does, so unlike a bring-up aid
 // this is a lasting diagnostic, not something to trim later.
-esp_err_t flash_after_connect(esp_loader_t* loader, sidekick_flasher_status_t* out_status,
-                               char* out_remote_version, size_t out_remote_version_size,
+esp_err_t flash_after_connect(esp_loader_t* loader, bool allow_overwrite, bool probe_only,
+                               sidekick_flasher_info_t* out_info,
                                char* out_diag, size_t out_diag_size) {
     const target_chip_t target = esp_loader_get_target(loader);
     ESP_LOGI(TAG, "Connected, target chip=%d", (int)target);
-    if (target != ESP32C6_CHIP) {
-        // Passive presence classification (VID/PID over USB-C, or a beacon
-        // over PORTA) is a heuristic and can false-positive on another
-        // Espressif device (confirmed on real hardware: an AtomS3 was
-        // briefly misclassified as a Nano before that was tightened). This
-        // is the actual identity check — the ROM bootloader's own reported
-        // chip family — and it gates the write, not just the dialog: never
-        // flash sidekick firmware onto anything but a real C6.
-        ESP_LOGW(TAG, "Not an ESP32-C6 (chip=%d) — refusing to flash", (int)target);
-        if (out_diag) snprintf(out_diag, out_diag_size, "not C6 (%d)", (int)target);
-        return ESP_FAIL;
-    }
 
-    // Second gate: the payload must have been built for the chip we are
-    // actually talking to. The family check above only vets the *target*; it
-    // says nothing about what is embedded. When the sidekick project was
-    // retargeted from esp32c6 to esp32s3 (I3) that gap became a brick hazard —
-    // re-staging produced an S3 image that the C6-only check above would still
-    // happily write onto a real NanoC6. Deriving the requirement from the
-    // payload cannot drift the way a second hardcoded constant would.
+    // One gate, and it is derived from the payload rather than naming a chip.
+    // There used to be two: a hardcoded `target != ESP32C6_CHIP` family check
+    // and this payload comparison. The hardcoded one went stale the moment the
+    // sidekick was retargeted to esp32s3 (I3) -- it then refused every device
+    // that could possibly be correct, which is how field-flash quietly stopped
+    // working at all. The payload comparison is strictly stronger anyway: it
+    // rejects the same wrong-family cases *and* the case the family check
+    // could never see, an image built for a different chip than the one on the
+    // other end. chip_id_for_target() returns -1 for a family we have no
+    // mapping for, which cannot equal any real payload id, so unknown chips
+    // are refused without needing to be enumerated.
     const int payload_chip = embedded_chip_id();
     const int target_chip = chip_id_for_target(target);
+    if (out_info) {
+        out_info->chip_id = target_chip;
+    }
     if (payload_chip < 0) {
         ESP_LOGE(TAG, "Embedded firmware is not an ESP image (magic=0x%02x)", sidekick_bin[0]);
         if (out_diag) snprintf(out_diag, out_diag_size, "bad payload");
@@ -261,22 +256,46 @@ esp_err_t flash_after_connect(esp_loader_t* loader, sidekick_flasher_status_t* o
         }
     }
 
+    if (out_info) {
+        strncpy(out_info->project_name, remote_project_name, sizeof(out_info->project_name) - 1);
+        strncpy(out_info->version, remote_version, sizeof(out_info->version) - 1);
+    }
+
     if (recognized) {
-        if (out_remote_version) {
-            strncpy(out_remote_version, remote_version, out_remote_version_size - 1);
-        }
         char local_ver[kFieldLen + 1] = {};
         local_version(local_ver);
         if (strcmp(remote_version, local_ver) == 0) {
             ESP_LOGI(TAG, "Already up to date (version=%s)", remote_version);
-            if (out_status) {
-                *out_status = SIDEKICK_FLASHER_STATUS_UP_TO_DATE;
-            }
+            if (out_info) out_info->status = SIDEKICK_FLASHER_STATUS_UP_TO_DATE;
             return ESP_OK;  // nothing to write
         }
         ESP_LOGI(TAG, "Update available: remote=%s local=%s", remote_version, local_ver);
+        if (out_info) out_info->status = SIDEKICK_FLASHER_STATUS_OUTDATED;
     } else {
-        ESP_LOGI(TAG, "Not recognized as %s — treating as unflashed", kExpectedProjectName);
+        // Not ours, or the descriptor could not be read at all. Those two are
+        // deliberately the same outcome: an unreadable descriptor is exactly
+        // what an erased factory part looks like, and also exactly what a
+        // board we failed to read looks like, and we cannot tell them apart.
+        //
+        // This used to fall straight through to the write, on the reasoning
+        // that an unrecognized C6 was almost certainly a stock NanoC6. That
+        // reasoning died with the retarget: an unrecognized S3 is just as
+        // likely to be the operator's own board, and overwriting it is not
+        // recoverable from the ADV. So it now stops here unless the operator
+        // was shown what is there and said yes.
+        ESP_LOGI(TAG, "Not recognized as %s (project_name='%s')",
+                 kExpectedProjectName, remote_project_name);
+        if (out_info) out_info->status = SIDEKICK_FLASHER_STATUS_FOREIGN;
+        if (!allow_overwrite) {
+            ESP_LOGW(TAG, "Refusing to overwrite an unrecognized device without confirmation");
+            if (out_diag) snprintf(out_diag, out_diag_size, "foreign");
+            return ESP_OK;  // a decision, not a failure
+        }
+        ESP_LOGW(TAG, "Overwriting an unrecognized device at the operator's request");
+    }
+
+    if (probe_only) {
+        return ESP_OK;
     }
 
     const FlashImage images[] = {
@@ -308,10 +327,8 @@ esp_err_t flash_after_connect(esp_loader_t* loader, sidekick_flasher_status_t* o
             return ESP_FAIL;
         }
     }
-    ESP_LOGI(TAG, "Nano flash complete");
-    if (out_status) {
-        *out_status = SIDEKICK_FLASHER_STATUS_UPDATED;
-    }
+    ESP_LOGI(TAG, "Sidekick flash complete");
+    if (out_info) out_info->status = SIDEKICK_FLASHER_STATUS_UPDATED;
     return ESP_OK;
 }
 
@@ -361,16 +378,21 @@ esp_loader_error_t porta_uart_init(esp_loader_port_t* port) {
 
 void porta_uart_noop(esp_loader_port_t*) {}
 
-}  // namespace
-
-esp_err_t sidekick_flasher_flash_embedded(uint16_t vid, uint16_t pid,
-                                       sidekick_flasher_status_t* out_status,
-                                       char* out_remote_version, size_t out_remote_version_size) {
-    if (out_status) {
-        *out_status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
+// Shared USB-C session: install the CDC-ACM host if we must, connect to the
+// ROM bootloader, run the decide-and-maybe-write logic, tear down. The probe
+// and the flash differ only in the two flags they pass through, so they share
+// this rather than each keeping their own copy of the teardown ordering --
+// which is the part that was got wrong on the first hardware attempt.
+esp_err_t usb_session(uint16_t vid, uint16_t pid, bool allow_overwrite, bool probe_only,
+                      sidekick_flasher_info_t* out_info,
+                      char* out_diag, size_t out_diag_size) {
+    if (out_info) {
+        *out_info = {};
+        out_info->status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
+        out_info->chip_id = -1;
     }
-    if (out_remote_version && out_remote_version_size) {
-        out_remote_version[0] = '\0';
+    if (out_diag && out_diag_size) {
+        out_diag[0] = '\0';
     }
 
     esp_err_t err = cdc_acm_host_install(nullptr);
@@ -392,6 +414,7 @@ esp_err_t sidekick_flasher_flash_embedded(uint16_t vid, uint16_t pid,
 
     if (esp_loader_init_serial(&loader, &port.port) != ESP_LOADER_SUCCESS) {
         ESP_LOGE(TAG, "esp_loader_init_serial failed (VID:0x%04x PID:0x%04x)", vid, pid);
+        if (out_diag) snprintf(out_diag, out_diag_size, "no serial");
         result = ESP_FAIL;
         goto done;
     }
@@ -400,11 +423,12 @@ esp_err_t sidekick_flasher_flash_embedded(uint16_t vid, uint16_t pid,
         esp_loader_connect_args_t connect_args = ESP_LOADER_CONNECT_DEFAULT();
         if (esp_loader_connect(&loader, &connect_args) != ESP_LOADER_SUCCESS) {
             ESP_LOGE(TAG, "esp_loader_connect failed");
+            if (out_diag) snprintf(out_diag, out_diag_size, "no connect");
             result = ESP_FAIL;
             goto deinit;
         }
-        result = flash_after_connect(&loader, out_status, out_remote_version, out_remote_version_size,
-                                      nullptr, 0);
+        result = flash_after_connect(&loader, allow_overwrite, probe_only, out_info,
+                                     out_diag, out_diag_size);
     }
 
 deinit:
@@ -416,16 +440,30 @@ done:
     return result;
 }
 
+}  // namespace
+
+esp_err_t sidekick_flasher_probe(uint16_t vid, uint16_t pid,
+                                 sidekick_flasher_info_t* out_info,
+                                 char* out_diag, size_t out_diag_size) {
+    return usb_session(vid, pid, /*allow_overwrite=*/false, /*probe_only=*/true,
+                       out_info, out_diag, out_diag_size);
+}
+
+esp_err_t sidekick_flasher_flash_embedded(uint16_t vid, uint16_t pid, bool allow_overwrite,
+                                       sidekick_flasher_info_t* out_info,
+                                       char* out_diag, size_t out_diag_size) {
+    return usb_session(vid, pid, allow_overwrite, /*probe_only=*/false,
+                       out_info, out_diag, out_diag_size);
+}
+
 esp_err_t sidekick_flasher_flash_embedded_uart(uart_port_t uart, gpio_num_t tx_pin, gpio_num_t rx_pin,
-                                            uint32_t baud_rate,
-                                            sidekick_flasher_status_t* out_status,
-                                            char* out_remote_version, size_t out_remote_version_size,
+                                            uint32_t baud_rate, bool allow_overwrite,
+                                            sidekick_flasher_info_t* out_info,
                                             char* out_diag, size_t out_diag_size) {
-    if (out_status) {
-        *out_status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
-    }
-    if (out_remote_version && out_remote_version_size) {
-        out_remote_version[0] = '\0';
+    if (out_info) {
+        *out_info = {};
+        out_info->status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
+        out_info->chip_id = -1;
     }
     if (out_diag && out_diag_size) {
         out_diag[0] = '\0';
@@ -467,8 +505,8 @@ esp_err_t sidekick_flasher_flash_embedded_uart(uart_port_t uart, gpio_num_t tx_p
         return ESP_FAIL;
     }
 
-    result = flash_after_connect(&loader, out_status, out_remote_version, out_remote_version_size,
-                                  out_diag, out_diag_size);
+    result = flash_after_connect(&loader, allow_overwrite, /*probe_only=*/false, out_info,
+                                 out_diag, out_diag_size);
     esp_loader_deinit(&loader);
     return result;
 }
@@ -483,23 +521,38 @@ bool sidekick_flasher_embedded_version(char* out, size_t out_size) {
 
 #else  // !SIDEKICK_FLASHER_HAVE_FIRMWARE
 
-esp_err_t sidekick_flasher_flash_embedded(uint16_t /*vid*/, uint16_t /*pid*/,
-                                       sidekick_flasher_status_t* out_status,
-                                       char* /*out_remote_version*/, size_t /*out_remote_version_size*/) {
-    if (out_status) {
-        *out_status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
+esp_err_t sidekick_flasher_probe(uint16_t /*vid*/, uint16_t /*pid*/,
+                                 sidekick_flasher_info_t* out_info,
+                                 char* /*out_diag*/, size_t /*out_diag_size*/) {
+    if (out_info) {
+        *out_info = {};
+        out_info->status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
+        out_info->chip_id = -1;
+    }
+    ESP_LOGE(TAG, "No sidekick firmware staged — run tools/stage_sidekick_firmware.sh before building");
+    return ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t sidekick_flasher_flash_embedded(uint16_t /*vid*/, uint16_t /*pid*/, bool /*allow_overwrite*/,
+                                       sidekick_flasher_info_t* out_info,
+                                       char* /*out_diag*/, size_t /*out_diag_size*/) {
+    if (out_info) {
+        *out_info = {};
+        out_info->status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
+        out_info->chip_id = -1;
     }
     ESP_LOGE(TAG, "No Nano firmware staged — run tools/stage_sidekick_firmware.sh before building");
     return ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t sidekick_flasher_flash_embedded_uart(uart_port_t /*uart*/, gpio_num_t /*tx_pin*/, gpio_num_t /*rx_pin*/,
-                                            uint32_t /*baud_rate*/,
-                                            sidekick_flasher_status_t* out_status,
-                                            char* /*out_remote_version*/, size_t /*out_remote_version_size*/,
+                                            uint32_t /*baud_rate*/, bool /*allow_overwrite*/,
+                                            sidekick_flasher_info_t* out_info,
                                             char* /*out_diag*/, size_t /*out_diag_size*/) {
-    if (out_status) {
-        *out_status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
+    if (out_info) {
+        *out_info = {};
+        out_info->status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
+        out_info->chip_id = -1;
     }
     ESP_LOGE(TAG, "No Nano firmware staged — run tools/stage_sidekick_firmware.sh before building");
     return ESP_ERR_NOT_FOUND;

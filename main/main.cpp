@@ -498,6 +498,24 @@ static bool g_espressif_rom_present = false;
 static uint16_t g_espressif_rom_vid = 0;
 static uint16_t g_espressif_rom_pid = 0;
 static bool g_nano_flash_in_progress = false;
+// What the probe found on the device currently attached. Valid only while
+// g_espressif_rom_present stays true for the same physical attach — a detach
+// clears it, because the next thing plugged in is not the thing we identified.
+static sidekick_flasher_info_t g_sidekick_probe = {};
+static bool g_sidekick_probe_valid = false;
+// One physical attach probes exactly once. The probe itself tears the USB host
+// down and back up, which re-enumerates the same device and queues a synthetic
+// Attach event (B14) -- without this latch that event would start another
+// probe, and so on.
+static bool g_sidekick_probe_pending = false;
+// Re-armed only by a real detach. The latch above stops the probe running
+// twice for one event; this stops it running twice for one *device*, which is
+// the case the latch cannot see: usb_c_presence_set_notify(true) resets the
+// event queue, but the re-enumeration our own teardown provoked can finish
+// after that reset and arrive as an ordinary Attach. Indistinguishable from a
+// real one at the point of delivery -- so the only safe rule is that unplugging
+// something is what makes it probeable again.
+static bool g_sidekick_probed_since_attach = false;
 
 static bool is_startup_direct_mode_key(char c) {
   const char k = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -3676,7 +3694,99 @@ static void restore_usb_host_after_nano_flash() {
 // background task with progress feedback is the natural next slice once the
 // mechanism is proven on real hardware — do not mistake this for the
 // finished install-prompt UX from RFC 0001 §5.4.
-static void report_sidekick_flash_result(esp_err_t err, sidekick_flasher_status_t status, const char* remote_version);
+static void report_sidekick_flash_result(esp_err_t err, const sidekick_flasher_info_t& info, const char* diag);
+
+// Park the USB host, run `body`, put it back. Both the probe and the flash
+// need a live USB host plus CDC-ACM to reach the target, and both must not
+// leave the stack parked if they fail early. Sharing one definition is
+// deliberate: the first hardware attempt at flashing skipped the reinstall and
+// cdc_acm_host_install() had nothing to attach to, so the write never reached
+// the target at all -- a failure mode that only exists when this sequence has
+// more than one copy.
+template <typename Body>
+static bool with_usb_host_parked(Body body) {
+  // Suppress presence notifications for the whole host-disruptive window: the
+  // re-enumeration below queues a synthetic Attach for a device that never
+  // moved, and usb_c_toast_tick() would otherwise draw over our result.
+  usb_c_presence_set_notify(false);
+  if (uac_ensure_host_uninstalled() != ESP_OK) {
+    debug_log_line("Sidekick: USB host busy");
+    usb_c_presence_set_notify(true);
+    return false;
+  }
+  g_usb_host_parked_for_nano_flash = true;
+  if (uac_host_ensure_started() != ESP_OK) {
+    debug_log_line("Sidekick: host restart fail");
+    restore_usb_host_after_nano_flash();
+    usb_c_presence_set_notify(true);
+    return false;
+  }
+  usb_c_presence_yield_device();  // let CDC-ACM claim it, same as UAC does for QMX
+  body();
+  restore_usb_host_after_nano_flash();
+  usb_c_presence_set_notify(true);
+  return true;
+}
+
+// Identify whatever was just plugged in, once per physical attach.
+//
+// This is not a convenience. The chip family stopped being an identity check
+// at the AtomS3 retarget -- the sidekick, the ADV itself and every other S3 on
+// the bench all report the same family, and they share a USB VID/PID with any
+// running S3 app besides. Reading the esp_app_desc_t off the device is the
+// only thing that actually knows what is on the other end, so it happens
+// before the operator is offered an action rather than after they commit to
+// one. Connecting resets the target into its ROM bootloader, which is both
+// unavoidable (that is how a session starts) and harmless here: nothing
+// reaches this port with an Espressif VID except something deliberately
+// plugged into a Cardputer, and a power cycle undoes it.
+static void sidekick_probe_attached_device() {
+  if (!g_sidekick_probe_pending) {
+    return;
+  }
+  g_sidekick_probe_pending = false;
+  if (!g_espressif_rom_present || !sidekick_flasher_has_firmware() ||
+      g_nano_flash_in_progress || g_tx_active) {
+    return;
+  }
+  g_sidekick_probed_since_attach = true;
+  const uint16_t vid = g_espressif_rom_vid;
+  const uint16_t pid = g_espressif_rom_pid;
+  sidekick_flasher_info_t info = {};
+  char diag[24] = {};
+  esp_err_t err = ESP_FAIL;
+  if (!with_usb_host_parked([&] { err = sidekick_flasher_probe(vid, pid, &info, diag, sizeof(diag)); })) {
+    return;
+  }
+  if (err != ESP_OK) {
+    debug_log_line(std::string("SK probe fail ") + (diag[0] ? diag : "?"));
+    return;
+  }
+  g_sidekick_probe = info;
+  g_sidekick_probe_valid = true;
+  switch (info.status) {
+    case SIDEKICK_FLASHER_STATUS_UP_TO_DATE:
+      debug_log_line(std::string("SK ok ") + info.version);
+      break;
+    case SIDEKICK_FLASHER_STATUS_OUTDATED:
+      debug_log_line(std::string("SK old ") + info.version);
+      break;
+    default:
+      // Name it. "Refused" on its own sends the operator looking for a bad
+      // cable; the project name is what tells them they grabbed the wrong
+      // board.
+      debug_log_line(std::string("SK? ") +
+                     (info.project_name[0] ? info.project_name : "unreadable"));
+      break;
+  }
+  // Repaint the screen the operator is actually on, and never underneath a
+  // dialog: while one is up the toast-expiry path owns the screen. Painting
+  // unconditionally meant plugging a device in while on RX drew the BT view
+  // straight over it.
+  if (ui_mode == UIMode::BT && g_usb_toast_until_ms == 0) {
+    draw_bt_view(true);
+  }
+}
 
 static void sidekick_flash_start_from_ui() {
   if (g_tx_active) {
@@ -3695,57 +3805,41 @@ static void sidekick_flash_start_from_ui() {
     return;
   }
 
+  // The overwrite authorization is the probe's verdict plus the fact that the
+  // operator pressed the key while the screen named what was found. It is not
+  // a separate confirmation step, because a second press of the same key on
+  // the same screen would be a blind double-tap, not consent.
+  const bool foreign = g_sidekick_probe_valid &&
+                       g_sidekick_probe.status == SIDEKICK_FLASHER_STATUS_FOREIGN;
+  if (g_sidekick_probe_valid &&
+      g_sidekick_probe.status == SIDEKICK_FLASHER_STATUS_UP_TO_DATE) {
+    ui_draw_message_dialog("Sidekick", "Up to date");
+    g_usb_toast_until_ms = rtc_now_ms() + 2000;
+    return;
+  }
+
   g_nano_flash_in_progress = true;
-  debug_log_line("Nano: flashing...");
-  ui_draw_message_dialog("Sidekick", "Flashing...");
+  debug_log_line(foreign ? "SK: overwriting..." : "SK: flashing...");
+  ui_draw_message_dialog("Sidekick", foreign ? "Overwriting..." : "Flashing...");
   draw_bt_view();
 
   const uint16_t vid = g_espressif_rom_vid;
   const uint16_t pid = g_espressif_rom_pid;
-  // Tearing the USB host down and back up (below) makes it re-enumerate the
-  // very same physical Nano, which queues a synthetic Attach event for a
-  // device that never moved. Left alone, usb_c_toast_tick() drains that
-  // event on the next main-loop tick and draws an unconditional "Green Nano
-  // attached" dialog right over our result dialog — that's B14, the final
-  // "Flash OK"/"Up to date" screen never being visible. Suppress presence
-  // notifications for the whole host-disruptive window; re-enabling also
-  // resets the event queue, so nothing queued during our own reinstall
-  // leaks out afterward.
-  usb_c_presence_set_notify(false);
 
-  // Unlike CTS (which parks the host and hands the PHY to BLE), nano-flash
-  // still needs a live USB host + CDC-ACM to reach the Nano. Park first to
-  // drop any QMX/UAC state cleanly, then explicitly bring the host back up
-  // — cdc_acm_host_install() below needs one already running underneath it.
-  // (2026-09-03: first hardware attempt skipped this reinstall and the
-  // yield below; cdc_acm_host_install() had nothing to attach to, so the
-  // flash never reached the Nano at all — confirmed by monitoring the Nano
-  // afterward and finding it still on stock nanoc6_factorytest firmware.)
-  if (uac_ensure_host_uninstalled() != ESP_OK) {
-    debug_log_line("Nano flash: USB host busy");
-    usb_c_presence_set_notify(true);
+  sidekick_flasher_info_t info = {};
+  char diag[24] = {};
+  esp_err_t err = ESP_FAIL;
+  if (!with_usb_host_parked([&] {
+        err = sidekick_flasher_flash_embedded(vid, pid, foreign, &info, diag, sizeof(diag));
+      })) {
     g_nano_flash_in_progress = false;
     return;
   }
-  g_usb_host_parked_for_nano_flash = true;
-  if (uac_host_ensure_started() != ESP_OK) {
-    debug_log_line("Nano flash: host restart fail");
-    restore_usb_host_after_nano_flash();
-    usb_c_presence_set_notify(true);
-    g_nano_flash_in_progress = false;
-    return;
-  }
-  usb_c_presence_yield_device();  // let CDC-ACM claim the Nano, same as UAC does for QMX
-
-  sidekick_flasher_status_t status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
-  char remote_version[33] = {};
-  const esp_err_t err =
-      sidekick_flasher_flash_embedded(vid, pid, &status, remote_version, sizeof(remote_version));
-  restore_usb_host_after_nano_flash();
-  usb_c_presence_set_notify(true);
   g_nano_flash_in_progress = false;
+  // The device just changed underneath us; what we knew about it is stale.
+  g_sidekick_probe_valid = false;
 
-  report_sidekick_flash_result(err, status, remote_version);
+  report_sidekick_flash_result(err, info, diag);
 }
 
 // Shared by both flash paths (USB-C and PORTA UART) — only how the session
@@ -3753,19 +3847,30 @@ static void sidekick_flash_start_from_ui() {
 // ui_draw_list's ~20-char/row budget (240px screen, no wrap protection —
 // a longer single line garbles into the row below it, found the hard way
 // bench-testing the PORTA companion beacon, RFC 0001 §5.2c).
-static void report_sidekick_flash_result(esp_err_t err, sidekick_flasher_status_t status, const char* remote_version) {
+static void report_sidekick_flash_result(esp_err_t err, const sidekick_flasher_info_t& info, const char* diag) {
   const char* body = "Flash FAILED";
   if (err == ESP_OK) {
-    body = (status == SIDEKICK_FLASHER_STATUS_UP_TO_DATE) ? "Up to date" : "Flash OK";
+    switch (info.status) {
+      case SIDEKICK_FLASHER_STATUS_UP_TO_DATE: body = "Up to date"; break;
+      // A refusal, not a failure: the device on the other end is not a
+      // sidekick and nobody has said to overwrite it. Naming what was found
+      // is the whole point — "refused" alone would send the operator looking
+      // for a broken cable.
+      case SIDEKICK_FLASHER_STATUS_FOREIGN:    body = "Not a sidekick"; break;
+      default:                                 body = "Flash OK"; break;
+    }
   }
-  if (err == ESP_OK && status == SIDEKICK_FLASHER_STATUS_UP_TO_DATE) {
+  if (err == ESP_OK && info.status == SIDEKICK_FLASHER_STATUS_UP_TO_DATE) {
     // One line, not two — see the comment above this function; two related
     // lines can straddle a page boundary and only the later one is shown.
-    debug_log_line(std::string("OK ") + remote_version);
+    debug_log_line(std::string("OK ") + info.version);
+  } else if (err == ESP_OK && info.status == SIDEKICK_FLASHER_STATUS_FOREIGN) {
+    debug_log_line(std::string("Foreign: ") +
+                   (info.project_name[0] ? info.project_name : "unreadable"));
   } else if (err == ESP_OK) {
     debug_log_line("Sidekick flash OK");
   } else {
-    debug_log_line("Sidekick flash FAILED");
+    debug_log_line(std::string("Flash FAIL ") + (diag && diag[0] ? diag : "?"));
   }
   ui_draw_message_dialog("Sidekick", body);
   // Let the existing B18 toast-expiry timer clear this and redraw BT view
@@ -3798,16 +3903,41 @@ static void draw_bt_view(bool force_redraw) {
   char name[20];
   std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
   lines.push_back(name);
-  lines.push_back(g_espressif_rom_present ? "2: Flash Sidekick" : "Time only, no grid");
+  // What pressing 2 will actually do, decided by the probe that ran when the
+  // device was plugged in rather than by hope.
+  if (!g_espressif_rom_present) {
+    lines.push_back("Time only, no grid");
+  } else if (!g_sidekick_probe_valid) {
+    lines.push_back("2: Flash Sidekick");
+  } else {
+    switch (g_sidekick_probe.status) {
+      case SIDEKICK_FLASHER_STATUS_UP_TO_DATE: lines.push_back("SK up to date"); break;
+      case SIDEKICK_FLASHER_STATUS_OUTDATED:   lines.push_back("2: Update SK"); break;
+      case SIDEKICK_FLASHER_STATUS_FOREIGN:    lines.push_back("2: OVERWRITE it"); break;
+      default:                                 lines.push_back("2: Flash Sidekick"); break;
+    }
+  }
   {
     // PORTA update (RFC 0001 §5.2c) isn't offered here — the button-hold
     // trigger it depended on is proven not to work on ESP32-C6 (see
     // sidekick/main/main.c). USB-C stays the only flash path.
     char lbuf[24];
-    const unsigned l_k =
-        (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_DMA) / 1024);
-    const unsigned f_k = (unsigned)(heap_caps_get_free_size(MALLOC_CAP_DMA) / 1024);
-    std::snprintf(lbuf, sizeof(lbuf), "L=%uK F=%uK", l_k, f_k);
+    if (g_espressif_rom_present && g_sidekick_probe_valid) {
+      // Who is on the other end, in the operator's own words rather than a
+      // status code. ~20 chars fit this row; longer names are truncated
+      // rather than wrapped, because a wrap garbles the row below it.
+      const bool ours = (g_sidekick_probe.status != SIDEKICK_FLASHER_STATUS_FOREIGN);
+      const char* what = ours ? g_sidekick_probe.version
+                              : (g_sidekick_probe.project_name[0]
+                                     ? g_sidekick_probe.project_name
+                                     : "unreadable");
+      std::snprintf(lbuf, sizeof(lbuf), "%s%.13s", ours ? "SK " : "is: ", what);
+    } else {
+      const unsigned l_k =
+          (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_DMA) / 1024);
+      const unsigned f_k = (unsigned)(heap_caps_get_free_size(MALLOC_CAP_DMA) / 1024);
+      std::snprintf(lbuf, sizeof(lbuf), "L=%uK F=%uK", l_k, f_k);
+    }
     lines.push_back(lbuf);
   }
 
@@ -4403,16 +4533,27 @@ static void usb_c_toast_tick() {
         g_espressif_rom_present = (ev.device.kind == UsbCKind::EspressifRom);
         g_espressif_rom_vid = ev.device.vid;
         g_espressif_rom_pid = ev.device.pid;
+        // Identify it before offering an action, not after. Deferred out of
+        // this drain loop: probing tears the USB host down, which is not a
+        // thing to do while draining its own event queue.
+        g_sidekick_probe_pending = g_espressif_rom_present && !g_sidekick_probed_since_attach;
+        if (g_sidekick_probe_pending) {
+          g_sidekick_probe_valid = false;
+        }
         break;
       case UsbCPresenceAction::Detach:
         usb_c_format_detach(ev.device, title, sizeof(title), body, sizeof(body));
         g_espressif_rom_present = false;
+        g_sidekick_probe_valid = false;   // next thing plugged in is not this thing
+        g_sidekick_probe_pending = false;
+        g_sidekick_probed_since_attach = false;
         break;
     }
     ui_draw_message_dialog(title, body);
     debug_log_line(title);
     showed = true;
   }
+  sidekick_probe_attached_device();
   const int64_t now = rtc_now_ms();
   if (showed) {
     g_usb_toast_until_ms = now + 2000;

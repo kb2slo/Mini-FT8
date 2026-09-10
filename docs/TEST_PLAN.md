@@ -362,15 +362,31 @@ Not testable with one device, so it is a known limitation rather than a row: the
 second sidekick on the same network loses the name and mDNS silently renames it `minift8-2.local`. Folded
 into I19 when there is a reason to care.
 
-### S3. Field-flash is expected to refuse
+### S3. Field-flash from the ADV, and the identity guard
 
-Not a regression. The payload is now an S3 image and the family gate still requires a C6, so both gates
-disagree by design until the S3 identity guard lands (I3, deferred).
+Field-flash works again as of the identity guard; before it, the hardcoded ESP32-C6 family gate refused
+every S3 and this section read "expected to refuse".
+
+The guard exists because the chip stopped being an identity check. With the NanoC6 it very nearly was one —
+nothing else an operator plugs into that port is a C6. The AtomS3 Lite is an ESP32-S3, so is the Cardputer
+ADV, and so is every other S3 on the bench; they even share a USB VID/PID with any running S3 app. So the
+ADV **probes on attach**: it opens a ROM session, reads the device's own `esp_app_desc_t`, and names what it
+found before offering an action. Connecting resets the target into its bootloader — unavoidable, and
+harmless here.
+
+Both USB-C ports are consumed by the ADV-to-sidekick link, so there is **no serial console on either device**
+during these rows. The ADV's screen is the instrument: `H` for the two status lines, and the log at
+**`P` then `.`**.
 
 | # | Do | Expect |
 |---|---|---|
-| S3.1 | Plug any Espressif device into the ADV's USB-C and accept the install prompt | Refuses. The log (`P` then `.`) shows `not C6 (…)` or `fw9!=hw13` |
-| S3.2 | Plug in a **real NanoC6** | Refuses with `fw9!=hw13` — the payload/target gate. Before that gate this combination would have written an S3 image onto the C6 and bricked it |
+| S3.1 | Plug the sidekick in and read `H` | Auto-probe runs. Line 4 `2: Update SK` (or `SK up to date`), line 5 `SK <version>` — the version the *device* is running, not the embedded one. Log: `SK old <ver>` / `SK ok <ver>` |
+| S3.2 | Press `2` when it says `2: Update SK` | `Flashing…` then `Flash OK`. **This writes whatever is staged in the ADV, which may be older than what is on the device — the check is equality, not ordering.** Confirm what is staged before pressing |
+| S3.3 | Unplug and replug | Re-probes: `SK up to date` and the version now matches what was written. This is how the write is verified with no serial console attached, since both USB-C ports are consumed by the link |
+| S3.4 | Press `2` on `SK up to date` | Says `Up to date` and opens no session at all |
+| S3.5 | **The foreign-device refusal — the point of the guard.** Build a sidekick with a different project name (`project(...)` in `sidekick/CMakeLists.txt`), flash it to the Atom, plug it in | Line 4 `2: OVERWRITE it`, line 5 `is: <that name>`, log `SK? <name>`. Pressing `2` overwrites deliberately. **Do not use `restore_sidekick_stock.sh` for this** — its image is a USB-host app that enumerates as nothing, so it tests nothing and strands the board (see Phase 10) |
+| S3.6 | Plug in a device whose chip does not match the staged payload | Refuses. Log shows `fw9!=hw13`. The old `not C6 (…)` diagnostic is gone: that gate was hardcoded to the NanoC6, went stale at the retarget, and had been refusing every device that could possibly be correct |
+| S3.7 | Plug a device in while on the **RX** screen | RX keeps painting. The probe repaints only the screen you are on — it used to draw the BT view over whatever was there |
 
 ## Bench run — everything owed, in the order to do it
 
@@ -397,7 +413,7 @@ radio cannot see it at all.
 | 7 | Failure paths | S2c.8, 8a, 8b | Destroys the working credentials, so it goes after 6. These are the rows most likely to be skipped and most likely to be wrong: 8 is the crash that I3f fixed, and 8b is the APSTA station side re-attacking a network it already failed |
 | 8 | Companion link | S2c.7, S2d.11 | Not a phase so much as a habit: glance at `P` then `.` on the ADV at each phase boundary. A WiFi change that silently kills the beacon is the failure this catches, and it will not announce itself |
 | 9 | Field-flash refusal | S3.1 | S3.2 needs a real NanoC6. If it is not to hand it stays owed — do not mark the gate verified on S3.1 alone |
-| 10 | Restore to stock — **only if you want the unit back** | `tools/restore_sidekick_stock.sh` | Untested since the AtomS3 rewrite, and the one irreversible step here: the 8 MB backup in `sidekick/stock_backup/` is the only copy this unit has. Re-flash the sidekick image afterwards to carry on |
+| 10 | Restore the backup — **read this row before running it** | `tools/restore_sidekick_stock.sh --yes` | The backup is **not** stock firmware. It holds `atoms3_qmx_host_poc` (RFC 0001 §4.6), a USB-**host** app that presents no USB device at all: the board then shows no serial port and is invisible to the ADV, which looks exactly like a brick and is not one. Recover by holding reset ~2 s until the green LED, releasing, re-flashing, then power-cycling — the flash leaves the force-download bit set. The script now prints the backup contents and refuses without `--yes`. Field-hit 2026-09-09 |
 
 Not part of the walk, because nothing you can do triggers it: **B36** below. And CI needs no bench time —
 it is green on `main` at `f0c79d3`, including the `sidekick-firmware` job that was failing.
