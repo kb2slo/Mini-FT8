@@ -152,7 +152,7 @@ jobs:
           ctest --test-dir build --output-on-failure
 
   sidekick-firmware:
-    name: Sidekick (ESP32-C6)
+    name: Sidekick (ESP32-S3)
     needs: changes
     if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.firmware == 'true'
     runs-on: ubuntu-latest
