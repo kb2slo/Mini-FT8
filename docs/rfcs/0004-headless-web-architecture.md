@@ -39,7 +39,8 @@ Taken to its conclusion, the sidekick never speaks TLS **at all** — see §4.
 flowchart TB
     subgraph net["Internet — only the browser goes here"]
         gh["GitHub Pages<br/>signed app + firmware"]
-        cf["Cloudflare Worker<br/>QRZ · PSKReporter"]
+        qrz["QRZ XML<br/>CORS open, called directly"]
+        cf["Worker<br/>PSKReporter, filtered"]
         maps["Map tiles"]
     end
     subgraph phone["Phone or computer — the only device with internet"]
@@ -55,6 +56,7 @@ flowchart TB
         qmx["QMX over USB host"]
     end
     gh -. "fetch bundle, once" .-> app
+    qrz -. "enrichment, when online" .-> app
     cf -. "enrichment, when online" .-> app
     maps -. "enrichment, when online" .-> app
     app -- "control · works offline" --> http
@@ -200,16 +202,37 @@ likely answer, but multi-client behaviour is unspecified and should not be disco
 
 ## 8. Third-party services
 
-QRZ's XML API and PSKReporter are built for server-side consumers and predate CORS by a wide margin. **If
-they do not send `Access-Control-Allow-Origin`, browser JavaScript cannot call them at all**, regardless of
-credentials. That is cheap to verify and should be verified before anything is designed around it, because a
-positive result deletes work.
+**Measured 2026-09-10, and the result was the opposite of the assumption.** Both are built for server-side
+consumers and predate CORS by a wide margin, so both were expected to block browsers:
 
-Where a proxy is needed, a **Cloudflare Worker** on the free tier is the answer; 100k requests/day is ample.
-One constraint on it: QRZ's XML interface requires a subscriber login, so a Worker holding *the author's*
-credentials would have every user of the application operating under one subscription — a terms-of-service
-problem the moment a second person runs this. **Users supply their own QRZ credentials and the Worker relays
-statelessly.**
+| Service | `Access-Control-Allow-Origin` | Reachable from browser JS |
+| --- | --- | --- |
+| QRZ XML (`xmldata.qrz.com/xml/current/`) | `*`, and a preflight `OPTIONS` returns `Access-Control-Allow-Headers: *` | **Yes, directly** |
+| PSKReporter (`retrieve.pskreporter.info/query` and `cgi-bin/pskquery5.pl`) | absent from both | **No** |
+
+**QRZ is called directly from the browser, and this is better than the proxy it replaces.** The concern was
+that QRZ's XML interface requires a subscriber login, so a proxy holding *the author's* credentials would put
+every user of this application on one subscription — a terms-of-service problem the moment a second person
+runs it. Direct calls remove the problem rather than working around it: each operator's credentials travel
+from their own browser to QRZ and never touch our infrastructure, which is also the right answer for privacy
+and for liability.
+
+**Caveat, and it belongs in the design rather than a footnote:** that header is *observed behaviour on
+2026-09-10*, not documented policy. QRZ can drop it without notice, and if they do, this breaks silently in
+the field with no signal on our side. The application must fail legibly when a QRZ lookup is refused by CORS
+— treat it as a missing optional service, never as a fatal error — and the proxy below is the fallback if the
+header ever goes away.
+
+**PSKReporter needs a Cloudflare Worker**, free tier, 100k requests/day. Two things about it worth fixing in
+the design now:
+
+* It **carries no secrets**. PSKReporter needs no credentials, so the Worker is a pure CORS shim and there is
+  nothing in it to leak or rotate. That is a materially smaller thing to operate than what §8 originally
+  proposed.
+* It must **filter, not relay**. One measured query — a single callsign over one hour — returned **1.25 MB of
+  XML**. Passing that to a phone on cellular for every refresh is not acceptable, so the Worker parses and
+  re-serves the subset the application needs as JSON. This is now the main reason it exists; CORS is the
+  lesser half.
 
 Google Maps is a browser API by design and needs no proxy. Its key ships in a static app and must therefore
 be referrer-restricted.
@@ -225,7 +248,7 @@ Roadmap rows, sequenced. The protocol gates everything else.
 | App partition + bootstrap | Partition at the 1.9 MB tail, phone-relayed POST, version pairing (§3, §4). |
 | Signing chain | Key handling, CI signing of bundle and firmware, pinned public key on device (§4). |
 | Control API + pairing | The API surface and the token (§6, §7). |
-| The application | The web app, plus the Worker for QRZ and PSKReporter (§8). |
+| The application | The web app, plus a PSKReporter Worker that filters rather than relays. QRZ is called directly from the browser (§8). |
 
 ## 10. Risks
 
@@ -235,5 +258,5 @@ Roadmap rows, sequenced. The protocol gates everything else.
 | Non-secure context bites harder than expected | Geolocation and service workers are known losses (§3). A surprise beyond those would reopen the certificate question, which is why §3 records why it was declined rather than merely that it was. |
 | App outgrows the partition | 1.9 MB against 100–300 KB gzipped is roughly 6x headroom, and the discipline is stated: no bundled tiles, no heavy framework. If it is ever breached, the fix is a partition change, which costs a USB-C reflash of every device in existence. |
 | Signing key handling | The one piece of this with no undo. A compromised key is a firmware supply chain compromise for every deployed device, and there is no revocation path in the design. Its handling belongs in the signing-chain row, not as an afterthought. |
-| QRZ/PSKReporter CORS assumption is wrong in either direction | Verify before designing (§8). |
+| QRZ stops sending its CORS header | Measured open on 2026-09-10, but that is observation, not policy (§8). The application treats a refused QRZ lookup as a missing optional service, and the PSKReporter Worker is the fallback path if it has to carry QRZ too. |
 | Two browsers, one transmitter | Named and unresolved (§7). |
