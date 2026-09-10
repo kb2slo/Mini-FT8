@@ -120,6 +120,14 @@ every agent and every operator can see them — see "Memory lives in this repo" 
   row IDs are fine bare when the surrounding text already says what the check does. Inside `ROADMAP.md` and
   commit messages the bare ID is correct — this is about chat. Stated 2026-09-10.
 
+- **Prose is authoritative; a diagram is derived.** Never let a fact live only in a diagram. Agents read
+  the prose and may not reconstruct a constraint that exists only as an arrow, and a diagram that is the sole
+  source of something goes stale without anyone noticing. Where a diagram earns its place, write it as
+  **mermaid in the markdown**: GitHub renders it for humans, its source *is* the graph semantics rather than
+  coordinates an agent has to re-derive, and a changed edge is a one-line diff instead of two pictures to
+  compare. Do not commit SVG or raster diagrams to `docs/` — SVG costs an agent far more to read than the
+  content is worth, and images diff and grep not at all. Stated 2026-09-10.
+
 ### Memory lives in this repo
 
 Agents with a private per-machine memory store must not use it for anything about this project. These docs
