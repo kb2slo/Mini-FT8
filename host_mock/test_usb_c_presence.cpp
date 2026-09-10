@@ -25,8 +25,8 @@ static void expect_str(const char* got, const char* want, const char* msg)
 int main()
 {
     expect_kind(usb_c_classify(0x0483, 0xA34C), UsbCKind::QmxQdx, "QMX/QDX");
-    expect_kind(usb_c_classify(0x303A, 0x1001), UsbCKind::GreenNano, "Nano JTAG");
-    expect_kind(usb_c_classify(0x303A, 0x4001), UsbCKind::Other, "Espressif VID, non-Nano PID (e.g. AtomS3)");
+    expect_kind(usb_c_classify(0x303A, 0x1001), UsbCKind::EspressifRom, "Espressif USB Serial/JTAG");
+    expect_kind(usb_c_classify(0x303A, 0x4001), UsbCKind::Other, "Espressif VID, other PID");
     expect_kind(usb_c_classify(0x1234, 0x5678), UsbCKind::Other, "unknown");
     expect_kind(usb_c_classify(0x0483, 0x0001), UsbCKind::Other, "STM32 not QMX");
 
@@ -40,10 +40,10 @@ int main()
     expect_str(title, "USB unplugged", "detach title");
     expect_str(body, "QMX/QDX", "detach qmx");
 
-    UsbCDevice nano = {UsbCKind::GreenNano, 0x303A, 0x1001};
-    usb_c_format_attach(nano, title, sizeof(title), body, sizeof(body));
-    expect_str(title, "Green Nano", "nano title");
-    expect_str(body, "Flash Nano USB-C", "nano body");
+    UsbCDevice esp_rom = {UsbCKind::EspressifRom, 0x303A, 0x1001};
+    usb_c_format_attach(esp_rom, title, sizeof(title), body, sizeof(body));
+    expect_str(title, "Espressif ROM", "espressif rom title");
+    expect_str(body, "Flash sidekick?", "espressif rom body");
 
     UsbCDevice other = {UsbCKind::Other, 0x1234, 0xABCD};
     usb_c_format_attach(other, title, sizeof(title), body, sizeof(body));

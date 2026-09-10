@@ -1,4 +1,4 @@
-#include "nano_flasher.h"
+#include "sidekick_flasher.h"
 
 #include <cstdio>
 #include <cstring>
@@ -11,17 +11,17 @@
 #include "esp_loader.h"
 #include "usb/cdc_acm_host.h"
 
-static const char* TAG = "nano_flasher";
+static const char* TAG = "sidekick_flasher";
 
-#if NANO_FLASHER_HAVE_FIRMWARE
+#if SIDEKICK_FLASHER_HAVE_FIRMWARE
 #include "nano_target_firmware.h"
 #endif
 
-bool nano_flasher_has_firmware(void) {
-    return NANO_FLASHER_HAVE_FIRMWARE;
+bool sidekick_flasher_has_firmware(void) {
+    return SIDEKICK_FLASHER_HAVE_FIRMWARE;
 }
 
-#if NANO_FLASHER_HAVE_FIRMWARE
+#if SIDEKICK_FLASHER_HAVE_FIRMWARE
 
 namespace {
 
@@ -76,7 +76,22 @@ esp_loader_error_t flash_image(esp_loader_t* loader, const FlashImage& img) {
 constexpr uint32_t kAppDescOffset = 0x20;
 constexpr uint32_t kVersionFieldOffset = kAppDescOffset + 16;
 constexpr uint32_t kProjectNameFieldOffset = kAppDescOffset + 48;
-constexpr uint32_t kAppFlashBase = 0x10000;  // app partition start, both sides
+// Where the app lives is NOT a constant: it moves the moment the sidekick's
+// partition table changes (a factory layout puts it at 0x10000, an OTA layout
+// at ota_0). Both the version read and the write target are derived from the
+// embedded partition-table image instead, so the two sides cannot disagree.
+// Hardcoding it meant a partition change on the sidekick would make the ADV
+// read the version from the wrong place and then write the app over otadata
+// and phy_init -- bricking the part it was trying to install onto.
+constexpr uint32_t kPartitionTableFlashOffset = 0x8000;
+constexpr size_t   kPartitionEntrySize = 32;
+constexpr uint8_t  kPartitionMagic0 = 0xAA;
+constexpr uint8_t  kPartitionMagic1 = 0x50;
+constexpr uint8_t  kPartitionTypeApp = 0x00;
+constexpr uint8_t  kPartitionTypeData = 0x01;
+constexpr uint8_t  kPartitionSubtypeOtadata = 0x00;
+constexpr uint32_t kPartitionOffsetField = 4;
+constexpr uint32_t kPartitionLabelField = 12;
 constexpr size_t kFieldLen = 32;
 constexpr char kExpectedProjectName[] = "sidekick";
 
@@ -94,10 +109,73 @@ esp_loader_error_t read_field(esp_loader_t* loader, uint32_t addr, char* out) {
     return ESP_LOADER_SUCCESS;
 }
 
+// First app partition in the embedded table: its flash offset, and its label
+// for logging. Returns 0 if the table does not parse, which callers treat as
+// fatal rather than guessing an address.
+uint32_t embedded_partition_offset(uint8_t type, int subtype,
+                                   char* out_label, size_t out_label_size) {
+    for (size_t i = 0; i + kPartitionEntrySize <= sidekick_partition_table_bin_len;
+         i += kPartitionEntrySize) {
+        const uint8_t* e = sidekick_partition_table_bin + i;
+        if (e[0] != kPartitionMagic0 || e[1] != kPartitionMagic1) {
+            break;  // end of table (or the MD5 entry); no match
+        }
+        if (e[2] != type) {
+            continue;
+        }
+        if (subtype >= 0 && e[3] != (uint8_t)subtype) {
+            continue;
+        }
+        if (out_label && out_label_size) {
+            snprintf(out_label, out_label_size, "%.*s", 16,
+                     (const char*)(e + kPartitionLabelField));
+        }
+        return (uint32_t)e[kPartitionOffsetField] |
+               ((uint32_t)e[kPartitionOffsetField + 1] << 8) |
+               ((uint32_t)e[kPartitionOffsetField + 2] << 16) |
+               ((uint32_t)e[kPartitionOffsetField + 3] << 24);
+    }
+    return 0;
+}
+
+// First app partition, any subtype: `factory` on the old layout, `ota_0` now.
+uint32_t embedded_app_offset(char* out_label, size_t out_label_size) {
+    return embedded_partition_offset(kPartitionTypeApp, -1, out_label, out_label_size);
+}
+
 // The embedded sidekick_bin's own version field — what "up to date" means.
 void local_version(char* out) {
     memcpy(out, sidekick_bin + kVersionFieldOffset, kFieldLen);
     out[kFieldLen] = '\0';
+}
+
+// Which chip the embedded image was built for, read from its own ESP image
+// header: byte 0 is the 0xE9 magic, bytes 12-13 are a little-endian
+// esp_chip_id_t. Derived from the payload rather than hardcoded, so staging a
+// firmware built for a different target cannot go unnoticed.
+constexpr uint8_t  kEspImageMagic       = 0xE9;
+constexpr size_t   kEspImageChipIdOffset = 12;
+constexpr uint16_t kEspChipIdEsp32S3    = 9;
+constexpr uint16_t kEspChipIdEsp32C6    = 13;
+
+// -1 when the blob does not look like an ESP image at all.
+int embedded_chip_id() {
+    if (sidekick_bin_len < kEspImageChipIdOffset + 2 || sidekick_bin[0] != kEspImageMagic) {
+        return -1;
+    }
+    return (int)((uint16_t)sidekick_bin[kEspImageChipIdOffset] |
+                 ((uint16_t)sidekick_bin[kEspImageChipIdOffset + 1] << 8));
+}
+
+// esp_loader's target_chip_t and the image header's esp_chip_id_t are
+// different enumerations for the same idea, so they need mapping rather than
+// comparing.
+int chip_id_for_target(target_chip_t target) {
+    switch (target) {
+    case ESP32S3_CHIP: return kEspChipIdEsp32S3;
+    case ESP32C6_CHIP: return kEspChipIdEsp32C6;
+    default:           return -1;
+    }
 }
 
 // Shared logic once a session is connected, regardless of transport: chip-
@@ -108,7 +186,7 @@ void local_version(char* out) {
 // keep it under ~16 chars) reports which stage failed — PORTA has no
 // serial console fallback the way USB-C does, so unlike a bring-up aid
 // this is a lasting diagnostic, not something to trim later.
-esp_err_t flash_after_connect(esp_loader_t* loader, nano_flasher_status_t* out_status,
+esp_err_t flash_after_connect(esp_loader_t* loader, sidekick_flasher_status_t* out_status,
                                char* out_remote_version, size_t out_remote_version_size,
                                char* out_diag, size_t out_diag_size) {
     const target_chip_t target = esp_loader_get_target(loader);
@@ -126,6 +204,27 @@ esp_err_t flash_after_connect(esp_loader_t* loader, nano_flasher_status_t* out_s
         return ESP_FAIL;
     }
 
+    // Second gate: the payload must have been built for the chip we are
+    // actually talking to. The family check above only vets the *target*; it
+    // says nothing about what is embedded. When the sidekick project was
+    // retargeted from esp32c6 to esp32s3 (I3) that gap became a brick hazard —
+    // re-staging produced an S3 image that the C6-only check above would still
+    // happily write onto a real NanoC6. Deriving the requirement from the
+    // payload cannot drift the way a second hardcoded constant would.
+    const int payload_chip = embedded_chip_id();
+    const int target_chip = chip_id_for_target(target);
+    if (payload_chip < 0) {
+        ESP_LOGE(TAG, "Embedded firmware is not an ESP image (magic=0x%02x)", sidekick_bin[0]);
+        if (out_diag) snprintf(out_diag, out_diag_size, "bad payload");
+        return ESP_FAIL;
+    }
+    if (payload_chip != target_chip) {
+        ESP_LOGE(TAG, "Embedded firmware is for chip_id=%d, target is chip_id=%d — refusing to flash",
+                 payload_chip, target_chip);
+        if (out_diag) snprintf(out_diag, out_diag_size, "fw%d!=hw%d", payload_chip, target_chip);
+        return ESP_FAIL;
+    }
+
     // Read-then-decide before writing anything. Logged step by step (not a
     // single collapsed boolean) so a field failure is visible rather than
     // silently falling through to "not installed" — that fallthrough is
@@ -135,14 +234,24 @@ esp_err_t flash_after_connect(esp_loader_t* loader, nano_flasher_status_t* out_s
     char remote_version[kFieldLen + 1] = {};
     bool recognized = false;
 
-    esp_loader_error_t name_err = read_field(loader, kAppFlashBase + kProjectNameFieldOffset, remote_project_name);
+    char app_label[20] = {};
+    const uint32_t app_base = embedded_app_offset(app_label, sizeof(app_label));
+    if (app_base == 0) {
+        ESP_LOGE(TAG, "Embedded partition table has no app partition — refusing to flash");
+        if (out_diag) snprintf(out_diag, out_diag_size, "no app part");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "App partition '%s' at 0x%06lx (from the embedded table)",
+             app_label, (unsigned long)app_base);
+
+    esp_loader_error_t name_err = read_field(loader, app_base + kProjectNameFieldOffset, remote_project_name);
     if (name_err != ESP_LOADER_SUCCESS) {
         ESP_LOGW(TAG, "project_name read failed: err=%d", name_err);
         if (out_diag) snprintf(out_diag, out_diag_size, "name read fail %d", name_err);
     } else if (strcmp(remote_project_name, kExpectedProjectName) != 0) {
         ESP_LOGI(TAG, "project_name read OK but not ours: '%s'", remote_project_name);
     } else {
-        esp_loader_error_t ver_err = read_field(loader, kAppFlashBase + kVersionFieldOffset, remote_version);
+        esp_loader_error_t ver_err = read_field(loader, app_base + kVersionFieldOffset, remote_version);
         if (ver_err != ESP_LOADER_SUCCESS) {
             ESP_LOGW(TAG, "version read failed: err=%d (project_name matched)", ver_err);
             if (out_diag) snprintf(out_diag, out_diag_size, "ver read fail %d", ver_err);
@@ -161,7 +270,7 @@ esp_err_t flash_after_connect(esp_loader_t* loader, nano_flasher_status_t* out_s
         if (strcmp(remote_version, local_ver) == 0) {
             ESP_LOGI(TAG, "Already up to date (version=%s)", remote_version);
             if (out_status) {
-                *out_status = NANO_FLASHER_STATUS_UP_TO_DATE;
+                *out_status = SIDEKICK_FLASHER_STATUS_UP_TO_DATE;
             }
             return ESP_OK;  // nothing to write
         }
@@ -171,19 +280,37 @@ esp_err_t flash_after_connect(esp_loader_t* loader, nano_flasher_status_t* out_s
     }
 
     const FlashImage images[] = {
-        {nano_bootloader_bin, nano_bootloader_bin_len, 0x0, "bootloader"},
-        {nano_partition_table_bin, nano_partition_table_bin_len, 0x8000, "partition-table"},
-        {sidekick_bin, sidekick_bin_len, 0x10000, "sidekick app"},
+        {sidekick_bootloader_bin, sidekick_bootloader_bin_len, 0x0, "bootloader"},
+        {sidekick_partition_table_bin, sidekick_partition_table_bin_len,
+         kPartitionTableFlashOffset, "partition-table"},
+        {sidekick_bin, sidekick_bin_len, app_base, "sidekick app"},
     };
+    // otadata, when the target's table has one — skipped on a single-app
+    // layout, which has none. It matters on a part that has already run an
+    // OTA: its otadata would still select ota_1 while we have just written
+    // ota_0, so it would boot the stale slot. Writing the initial (erased)
+    // contents makes the bootloader fall back to the first app partition,
+    // which is the one we wrote.
+    const uint32_t otadata_base =
+        embedded_partition_offset(kPartitionTypeData, kPartitionSubtypeOtadata, nullptr, 0);
     for (const auto& img : images) {
         if (flash_image(loader, img) != ESP_LOADER_SUCCESS) {
             if (out_diag) snprintf(out_diag, out_diag_size, "write fail %s", img.name);
             return ESP_FAIL;
         }
     }
+    if (otadata_base != 0) {
+        ESP_LOGI(TAG, "Resetting otadata at 0x%06lx", (unsigned long)otadata_base);
+        const FlashImage otadata = {sidekick_otadata_bin, sidekick_otadata_bin_len,
+                                    otadata_base, "otadata"};
+        if (flash_image(loader, otadata) != ESP_LOADER_SUCCESS) {
+            if (out_diag) snprintf(out_diag, out_diag_size, "write fail otadata");
+            return ESP_FAIL;
+        }
+    }
     ESP_LOGI(TAG, "Nano flash complete");
     if (out_status) {
-        *out_status = NANO_FLASHER_STATUS_UPDATED;
+        *out_status = SIDEKICK_FLASHER_STATUS_UPDATED;
     }
     return ESP_OK;
 }
@@ -236,11 +363,11 @@ void porta_uart_noop(esp_loader_port_t*) {}
 
 }  // namespace
 
-esp_err_t nano_flasher_flash_embedded(uint16_t vid, uint16_t pid,
-                                       nano_flasher_status_t* out_status,
+esp_err_t sidekick_flasher_flash_embedded(uint16_t vid, uint16_t pid,
+                                       sidekick_flasher_status_t* out_status,
                                        char* out_remote_version, size_t out_remote_version_size) {
     if (out_status) {
-        *out_status = NANO_FLASHER_STATUS_UNKNOWN;
+        *out_status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
     }
     if (out_remote_version && out_remote_version_size) {
         out_remote_version[0] = '\0';
@@ -289,13 +416,13 @@ done:
     return result;
 }
 
-esp_err_t nano_flasher_flash_embedded_uart(uart_port_t uart, gpio_num_t tx_pin, gpio_num_t rx_pin,
+esp_err_t sidekick_flasher_flash_embedded_uart(uart_port_t uart, gpio_num_t tx_pin, gpio_num_t rx_pin,
                                             uint32_t baud_rate,
-                                            nano_flasher_status_t* out_status,
+                                            sidekick_flasher_status_t* out_status,
                                             char* out_remote_version, size_t out_remote_version_size,
                                             char* out_diag, size_t out_diag_size) {
     if (out_status) {
-        *out_status = NANO_FLASHER_STATUS_UNKNOWN;
+        *out_status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
     }
     if (out_remote_version && out_remote_version_size) {
         out_remote_version[0] = '\0';
@@ -346,7 +473,7 @@ esp_err_t nano_flasher_flash_embedded_uart(uart_port_t uart, gpio_num_t tx_pin, 
     return result;
 }
 
-bool nano_flasher_embedded_version(char* out, size_t out_size) {
+bool sidekick_flasher_embedded_version(char* out, size_t out_size) {
     if (!out || out_size < kFieldLen + 1) {
         return false;
     }
@@ -354,31 +481,31 @@ bool nano_flasher_embedded_version(char* out, size_t out_size) {
     return true;
 }
 
-#else  // !NANO_FLASHER_HAVE_FIRMWARE
+#else  // !SIDEKICK_FLASHER_HAVE_FIRMWARE
 
-esp_err_t nano_flasher_flash_embedded(uint16_t /*vid*/, uint16_t /*pid*/,
-                                       nano_flasher_status_t* out_status,
+esp_err_t sidekick_flasher_flash_embedded(uint16_t /*vid*/, uint16_t /*pid*/,
+                                       sidekick_flasher_status_t* out_status,
                                        char* /*out_remote_version*/, size_t /*out_remote_version_size*/) {
     if (out_status) {
-        *out_status = NANO_FLASHER_STATUS_UNKNOWN;
+        *out_status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
     }
-    ESP_LOGE(TAG, "No Nano firmware staged — run tools/stage_nano_firmware.sh before building");
+    ESP_LOGE(TAG, "No Nano firmware staged — run tools/stage_sidekick_firmware.sh before building");
     return ESP_ERR_NOT_FOUND;
 }
 
-esp_err_t nano_flasher_flash_embedded_uart(uart_port_t /*uart*/, gpio_num_t /*tx_pin*/, gpio_num_t /*rx_pin*/,
+esp_err_t sidekick_flasher_flash_embedded_uart(uart_port_t /*uart*/, gpio_num_t /*tx_pin*/, gpio_num_t /*rx_pin*/,
                                             uint32_t /*baud_rate*/,
-                                            nano_flasher_status_t* out_status,
+                                            sidekick_flasher_status_t* out_status,
                                             char* /*out_remote_version*/, size_t /*out_remote_version_size*/,
                                             char* /*out_diag*/, size_t /*out_diag_size*/) {
     if (out_status) {
-        *out_status = NANO_FLASHER_STATUS_UNKNOWN;
+        *out_status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
     }
-    ESP_LOGE(TAG, "No Nano firmware staged — run tools/stage_nano_firmware.sh before building");
+    ESP_LOGE(TAG, "No Nano firmware staged — run tools/stage_sidekick_firmware.sh before building");
     return ESP_ERR_NOT_FOUND;
 }
 
-bool nano_flasher_embedded_version(char* /*out*/, size_t /*out_size*/) {
+bool sidekick_flasher_embedded_version(char* /*out*/, size_t /*out_size*/) {
     return false;
 }
 

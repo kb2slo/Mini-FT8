@@ -24,7 +24,7 @@ dependencies:
   # the lock already held; bump them deliberately, not by moving a file.
   espressif/usb_host_uac: 1.3.3
   espressif/usb: 1.1.0
-  # USB Host CDC for CAT. Pinned exact: nano_flasher's esp-serial-flasher
+  # USB Host CDC for CAT. Pinned exact: sidekick_flasher's esp-serial-flasher
   # dependency also wants usb_host_cdc_acm and a fresh component-manager
   # resolve otherwise silently bumps this to the newest 2.x on the QMX CAT
   # path (I3 pivot, 2026-09-03). Bump deliberately, with a QMX field check —

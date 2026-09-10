@@ -5,7 +5,7 @@
 
 enum class UsbCKind : uint8_t {
     QmxQdx = 0,
-    GreenNano,
+    EspressifRom,
     Other,
 };
 
@@ -33,8 +33,13 @@ static constexpr uint16_t kUsbCEspressifVid = 0x303A;
 // unique to the Nano C6, but narrower than VID alone (other Espressif VID
 // devices, e.g. an AtomS3 running its own TinyUSB firmware with a custom
 // PID, don't match this). Still a heuristic, not proof: a genuine identity
-// check needs the ROM bootloader's own chip-ID (see nano_flasher).
-static constexpr uint16_t kUsbCNanoJtagPid = 0x1001;
+// check needs the ROM bootloader's own chip-ID (see sidekick_flasher).
+// 0x303A:0x1001 is the *generic* Espressif USB Serial/JTAG identifier — the
+// same on S3, C6, C3 and H2. It says "an Espressif chip in ROM/JTAG mode" and
+// nothing more: it has never identified a particular board, which is why an
+// AtomS3 was once classified as a Nano. The real identity check is the ROM
+// bootloader's own chip family, in sidekick_flasher.
+static constexpr uint16_t kUsbCEspSerialJtagPid = 0x1001;
 
 UsbCKind usb_c_classify(uint16_t vid, uint16_t pid);
 void usb_c_format_attach(const UsbCDevice& dev, char* title, size_t title_n, char* body, size_t body_n);

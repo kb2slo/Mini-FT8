@@ -151,7 +151,7 @@ jobs:
           cmake --build build -j"$(nproc)"
           ctest --test-dir build --output-on-failure
 
-  nano-firmware:
+  sidekick-firmware:
     name: Sidekick (ESP32-C6)
     needs: changes
     if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.firmware == 'true'
@@ -173,17 +173,20 @@ jobs:
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.5.1
-          target: esp32c6
+          # Sidekick retargeted C6 -> S3 with the AtomS3 Lite pivot (I3a).
+          # sidekick/CMakeLists.txt pins IDF_TARGET too; keep the two agreeing.
+          target: esp32s3
           path: sidekick
           extra_docker_args: -e MINIFT8_GIT_SHA=${{ env.MINIFT8_GIT_SHA }}
           command: idf.py build
 
+      # Use the script rather than re-listing the files here. This step used
+      # to copy three files by hand and went stale the moment the OTA
+      # partition change added ota_data_initial.bin (I3c) -- the ADV build
+      # then failed on a missing EMBED_FILES source. One definition, in
+      # tools/stage_sidekick_firmware.sh.
       - name: Stage sidekick outputs
-        run: |
-          mkdir -p stage
-          cp sidekick/build/bootloader/bootloader.bin stage/bootloader.bin
-          cp sidekick/build/partition_table/partition-table.bin stage/partition-table.bin
-          cp sidekick/build/sidekick.bin stage/sidekick.bin
+        run: ./tools/stage_sidekick_firmware.sh
 
       - name: Upload sidekick firmware
         uses: actions/upload-artifact@v6
@@ -191,11 +194,11 @@ jobs:
           name: sidekick-firmware
           if-no-files-found: error
           retention-days: 30
-          path: stage/
+          path: components/sidekick_flasher/target_firmware/
 
   firmware:
     name: Firmware (ESP32-S3)
-    needs: [changes, nano-firmware]
+    needs: [changes, sidekick-firmware]
     if: startsWith(github.ref, 'refs/tags/v') || needs.changes.outputs.firmware == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -212,16 +215,28 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: sidekick-firmware
-          path: components/nano_flasher/target_firmware
+          path: components/sidekick_flasher/target_firmware
 
+      # Globbed, not listed: the previous hand-maintained list here would have
+      # passed a staging step that had silently stopped producing a file.
       - name: Verify sidekick firmware staged
         run: |
-          for f in bootloader.bin partition-table.bin sidekick.bin; do
-            test -s "components/nano_flasher/target_firmware/${f}" || {
-              echo "::error::missing or empty components/nano_flasher/target_firmware/${f} — the published ADV image would silently ship without Nano field-flash support"
+          dir=components/sidekick_flasher/target_firmware
+          count=0
+          for f in "$dir"/*.bin; do
+            test -s "$f" || {
+              echo "::error::empty $f — the published ADV image would ship a broken sidekick payload"
               exit 1
             }
+            count=$((count + 1))
           done
+          echo "staged $count sidekick images"
+          # bootloader, partition table, app, otadata. Fewer means the staging
+          # script stopped producing something and nothing else would notice.
+          if [ "$count" -lt 4 ]; then
+            echo "::error::expected at least 4 staged images, found $count — the ADV would ship without working sidekick field-flash"
+            exit 1
+          fi
 
       - name: Build with ESP-IDF 5.5.1
         uses: espressif/esp-idf-ci-action@v1

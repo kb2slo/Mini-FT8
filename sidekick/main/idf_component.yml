@@ -1,0 +1,6 @@
+dependencies:
+  # mDNS so the sidekick answers to minift8.local instead of an IP the operator
+  # has to read off a serial console. Pinned exact, matching how the ADV pins
+  # its managed components: a floating version means a fresh resolve on another
+  # machine can silently change what ships.
+  espressif/mdns: "1.8.2"

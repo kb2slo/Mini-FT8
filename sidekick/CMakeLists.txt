@@ -3,10 +3,11 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Separate idf.py project from the ADV app (mini_ft8). ESP-IDF locks target
-# and sdkconfig per project, so the two chips cannot share one configure —
+# and sdkconfig per project, so the ADV app and this one cannot share a
+# configure even though both are esp32s3 now —
 # see RFC 0001 §5.1. Pinned here so `idf.py build` works without a manual
 # `set-target` step.
-set(IDF_TARGET esp32c6)
+set(IDF_TARGET esp32s3)
 
 # Exact git SHA + dirty flag, not ESP-IDF's default `git describe` (tag-
 # relative, fuzzy) — via the same shared, override-aware logic

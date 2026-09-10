@@ -1,0 +1,23 @@
+# Sidekick partition table — AtomS3 Lite (ESP32-S3FN8, 8 MB).
+#
+# Two OTA slots, no factory. RFC 0001 §5.2d: the sidekick pulls its own
+# firmware over HTTPS rather than being pushed to over the wire, so it needs
+# somewhere to stage an image and something to fall back to. With otadata
+# erased the bootloader boots ota_0, which is what the ADV's USB-C bootstrap
+# writes.
+#
+# 3 MB slots on an 8 MB part. Measured 2026-09-09 on esp32s3: IDF's
+# simple_ota_example (WiFi + HTTPS + CA) is 911 KB, and a full sidekick with
+# the browser UI and embedded assets is estimated 1.2-1.4 MB — so this is
+# roughly 2x headroom, chosen because resizing later costs a USB-C reflash of
+# every device in existence. Cheap at one device, expensive after distribution.
+#
+# nvs stays at 0x9000 with its original 24 KB. Any future change to this table
+# must keep it there, or stored WiFi credentials and config are silently lost.
+#
+# Name,     Type, SubType,  Offset,   Size,    Flags
+nvs,        data, nvs,      0x9000,   0x6000,
+otadata,    data, ota,      0xF000,   0x2000,
+phy_init,   data, phy,      0x11000,  0x1000,
+ota_0,      app,  ota_0,    0x20000,  0x300000,
+ota_1,      app,  ota_1,    0x320000, 0x300000,

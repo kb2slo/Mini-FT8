@@ -13,7 +13,7 @@ MAP="$BUILD/mini_ft8.map"
 APP_BIN="$BUILD/mini_ft8.bin"
 MERGED_BIN="$BUILD/MiniFT8_Merged_Auto.bin"
 IDENTITY="$BUILD/generated/build_identity.h"
-STAGE="$ROOT/components/nano_flasher/target_firmware"
+STAGE="$ROOT/components/sidekick_flasher/target_firmware"
 PARTITIONS="$ROOT/partitions.csv"
 
 if [[ ! -f "$ELF" ]]; then

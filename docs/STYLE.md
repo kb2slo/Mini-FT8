@@ -81,7 +81,7 @@ No new logic in `main.cpp`. Call sites, wiring, and UI only. If it can be host-t
 | `M5Cardputer`, `M5GFX`, `M5Unified`, `ft8_lib` | Vendored third-party. RFC 0002 §6 vendor boundary — do not format, do not restructure. |
 | `board_cardputer_adv` | Also forced (prong 1): `test_apps/cardputer_adv_audio_keyboard` requires it. Board/HAL seam [RFC 0001](rfcs/0001-ble-companion.md) I24 needs for a headless host. |
 | `ui` | The display seam I24 needs to run headless. Demoting it would remove the abstraction that work depends on. 4200+ lines, 8 files. |
-| `nano_flasher` | `EMBED_FILES` packaging of the `sidekick` image, a generated header, and conditional compile defines. That machinery is about shipping a payload, not about source layout. |
+| `sidekick_flasher` | `EMBED_FILES` packaging of the `sidekick` image, a generated header, and conditional compile defines. That machinery is about shipping a payload, not about source layout. |
 
 Anything not covered by prong 1 or listed above is a plain file in `main/`.
 

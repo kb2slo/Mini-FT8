@@ -70,7 +70,7 @@ extern "C" {
 #include "adif.h"
 #include "cts_ble.h"
 #include "band_config.h"
-#include "nano_flasher.h"
+#include "sidekick_flasher.h"
 
 static const char* STATION_FILE = "Station.txt";
 
@@ -494,9 +494,9 @@ static constexpr int64_t kStartupAutoDismissMs = 1000;
 static int64_t g_usb_toast_until_ms = 0;
 static bool g_usb_host_parked_for_cts = false;
 static bool g_usb_host_parked_for_nano_flash = false;
-static bool g_green_nano_present = false;
-static uint16_t g_green_nano_vid = 0;
-static uint16_t g_green_nano_pid = 0;
+static bool g_espressif_rom_present = false;
+static uint16_t g_espressif_rom_vid = 0;
+static uint16_t g_espressif_rom_pid = 0;
 static bool g_nano_flash_in_progress = false;
 
 static bool is_startup_direct_mode_key(char c) {
@@ -3676,9 +3676,9 @@ static void restore_usb_host_after_nano_flash() {
 // background task with progress feedback is the natural next slice once the
 // mechanism is proven on real hardware — do not mistake this for the
 // finished install-prompt UX from RFC 0001 §5.4.
-static void report_nano_flash_result(esp_err_t err, nano_flasher_status_t status, const char* remote_version);
+static void report_sidekick_flash_result(esp_err_t err, sidekick_flasher_status_t status, const char* remote_version);
 
-static void nano_flash_start_from_ui() {
+static void sidekick_flash_start_from_ui() {
   if (g_tx_active) {
     debug_log_line("Nano flash: TX busy");
     return;
@@ -3686,11 +3686,11 @@ static void nano_flash_start_from_ui() {
   if (g_nano_flash_in_progress) {
     return;
   }
-  if (!g_green_nano_present) {
+  if (!g_espressif_rom_present) {
     debug_log_line("Nano flash: no Nano attached");
     return;
   }
-  if (!nano_flasher_has_firmware()) {
+  if (!sidekick_flasher_has_firmware()) {
     debug_log_line("Nano flash: no firmware staged");
     return;
   }
@@ -3700,8 +3700,8 @@ static void nano_flash_start_from_ui() {
   ui_draw_message_dialog("Sidekick", "Flashing...");
   draw_bt_view();
 
-  const uint16_t vid = g_green_nano_vid;
-  const uint16_t pid = g_green_nano_pid;
+  const uint16_t vid = g_espressif_rom_vid;
+  const uint16_t pid = g_espressif_rom_pid;
   // Tearing the USB host down and back up (below) makes it re-enumerate the
   // very same physical Nano, which queues a synthetic Attach event for a
   // device that never moved. Left alone, usb_c_toast_tick() drains that
@@ -3737,15 +3737,15 @@ static void nano_flash_start_from_ui() {
   }
   usb_c_presence_yield_device();  // let CDC-ACM claim the Nano, same as UAC does for QMX
 
-  nano_flasher_status_t status = NANO_FLASHER_STATUS_UNKNOWN;
+  sidekick_flasher_status_t status = SIDEKICK_FLASHER_STATUS_UNKNOWN;
   char remote_version[33] = {};
   const esp_err_t err =
-      nano_flasher_flash_embedded(vid, pid, &status, remote_version, sizeof(remote_version));
+      sidekick_flasher_flash_embedded(vid, pid, &status, remote_version, sizeof(remote_version));
   restore_usb_host_after_nano_flash();
   usb_c_presence_set_notify(true);
   g_nano_flash_in_progress = false;
 
-  report_nano_flash_result(err, status, remote_version);
+  report_sidekick_flash_result(err, status, remote_version);
 }
 
 // Shared by both flash paths (USB-C and PORTA UART) — only how the session
@@ -3753,12 +3753,12 @@ static void nano_flash_start_from_ui() {
 // ui_draw_list's ~20-char/row budget (240px screen, no wrap protection —
 // a longer single line garbles into the row below it, found the hard way
 // bench-testing the PORTA companion beacon, RFC 0001 §5.2c).
-static void report_nano_flash_result(esp_err_t err, nano_flasher_status_t status, const char* remote_version) {
+static void report_sidekick_flash_result(esp_err_t err, sidekick_flasher_status_t status, const char* remote_version) {
   const char* body = "Flash FAILED";
   if (err == ESP_OK) {
-    body = (status == NANO_FLASHER_STATUS_UP_TO_DATE) ? "Up to date" : "Flash OK";
+    body = (status == SIDEKICK_FLASHER_STATUS_UP_TO_DATE) ? "Up to date" : "Flash OK";
   }
-  if (err == ESP_OK && status == NANO_FLASHER_STATUS_UP_TO_DATE) {
+  if (err == ESP_OK && status == SIDEKICK_FLASHER_STATUS_UP_TO_DATE) {
     // One line, not two — see the comment above this function; two related
     // lines can straddle a page boundary and only the later one is shown.
     debug_log_line(std::string("OK ") + remote_version);
@@ -3781,7 +3781,7 @@ static void report_nano_flash_result(esp_err_t err, nano_flasher_status_t status
 // 2026-09-04 and disproved — a software reset on ESP32-C6 does not cause
 // the ROM to re-sample GPIO9, so it always reboots straight back into the
 // app regardless of the button (see sidekick/main/main.c's comment for the
-// full finding). nano_flasher_flash_embedded_uart() itself is unaffected by
+// full finding). sidekick_flasher_flash_embedded_uart() itself is unaffected by
 // that finding — it correctly talks the esp_loader protocol over UART once
 // something is actually listening — so it stays as tested, reusable
 // infrastructure for whatever the real trigger mechanism ends up being
@@ -3798,7 +3798,7 @@ static void draw_bt_view(bool force_redraw) {
   char name[20];
   std::snprintf(name, sizeof(name), "Mini-FT8-%.8s", g_call.c_str());
   lines.push_back(name);
-  lines.push_back(g_green_nano_present ? "2: Flash Sidekick" : "Time only, no grid");
+  lines.push_back(g_espressif_rom_present ? "2: Flash Sidekick" : "Time only, no grid");
   {
     // PORTA update (RFC 0001 §5.2c) isn't offered here — the button-hold
     // trigger it depended on is proven not to work on ESP32-C6 (see
@@ -4400,13 +4400,13 @@ static void usb_c_toast_tick() {
     switch (ev.action) {
       case UsbCPresenceAction::Attach:
         usb_c_format_attach(ev.device, title, sizeof(title), body, sizeof(body));
-        g_green_nano_present = (ev.device.kind == UsbCKind::GreenNano);
-        g_green_nano_vid = ev.device.vid;
-        g_green_nano_pid = ev.device.pid;
+        g_espressif_rom_present = (ev.device.kind == UsbCKind::EspressifRom);
+        g_espressif_rom_vid = ev.device.vid;
+        g_espressif_rom_pid = ev.device.pid;
         break;
       case UsbCPresenceAction::Detach:
         usb_c_format_detach(ev.device, title, sizeof(title), body, sizeof(body));
-        g_green_nano_present = false;
+        g_espressif_rom_present = false;
         break;
     }
     ui_draw_message_dialog(title, body);
@@ -4896,7 +4896,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
           cts_iphone_start_from_ui();
           draw_bt_view();
         } else if (c == '2') {
-          nano_flash_start_from_ui();
+          sidekick_flash_start_from_ui();
         }
         break;
       }

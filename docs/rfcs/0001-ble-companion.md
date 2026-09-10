@@ -116,7 +116,7 @@ Three things follow, and the third is the one that matters:
 - **The cost lands only when the radio is idle.** `S → 2` installs the host anyway, so B18 changes *when*, not *whether*. Its 6K is spent precisely in the state CTS needs.
 - **6K does not scale the wall.** §4.1b's finding is that each stack wants a ~40K-class *contiguous* hole to start, and `S → 2` then `H → 1` failed at ~29K. Recovering 6K does not turn 29K into 40K. **Going on-demand will not unlock B17**, and should not be justified on memory grounds. Its real justifications are correctness (see §5.5) and matching the intended design.
 
-Attribution caveat: four days and several commits (`nano_flasher`, PORTA work) separate the two measurements, so B18 is the prime suspect, not a proven cause. The clean A/B is one build with the boot-time `uac_host_ensure_started()` removed — boot, read **L**. 44K confirms it.
+Attribution caveat: four days and several commits (`sidekick_flasher`, PORTA work) separate the two measurements, so B18 is the prime suspect, not a proven cause. The clean A/B is one build with the boot-time `uac_host_ensure_started()` removed — boot, read **L**. 44K confirms it.
 
 ### 4.2 What “fits” means
 
@@ -168,7 +168,7 @@ A chat-only exploration (never landed in this file, so no revert needed elsewher
 
 **Bench-tested 2026-09-05, and it failed.** A minimal POC (`test_apps/atoms3_qmx_host_poc/`, not shipped) installed the USB Host Library on an AtomS3 Lite and attempted the exact CAT sequence `main/radio_control_qmx.cpp` already uses and has proven on the ADV: `MD6; FR0; FT0; FA00007074000;` — entirely receive-side, no `TX;`, safe with no antenna. Pass condition was the QMX's **own screen** showing the new frequency (chosen specifically because this operator's bench has no way to watch UART/serial logs while the AtomS3's one USB-C port is busy being a host — the same port can't simultaneously present a debug console). The QMX's display never changed. Retested with the AtomS3 Lite additionally powered independently via its Grove 5V pin (ruling out "it just needed its own power rail" as an explanation) — same result. **Confirmed, not inferred: this specific board cannot act as a USB host for a QMX.**
 
-**Scope of what this closes.** It is not narrowly about flashing a sidekick over USB — that would be a minor, recoverable loss (the existing desk-flash-over-its-own-USB-C fallback, already documented and proven, covers it). It is the same underlying capability, and the same shared software path (`nano_flasher`'s field-flash and `stream_uac.cpp`'s QMX CAT hosting both depend on `usb_host_cdc_acm`) — so this closes **any** use of this specific board as a USB host, which is the one thing "headless-as-main" cannot do without.
+**Scope of what this closes.** It is not narrowly about flashing a sidekick over USB — that would be a minor, recoverable loss (the existing desk-flash-over-its-own-USB-C fallback, already documented and proven, covers it). It is the same underlying capability, and the same shared software path (`sidekick_flasher`'s field-flash and `stream_uac.cpp`'s QMX CAT hosting both depend on `usb_host_cdc_acm`) — so this closes **any** use of this specific board as a USB host, which is the one thing "headless-as-main" cannot do without.
 
 **What this does not close.** The ADV's own USB-host capability (Stamp-S3A module) is unaffected and remains fully proven — this finding is about a *different* chip carrier, not about ESP32-S3 USB-OTG host mode in general. A board built on the exact same Stamp-S3A module the ADV already uses would inherit that proven behavior; whether one is sourceable standalone (screen-less, keyboard-less) remains open, tracked in ROADMAP I24. The more actively pursued thread is a different chip, ESP32-P4, which does not inherit this proof and gets its own bench test before reopening headless-as-main — tracked as ROADMAP B26. Do not substitute another untested SKU, on either chip, for a real bench test.
 
@@ -207,9 +207,9 @@ I19's original DHCP-no-gateway field test was never actually run — superseded 
 
 **Dev:** ESP-IDF 5.5.x, `idf.py set-target esp32s3` (was `esp32c6`), same `sidekick/` project location (sibling root next to `main/`, `components/`, `test_apps/`). Strap pin for download mode is **GPIO0** on ESP32-S3 (not the C6's GPIO9) — same family as the ADV's own Stamp-S3A, so the same desk bring-up procedure the ADV itself uses applies, not the Nano-specific GPIO9 instructions in the historical section below.
 
-**Retargeting work, tracked as its own item ([ROADMAP I3](../ROADMAP.md), amended):** `sidekick/`'s `sdkconfig`/`CMakeLists.txt` need the target change; `components/nano_flasher/nano_flasher.cpp:116`'s `if (target != ESP32C6_CHIP)` needs to also accept `ESP32S3_CHIP` (the ADV remains the proven host in that relationship — this is a small, well-scoped widening, not a redesign); the WiFi/HTTP application logic itself is new work, not a port of anything that existed for the Nano (which never had WiFi at all). §5.2 onward below is the **Nano-era reference design** for the mechanics that do carry over unchanged in shape (ADV hosts and flashes the sidekick over USB-C, then the sidekick moves to PORTA for the ongoing link) — re-verify each specific fact against the new chip rather than assuming it, the same discipline this project has applied to every other hardware claim.
+**Retargeting work, tracked as its own item ([ROADMAP I3](../ROADMAP.md), amended):** `sidekick/`'s `sdkconfig`/`CMakeLists.txt` need the target change; `components/sidekick_flasher/sidekick_flasher.cpp:116`'s `if (target != ESP32C6_CHIP)` needs to also accept `ESP32S3_CHIP` (the ADV remains the proven host in that relationship — this is a small, well-scoped widening, not a redesign); the WiFi/HTTP application logic itself is new work, not a port of anything that existed for the Nano (which never had WiFi at all). §5.2 onward below is the **Nano-era reference design** for the mechanics that do carry over unchanged in shape (ADV hosts and flashes the sidekick over USB-C, then the sidekick moves to PORTA for the ongoing link) — re-verify each specific fact against the new chip rather than assuming it, the same discipline this project has applied to every other hardware claim.
 
-**Build integration (pivot from "separate project"):** `tools/stage_nano_firmware.sh` builds the `esp32c6` `sidekick` project and stages its outputs into `components/nano_flasher/target_firmware/`; the ADV build then embeds the resulting `sidekick.bin` (plus bootloader and partition table) into the ADV app image via `EMBED_FILES`, and CI's `nano-firmware` job does the equivalent before the ADV job runs. This is a **data payload**, not code the ADV executes: the S3 never runs C6 instructions. The embedded bytes exist only so the ADV can push them out over USB-C to a Nano's ROM serial bootloader (§5.4). Two build outputs ship from one `idf.py build`: the ADV merged image (as today) and, unchanged, a standalone Nano `.bin` for desk flash via `esptool.py` when field-flash isn't used or fails. Flash budget: the embedded `.bin` must fit the ADV's `partitions.csv` remainder — measure before merging, same discipline as §4's DIRAM measurement.
+**Build integration (pivot from "separate project"):** `tools/stage_sidekick_firmware.sh` builds the `esp32c6` `sidekick` project and stages its outputs into `components/sidekick_flasher/target_firmware/`; the ADV build then embeds the resulting `sidekick.bin` (plus bootloader and partition table) into the ADV app image via `EMBED_FILES`, and CI's `nano-firmware` job does the equivalent before the ADV job runs. This is a **data payload**, not code the ADV executes: the S3 never runs C6 instructions. The embedded bytes exist only so the ADV can push them out over USB-C to a Nano's ROM serial bootloader (§5.4). Two build outputs ship from one `idf.py build`: the ADV merged image (as today) and, unchanged, a standalone Nano `.bin` for desk flash via `esptool.py` when field-flash isn't used or fails. Flash budget: the embedded `.bin` must fit the ADV's `partitions.csv` remainder — measure before merging, same discipline as §4's DIRAM measurement.
 
 **UART is enough:** compact `CALL,GRID,SNR,DT,FREQ` lines are kilobits per 15 s slot. 115200 baud is plenty. Do not `uart_write` from the decode task. Software credits if a fat `.adi` dump can overrun the Nano RX buffer (four wires, no RTS/CTS unless more EXT pins are stolen).
 
@@ -217,13 +217,15 @@ I19's original DHCP-no-gateway field test was never actually run — superseded 
 
 ### 5.2 Physical (ADV + Nano) — NANO-ERA REFERENCE DESIGN, not yet re-verified for AtomS3 Lite
 
+> **Update path superseded by §5.2d (2026-09-09).** Everything below about pushing firmware over PORTA — the button-hold attempt, the custom bootloader responder, the 5th-wire alternative — is retained as the record of how that was disproved, not as the plan. The ROM cannot be reached over Grove on any of these chips (B42), and the sidekick pulls its own updates over WiFi instead.
+
 **Everything from here through the end of §5.2c was built and proven on real hardware for NanoC6.** It's kept in full, not deleted, because the mechanism it describes (ADV hosts and field-flashes the sidekick over USB-C, sidekick then moves to PORTA for the ongoing UART link, version identity via the shared `esp_app_desc_t` scheme) is the intended shape for AtomS3 Lite too. But it has not been re-verified on that chip. Known specific facts below that are **known to change** on ESP32-S3: the strap pin is GPIO0, not GPIO9 (§5.1); the button-hold disproof (§5.2 below) is a C6-specific finding about C6's ROM behavior and should not be assumed to apply or not apply to S3 without checking; flash size is 8 MB not 4 MB. Treat every other specific claim below (VID/PID handling aside — that's ADV-side and chip-agnostic) as needing the same "verify, don't assume" pass before relying on it for AtomS3 Lite.
 
 **Boot presence (B18):** the factory Nano speaks on **its USB-C** (Espressif CDC / USB-Serial-JTAG). ADV USB-C is USB **host** — same jack as QMX. A Grove ping cannot see a factory Nano (PORTA probe field-failed 2026-09-02: silent Grove, then idle-high false positive). See §5.5.
 
 **Companion UART (I3, not B18):** PORTA Grove **G1/G2** (UART1). GPS puck and Nano are **either/or** on PORTA. Exclusive with [B11](../ROADMAP.md) (QMX+ AUX GPS into PORTA). LoRa GNSS stays UART2 and can coexist. This is the **runtime** link (decode feed, once BLE is up) and is distinct from the USB-C **flash** step below — a Nano is plugged into ADV USB-C to receive firmware, then moved to PORTA Grove for the ongoing companion link.
 
-**Field flash over USB-C (pivot, §5.1):** a factory (unflashed) Nano on ADV USB-C is still recognized by B18 presence (`303A:*`). The install prompt (§5.4) drives the ADV, acting as USB host, through the Nano's ROM serial bootloader protocol (sync + flash-begin/flash-data, the same handshake `esptool.py` uses) to write the embedded `.bin`. This needs the Nano's native USB Serial/JTAG peripheral to support the same auto-reset-into-bootloader handshake `esptool.py` uses from a PC. `components/nano_flasher/` (2026-09-03) builds and links this correctly — `esp_loader_*` + `esp32_usb_cdc_acm_port` wired to a real Green Nano attach event, embedded `sidekick` bootloader/partition-table/app confirmed byte-exact in the shipped ADV image via `nm`. **Proven on real hardware (2026-09-03):** ADV field-flashed a genuine factory M5NanoC6 over its own USB-C host link; `idf.py monitor` on the Nano's own USB-C afterward showed it booting `sidekick` (not the stock `nanoc6_factorytest` firmware it shipped with). First attempt failed silently (a host-lifecycle bug — `cdc_acm_host_install()` was called after a full USB host teardown with nothing to attach to); fixed by explicitly reinstalling the host and calling `usb_c_presence_yield_device()` before handing off to the flasher, same as UAC already does for QMX. `tools/restore_nano_stock.sh` (full 4 MB flash backup/restore) re-greened the same physical part for a clean retest, which passed. Fallback (desk flash on the Nano's own USB-C) remains available and unchanged if a future unit doesn't cooperate.
+**Field flash over USB-C (pivot, §5.1):** a factory (unflashed) Nano on ADV USB-C is still recognized by B18 presence (`303A:*`). The install prompt (§5.4) drives the ADV, acting as USB host, through the Nano's ROM serial bootloader protocol (sync + flash-begin/flash-data, the same handshake `esptool.py` uses) to write the embedded `.bin`. This needs the Nano's native USB Serial/JTAG peripheral to support the same auto-reset-into-bootloader handshake `esptool.py` uses from a PC. `components/sidekick_flasher/` (2026-09-03) builds and links this correctly — `esp_loader_*` + `esp32_usb_cdc_acm_port` wired to a real Green Nano attach event, embedded `sidekick` bootloader/partition-table/app confirmed byte-exact in the shipped ADV image via `nm`. **Proven on real hardware (2026-09-03):** ADV field-flashed a genuine factory M5NanoC6 over its own USB-C host link; `idf.py monitor` on the Nano's own USB-C afterward showed it booting `sidekick` (not the stock `nanoc6_factorytest` firmware it shipped with). First attempt failed silently (a host-lifecycle bug — `cdc_acm_host_install()` was called after a full USB host teardown with nothing to attach to); fixed by explicitly reinstalling the host and calling `usb_c_presence_yield_device()` before handing off to the flasher, same as UAC already does for QMX. `tools/restore_sidekick_stock.sh` (full 4 MB flash backup/restore) re-greened the same physical part for a clean retest, which passed. Fallback (desk flash on the Nano's own USB-C) remains available and unchanged if a future unit doesn't cooperate.
 
 **Two flash mechanisms, not two configurations of one** (2026-09-03 design decision; entry mechanism corrected 2026-09-04): a **green/factory Nano has no code that can answer a software download-mode request**, so its *only* entry point is the native-USB ROM bootloader — USB-C is mandatory for the first flash, not just preferred. **Seed flash** = ROM bootloader over USB-C CDC (`esp-serial-flasher` + the custom USB-CDC-host transport, already built and proven on hardware). Use `esp-serial-flasher` (Espressif's own chip-flashes-chip library, already in the component-registry pattern this tree uses for `espressif/usb_host_cdc_acm`) rather than hand-rolling the ROM protocol.
 
@@ -231,11 +233,11 @@ I19's original DHCP-no-gateway field test was never actually run — superseded 
 
 **Button-hold self-restart, tried and disproved (2026-09-04):** the plan was: the M5NanoC6 has exactly one on-board button, wired to GPIO9 (M5Stack's own docs: "hold down the GPIO9 button and then connect the data cable" for desk bring-up). `sidekick`, already running and powered via PORTA, would read that same GPIO9 pin as a plain input and self-call `esp_restart()` on a sustained press — the operator's finger still physically holding GPIO9 low at that exact reset, landing the chip in ROM download mode as if a cable had just been plugged in fresh. Built and bench-tested on real hardware: the button read correctly (progress logged cleanly at 500ms/1000ms/.../2500ms) and `esp_restart()` fired as expected — but the reboot banner showed `rst:0xc (SW_CPU),boot:0xd (SPI_FAST_FLASH_BOOT)`. A software (`SW_CPU`) reset does **not** cause the ROM to re-sample GPIO9 at all; it boots straight back into the app regardless of the button. Corroborated, not just a fluke: Espressif's own esptool disables its (different, more aggressive) `--after watchdog-reset` trick specifically on ESP32-C6, citing full system freezes requiring a power cycle to recover — the same underlying limitation, not something a cleaner implementation would route around. Removed from `sidekick` and the ADV's BT screen (git history has the full attempt) rather than left in as a UI option that would reliably fail.
 
-**Future phase — custom bootloader responder (preferred over wiring):** the second-stage bootloader (`bootloader.bin` — ours, not the ROM) runs on every boot including a software reset (confirmed by the disproof above: `esp_bootloader_get_description` executed right after the `SW_CPU` reset). A modified bootloader could check an RTC-memory flag the app sets before calling `esp_restart()`, and if set, skip normal boot and run its own minimal `esp_loader`-protocol responder (sync, flash-begin, flash-data, flash-end, checksums) over PORTA instead — sidesteps ROM strap-sampling entirely, since it's reached through normal code execution, not hardware pin state. `nano_flasher_flash_embedded_uart()` (`components/nano_flasher/`) needs no changes for this — it already talks generic `esp_loader` protocol and doesn't care what's listening on the other end, so it's already correct, tested-by-design infrastructure for whichever trigger mechanism ends up working. Real scope, not a quick follow-up: genuine protocol-server engineering running in the bootloader's constrained early-boot environment, and meaningfully higher-stakes than app-level code — a bug there affects every boot, not just the update path, not just the failed-update path. Own design pass before starting, not a drive-by.
+**Future phase — custom bootloader responder (preferred over wiring):** the second-stage bootloader (`bootloader.bin` — ours, not the ROM) runs on every boot including a software reset (confirmed by the disproof above: `esp_bootloader_get_description` executed right after the `SW_CPU` reset). A modified bootloader could check an RTC-memory flag the app sets before calling `esp_restart()`, and if set, skip normal boot and run its own minimal `esp_loader`-protocol responder (sync, flash-begin, flash-data, flash-end, checksums) over PORTA instead — sidesteps ROM strap-sampling entirely, since it's reached through normal code execution, not hardware pin state. `sidekick_flasher_flash_embedded_uart()` (`components/sidekick_flasher/`) needs no changes for this — it already talks generic `esp_loader` protocol and doesn't care what's listening on the other end, so it's already correct, tested-by-design infrastructure for whichever trigger mechanism ends up working. Real scope, not a quick follow-up: genuine protocol-server engineering running in the bootloader's constrained early-boot environment, and meaningfully higher-stakes than app-level code — a bug there affects every boot, not just the update path, not just the failed-update path. Own design pass before starting, not a drive-by.
 
 **Alternative future phase, less preferred:** a dedicated 5th wire between ADV and Nano carrying GPIO9 (or GPIO9+EN, mirroring the DTR/RTS pair esptool itself uses over USB) would let the ADV trigger download mode directly via genuine hardware strap control. Simpler in concept than the bootloader responder, but means leaving a clean Grove-to-Grove cable for a custom connector/wiring — a real physical complication to the enclosure and cabling that the bootloader-responder idea avoids entirely. Worth falling back to only if the bootloader responder turns out impractical.
 
-USB-C stays the only flash path until one of the above is actually built.
+**Both future phases above are superseded — see §5.2d (2026-09-09).** They answer "how does the ADV push firmware down the Grove cable", and that question is now closed twice over: the ROM cannot listen on those pins at all (B42), and the sidekick does not need to be pushed to, because it can pull. USB-C remains the only *wire* flash path, and is now expected to stay that way permanently rather than "until one of the above is built".
 
 Power in the field (when UART is sequenced): PORTA 5 V / GND. ADV power switch **ON**. Desk log-bridge: power the Nano from **its** USB-C only.
 
@@ -247,7 +249,7 @@ Power in the field (when UART is sequenced): PORTA 5 V / GND. ADV power switch *
 
 ### 5.2b Version identity and update detection (I3, 2026-09-04)
 
-Both paths below — USB-C pre-flash and PORTA runtime — answer the same question ("is this Nano already running `sidekick`, and if so, which build") from the same source, not two separate mechanisms: every ESP-IDF app embeds an `esp_app_desc_t` (256 bytes, magic word `0xABCD5432`, `project_name[32]`, `version[32]`) at a fixed, linker-guaranteed offset — the literal first thing in the DROM segment (ESP-IDF's own linker script: *"Should be the first. App version info. /\* DO NOT PUT ANYTHING BEFORE THIS \*/"*). Verified empirically against a real `sidekick` build (esp32c6, ESP-IDF 5.5.1): absolute flash offset `0x10020` (app partition base `0x10000` + `0x20` — an 8-byte segment header sits before the data; easy to miscount, as a first pass here did). This offset holds for this target/IDF-version/partition-table/no-secure-boot combination — re-derive it the same way (don't assume) if any of those change.
+Both paths below — USB-C pre-flash and PORTA runtime — answer the same question ("is this Nano already running `sidekick`, and if so, which build") from the same source, not two separate mechanisms: every ESP-IDF app embeds an `esp_app_desc_t` (256 bytes, magic word `0xABCD5432`, `project_name[32]`, `version[32]`) at a fixed, linker-guaranteed offset — the literal first thing in the DROM segment (ESP-IDF's own linker script: *"Should be the first. App version info. /\* DO NOT PUT ANYTHING BEFORE THIS \*/"*). Verified empirically against a real `sidekick` build (esp32c6, ESP-IDF 5.5.1): absolute flash offset `0x10020` (app partition base `0x10000` + `0x20` — an 8-byte segment header sits before the data; easy to miscount, as a first pass here did). This offset holds for this target/IDF-version/partition-table/no-secure-boot combination — re-derive it the same way (don't assume) if any of those change. **It did change: §5.2d's OTA table moved the app from `factory` at `0x10000` to `ota_0` at `0x20000`, so the descriptor is now at `0x20020`.** The ADV no longer hardcodes it either way — `sidekick_flasher` derives the app base by walking the partition-table image it embeds, so the two sides cannot drift.
 
 **Versioning scheme:** `sidekick` adopts the ADV's own build-identity approach (`tools/gen_build_identity.cmake` — exact git SHA + dirty flag) instead of ESP-IDF's default `git describe`-based `PROJECT_VER`. A describe string is tag-relative and fuzzy; SHA+dirty gives an exact "is this literally the same build" comparison, which is what both checks below need.
 
@@ -268,11 +270,105 @@ Both transports funnel into one shared version-compare function on the ADV side;
 
 **Companion beacon, not a bare sync byte.** A single unvalidated `0xC6` is too weak to trust as "companion present" — indistinguishable from a stray noise byte. `sidekick/main/main.c` instead transmits a full frame roughly once a second: `0xC6` + `version[32]` (from `esp_app_get_description()`, NUL-padded) + a 1-byte XOR checksum over the preceding 33 bytes. `porta.cpp` only locks `kCompanion` once the whole frame validates; a checksum failure is discarded as noise and scanning resumes, matching how GPS detection already requires a full NMEA checksum rather than a bare `$`. A partial frame stuck mid-collection for >250ms (a bit error, not slow arrival — 34 bytes at 115200 baud is ~3ms) is abandoned rather than blocking GPS detection indefinitely.
 
-**Version comparison, not just presence.** On a validated beacon, `porta.cpp` compares the received version against this ADV's own embedded `sidekick` build via a new `nano_flasher_embedded_version()` getter (the same version-comparison data `nano_flasher_flash_embedded()` already uses for the USB-C path, reachable now without a USB-C session) and logs a clear match/mismatch — `porta_get_companion_version()` / `porta_companion_version_matches()` expose the result. **Deliberately simplified versioning (2026-09-04 decision):** rather than track ADV and sidekick versions independently and compare two different git states, `tools/git_version.cmake` is now shared by both `tools/gen_build_identity.cmake` (ADV) and `sidekick/CMakeLists.txt` — same repo, same commit, same override-aware logic, so an exact string match is the whole test. This closed a real, latent CI bug in passing: CI checks out a synthesized merge commit for a PR, not `github.event.pull_request.head.sha`, so the ADV firmware job pins `MINIFT8_GIT_SHA` explicitly — but the sidekick build job never received that same pin before this change, so a CI-built pair could have silently disagreed on "the same commit"'s version string even though a local build never would have.
+**Version comparison, not just presence.** On a validated beacon, `porta.cpp` compares the received version against this ADV's own embedded `sidekick` build via a new `sidekick_flasher_embedded_version()` getter (the same version-comparison data `sidekick_flasher_flash_embedded()` already uses for the USB-C path, reachable now without a USB-C session) and logs a clear match/mismatch — `porta_get_companion_version()` / `porta_companion_version_matches()` expose the result. **Deliberately simplified versioning (2026-09-04 decision):** rather than track ADV and sidekick versions independently and compare two different git states, `tools/git_version.cmake` is now shared by both `tools/gen_build_identity.cmake` (ADV) and `sidekick/CMakeLists.txt` — same repo, same commit, same override-aware logic, so an exact string match is the whole test. This closed a real, latent CI bug in passing: CI checks out a synthesized merge commit for a PR, not `github.event.pull_request.head.sha`, so the ADV firmware job pins `MINIFT8_GIT_SHA` explicitly — but the sidekick build job never received that same pin before this change, so a CI-built pair could have silently disagreed on "the same commit"'s version string even though a local build never would have.
 
 **Deliberately not built here:** no auto-update over PORTA. A version mismatch is flagged (logged; state exposed for a future UI), not acted on — reflashing stays a manual step over the existing, hardware-proven USB-C path (§5.2). Auto-updating over PORTA would need a bootloader-entry hook on sidekick, a command channel back from the ADV (this beacon is one-way, sidekick → ADV only), and `esp-serial-flasher`'s UART transport instead of the USB-CDC transport already proven — real scope, deliberately deferred rather than folded in here, especially given PORTA's 4-wire no-flow-control link is meaningfully less reliable than the direct USB-C link the current flash path already uses.
 
 **Other known, accepted gaps:** trailing bytes in the same UART read past a role-lock point are dropped, not re-routed (self-heals on the next second's GPS sentence or companion beacon); PORTA-arbitrated GPS baud isn't persisted back to station config the way GPS's own self-owned auto-baud is (worst case, one extra probe-flip cycle at next boot); the 10s re-arm window is a first guess, not yet field-tuned; the companion role doesn't re-validate subsequent beacons while already locked (liveness alone keeps the re-arm timer honest, but a mid-session sidekick reflash without a PORTA disconnect wouldn't be noticed until the next re-arm).
+
+### 5.2d Updates are pulled over the internet, not pushed over the wire (2026-09-09)
+
+Supersedes the PORTA-update design in §5.2. Two findings, one on top of the other.
+
+**The ROM bootloader cannot be reached over Grove — on any of these chips.** §5.2's whole update line assumed
+the obstacle was *entry* into download mode: the C6 could not self-restart into it, so the search was for a
+trigger that worked. The retarget to AtomS3 Lite appeared to solve that (S3 straps on GPIO0, and a hardware
+reset with the on-board button held does re-sample). It does not help. The ROM runs before any GPIO-matrix
+remapping exists, so it accepts a download session only on UART0's **default pads** — GPIO43/44 on S3,
+GPIO16/17 on C6 (`soc/uart_pins.h`). PORTA/Grove is GPIO1/GPIO2 on both parts. The two ends would be on
+different pins however cleanly the target enters download mode. The download-mode failure was masking a
+more fundamental one, and no stock target can ever be flashed over Grove. Tracked as ROADMAP B42.
+
+That leaves exactly one way to update over PORTA: code already running from flash, which *can* take any pins
+through the GPIO matrix. That is the §5.2 "custom bootloader responder", and it is real bootloader
+engineering with a blast radius covering every boot.
+
+**But the sidekick does not need to be pushed to.** Its entire purpose (§5.0) is WiFi plus a browser. A
+device with WiFi can fetch its own firmware, and `esp_https_ota()` is roughly twenty lines against a
+battle-tested component. That deletes the problem rather than solving it: no framing, no ACKs, no baud
+negotiation, no cross-device rollback coordination, no timeout-revert to stop a failed transfer stranding
+the link at a baud the other end is not listening on.
+
+**Measured, 2026-09-09, ESP-IDF 5.5.1 / esp32s3** — the numbers this rests on, not estimates:
+
+| Build | Size |
+|---|---|
+| `sidekick` today, no WiFi | 224 KB |
+| IDF `http_server/simple` (WiFi + HTTP) | 795 KB |
+| IDF `simple_ota_example` (WiFi + HTTPS + CA) | 911 KB |
+
+TLS costs **+116 KB** over plain HTTP, and the HTTPS-OTA and browser-UI paths share nearly all their cost
+(same WiFi stack, lwIP, mbedTLS). A full sidekick — that baseline plus the PORTA beacon protocol plus a
+gzipped SPA embedded in the image — is estimated at **1.2–1.4 MB**.
+
+**Partition layout.** The current single 1 MB `factory` partition is already too small for the web app, so
+the table changes regardless of OTA; the two decisions collapse into one.
+
+```
+nvs       0x009000    24 KB   ← keep at this offset across any future change, or stored config is lost
+phy_init  0x00F000     4 KB
+otadata   0x010000     8 KB
+ota_0     0x020000     3 MB
+ota_1     0x320000     3 MB
+(free)              ~1.9 MB   ← room for a LittleFS asset partition if assets ever leave the image
+```
+
+3 MB holds a 1.4 MB image twice over. Sizing is a **two-way door with a physical cost** — changing the table
+means reflashing at `0x8000` over USB-C, which the ADV can do without a desk computer — but the cost scales
+with fleet size, so it is trivial at one device and expensive after distribution. Pick generously once.
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`, with a new image marked valid only after the PORTA beacon is
+confirmed working, so a bad update reverts itself.
+
+**Web assets go inside the app image**, not a data partition: they then version atomically with the code and
+roll back with it. A separate partition reintroduces app/asset skew, which is a worse bug class than the
+flash it saves.
+
+**Credentials — the chicken-and-egg, already solved by §5.0.** A factory sidekick has no WiFi credentials.
+It does not need them from the ADV: it is going to run an AP and serve a browser UI anyway, so provisioning
+is a page on a UI already being built. SoftAP, connect from a phone, enter SSID/password, join, self-update.
+Provisioning over PORTA from the ADV was considered and rejected — it needs credentials in `Station.txt`,
+new menu UI, and MENU is full at 18 items across 3 pages.
+
+**Hosting: GitHub Pages, published by CI.** Single domain, no redirects, and no binaries in the main
+branch's history. Releases would also work, but their asset URLs redirect to `objects.githubusercontent.com`
+— a second certificate domain to trust for no gain. The manifest reuses §5.2b's identity rather than
+inventing a second version scheme:
+
+```json
+{ "version": "324377d", "url": ".../sidekick/324377d.bin", "size": 1310720, "sha256": "..." }
+```
+
+The sidekick compares `esp_app_get_description()->version` — the exact git SHA it already carries and
+already beacons over PORTA — and updates on mismatch. Same question as §5.2b, same answer, different
+transport.
+
+**What still needs a wire.** First install on a factory part, and recovery when the app is broken. Both are
+USB-C from the ADV, both already built and proven (§5.2), and neither is PORTA. So
+`sidekick_flasher_flash_embedded_uart()` has no remaining job. It is kept rather than deleted because the
+transport is sound and costs nothing dormant, but nothing is expected to call it.
+
+**Three decisions deliberately left open, so they are decisions and not oversights:**
+
+1. **CA maintenance is recurring, not one-time.** GitHub's certificate chain changes. Pinning a root is
+   small and eventually breaks; `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is robust and costs more flash than the
+   911 KB above (that example pins a single cert). This is the one ongoing cost the architecture adds.
+2. **Images are unsigned.** A device that fetches firmware from the internet and flashes it. HTTPS plus a
+   sha256 in the manifest is proportionate for a personal project; secure boot with signed images is the
+   rigorous answer and a large lift.
+3. **What the ADV embeds.** Today `sidekick_flasher` embeds the whole sidekick image — 224 KB now, ~1.3 MB
+   once it has WiFi, against the ADV's ~3.5 MB free. Affordable, but the alternative is embedding a minimal
+   bootstrap (WiFi + HTTPS OTA only, no browser UI, no beacon — call it 950 KB) and letting it pull the full
+   app on first boot. Saves ADV flash at the cost of a two-stage first run.
 
 ### 5.3 GATT Specification — PARKED 2026-09-05, not the current plan
 
@@ -358,7 +454,7 @@ I3 is sequenced ([ROADMAP.md](../ROADMAP.md) Now), amended 2026-09-05 for the ch
 | **1a — Same-chip NimBLE** | B15 CTS probe | — | **Closed, failed** (§4.1b) |
 | **1a′ — Headless Atom-as-main** | AtomS3 Lite USB-host bench POC | — | **Closed, failed, hardware-confirmed** (§4.6). Not revisited without a different, proven-host board. |
 | **1b — USB-C presence** | B18: always-on host; attach/detach toasts; **S → 2** probes existing UAC (no bus reset); park for CTS | — | **Done.** Empty = no toast; **S → 2** streams without QMX reboot; Grove ping **rejected**. |
-| **1c — Sidekick build embed + field flash (retarget in progress)** | `esp32s3` sidekick project in-tree (§5.1, was `esp32c6`); ADV build embeds its `.bin`; install prompt (§5.4) flashes over USB-C ROM bootloader | — | Was proven for NanoC6 (2026-09-03); needs re-verification on AtomS3 Lite: `.bin` fits `partitions.csv` remainder (8 MB now, easier), field-flash succeeds or falls back to desk `esptool.py`, `nano_flasher.cpp:116`'s chip-type check widened to accept `ESP32S3_CHIP` |
+| **1c — Sidekick build embed + field flash (retarget in progress)** | `esp32s3` sidekick project in-tree (§5.1, was `esp32c6`); ADV build embeds its `.bin`; install prompt (§5.4) flashes over USB-C ROM bootloader | — | Was proven for NanoC6 (2026-09-03); needs re-verification on AtomS3 Lite: `.bin` fits `partitions.csv` remainder (8 MB now, easier), field-flash succeeds or falls back to desk `esptool.py`, `sidekick_flasher.cpp:116`'s chip-type check widened to accept `ESP32S3_CHIP` |
 | **1 — UART + sidekick WiFi/HTTP** | Grove UART on the now-flashed sidekick, feeding a WiFi AP/STA + browser-served HTTP UI. ADV: queue + UART TX, not `main.cpp` policy | None — plain browser, iPhone or Android | QMX CAT/`TA` unchanged with sidekick powered; decode lines visible in a browser with no app installed; ADV **DM L** stays in the QMX-only ballpark |
 | **2 — Log Sync** | `LOG_META`-equivalent + blocks over UART then HTTP | Browser: `.adi` pull | No slot stall; FATFS worker |
 | **3 — Helpers** | Unchanged | QRZ, grid, mapping, PSK Reporter — web-rendered, not native | Field tool |
@@ -387,7 +483,7 @@ I3 is sequenced ([ROADMAP.md](../ROADMAP.md) Now), amended 2026-09-05 for the ch
 | **Assuming an unverified Atom SKU can USB-host a QMX** | **Rejected, hardware-confirmed** (§4.6). Any future headless-as-main attempt repeats this exact bench test on the specific candidate board before writing application code, not after |
 | **DSP jitter** | Nano absorbs BLE; ADV does not wait |
 | **Embedded Nano `.bin` blows the ADV flash budget** | Measure against `partitions.csv` remainder before merging; fail the build loudly rather than silently truncate |
-| **ROM-bootloader auto-reset over USB-CDC doesn't work from ADV** | **Resolved.** Proven on real hardware 2026-09-03 (`components/nano_flasher/`): field-flashed a factory M5NanoC6, confirmed booting `sidekick` via monitor on its own USB-C afterward. Fallback (desk flash, §5.2) stays available regardless. |
+| **ROM-bootloader auto-reset over USB-CDC doesn't work from ADV** | **Resolved.** Proven on real hardware 2026-09-03 (`components/sidekick_flasher/`): field-flashed a factory M5NanoC6, confirmed booting `sidekick` via monitor on its own USB-C afterward. Fallback (desk flash, §5.2) stays available regardless. |
 | **Field-flash bricks a Nano mid-write** | ROM bootloader flash is fail-safe (the ROM stays resident until a valid app is written); worst case is retry, not a bricked board. Confirm before shipping the prompt to operators |
 
 ---

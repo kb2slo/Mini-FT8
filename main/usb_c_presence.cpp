@@ -7,8 +7,8 @@ UsbCKind usb_c_classify(uint16_t vid, uint16_t pid)
     if (vid == kUsbCQmxVid && pid == kUsbCQmxPid) {
         return UsbCKind::QmxQdx;
     }
-    if (vid == kUsbCEspressifVid && pid == kUsbCNanoJtagPid) {
-        return UsbCKind::GreenNano;
+    if (vid == kUsbCEspressifVid && pid == kUsbCEspSerialJtagPid) {
+        return UsbCKind::EspressifRom;
     }
     return UsbCKind::Other;
 }
@@ -22,8 +22,8 @@ static void format_kind_or_ids(const UsbCDevice& dev, char* dest, size_t dest_n)
     case UsbCKind::QmxQdx:
         std::snprintf(dest, dest_n, "QMX/QDX");
         break;
-    case UsbCKind::GreenNano:
-        std::snprintf(dest, dest_n, "Green Nano");
+    case UsbCKind::EspressifRom:
+        std::snprintf(dest, dest_n, "Espressif ROM");
         break;
     case UsbCKind::Other:
         std::snprintf(dest, dest_n, "VID %04X PID %04X", dev.vid, dev.pid);
@@ -48,12 +48,12 @@ void usb_c_format_attach(const UsbCDevice& dev, char* title, size_t title_n, cha
             std::snprintf(body, body_n, "USB radio");
         }
         break;
-    case UsbCKind::GreenNano:
+    case UsbCKind::EspressifRom:
         if (title && title_n > 0) {
-            std::snprintf(title, title_n, "Green Nano");
+            std::snprintf(title, title_n, "Espressif ROM");
         }
         if (body && body_n > 0) {
-            std::snprintf(body, body_n, "Flash Nano USB-C");
+            std::snprintf(body, body_n, "Flash sidekick?");
         }
         break;
     case UsbCKind::Other:

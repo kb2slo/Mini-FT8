@@ -1,0 +1,21 @@
+# AtomS3 Lite is an ESP32-S3FN8: 8 MB flash, no PSRAM. Without this the build
+# takes ESP-IDF's 2 MB default, which understates the part and writes a wrong
+# flash-size field into the bootloader header. Pinned in-repo (sdkconfig itself
+# is gitignored and regenerated) so a fresh clone configures the same way.
+#
+# Layout is unaffected: bootloader 0x0, partition table 0x8000, app 0x10000 on
+# S3 exactly as on the C6 this replaced, so the ADV still reads the sidekick's
+# esp_app_desc_t at absolute 0x10020 (RFC 0001 section 5.2b). Verified against
+# the built image after the retarget, not assumed.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# Two OTA slots (partitions.csv) — RFC 0001 §5.2d. No factory partition: with
+# otadata erased the bootloader boots ota_0, which is what the ADV's USB-C
+# bootstrap writes.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Roll back automatically if a new image never confirms itself. The app marks
+# itself valid only once the PORTA beacon is confirmed working, so an update
+# that boots but cannot talk reverts on its own rather than needing a cable.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

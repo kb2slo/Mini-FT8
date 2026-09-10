@@ -38,7 +38,7 @@ PortaRole porta_get_role();
 // Only meaningful once porta_get_role() == PortaRole::kCompanion: the
 // version string from sidekick's last-validated beacon, and whether it
 // matched this ADV's own embedded sidekick build (RFC 0001 §5.2c) — no
-// USB-C session needed to know staleness, unlike the nano_flasher path.
+// USB-C session needed to know staleness, unlike the sidekick_flasher path.
 // Empty / false before a companion has ever locked.
 const char* porta_get_companion_version();
 bool porta_companion_version_matches();

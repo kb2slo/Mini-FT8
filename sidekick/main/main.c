@@ -4,10 +4,13 @@
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "esp_app_desc.h"
+#include "esp_ota_ops.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "wifi_prov.h"
 
 static const char *TAG = "sidekick";
 
@@ -87,17 +90,57 @@ static void porta_beacon_send(void) {
 // RFC 0001 §5.2's "Future phase" note. USB-C stays the only flash path
 // until that's built.
 
+// With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE an image installed by OTA boots
+// in PENDING_VERIFY and is rolled back on the next restart unless it declares
+// itself good. "Good" here means the companion link works — an image that
+// boots but cannot beacon is useless to the ADV, so the beacon is the check
+// rather than merely reaching app_main(). Images written over USB-C are not
+// pending and this is a no-op for them.
+static void mark_valid_once_beaconing(uint32_t beacons_sent)
+{
+    static bool done = false;
+    if (done || beacons_sent < 3) {
+        return;
+    }
+    done = true;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t state;
+    if (esp_ota_get_state_partition(running, &state) != ESP_OK) {
+        return;
+    }
+    if (state != ESP_OTA_IMG_PENDING_VERIFY) {
+        return;
+    }
+    if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+        ESP_LOGI(TAG, "Image marked valid (beacon confirmed); rollback cancelled");
+    } else {
+        ESP_LOGE(TAG, "Could not mark image valid — it will roll back on restart");
+    }
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Mini-FT8 sidekick booting (IDF %s)", esp_get_idf_version());
 
+    // Beacon first, WiFi second. The PORTA companion link is what the ADV
+    // depends on; a sidekick that cannot reach WiFi is degraded, not broken,
+    // so nothing about network bring-up is allowed to delay or block it.
     porta_beacon_init();
+    wifi_prov_start();
+
+    if (wifi_prov_is_online()) {
+        ESP_LOGI(TAG, "WiFi: online on '%s'", wifi_prov_ssid());
+    } else if (wifi_prov_ap_active()) {
+        ESP_LOGW(TAG, "WiFi: provisioning AP up, not joined");
+    }
 
     uint32_t heartbeat = 0;
     while (1) {
         porta_beacon_send();
+        mark_valid_once_beaconing(heartbeat);
         if (heartbeat % 5 == 0) {
-            ESP_LOGI(TAG, "alive: %" PRIu32, heartbeat / 5);
+            ESP_LOGI(TAG, "alive: %" PRIu32 " wifi=%s", heartbeat / 5,
+                     wifi_prov_is_online() ? "up" : (wifi_prov_ap_active() ? "ap" : "down"));
         }
         ++heartbeat;
         vTaskDelay(pdMS_TO_TICKS(PORTA_BEACON_INTERVAL_MS));

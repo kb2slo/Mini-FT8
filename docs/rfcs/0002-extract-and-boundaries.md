@@ -76,7 +76,7 @@ A first pass demoted only `station`, `band_config`, and `usb_c_presence` — the
 | `M5Cardputer`, `M5GFX`, `M5Unified`, `ft8_lib` | 2 | Vendored. §6 vendor boundary. |
 | `board_cardputer_adv` | **1** | `test_apps/cardputer_adv_audio_keyboard` is a second `idf.py` project that requires it. Also the I24 board seam. |
 | `ui` | 2 | The display seam I24 needs for a headless host; 4200+ lines, 8 files. |
-| `nano_flasher` | 2 | `EMBED_FILES` + generated header + conditional defines: payload packaging, not source layout. |
+| `sidekick_flasher` | 2 | `EMBED_FILES` + generated header + conditional defines: payload packaging, not source layout. |
 
 `components/` went from 17 directories to 7. Every survivor is now either mechanically forced or on the named list — there is no longer a component whose existence traces back to nothing more than which day it was extracted.
 

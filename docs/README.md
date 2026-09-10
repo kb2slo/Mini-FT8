@@ -164,7 +164,7 @@ Do **not** use `idf.py flash` or `idf.py app-flash` on a Launcher unit: both wri
 **No Launcher** (factory-only Mini-FT8 layout):
 
 ```bash
-idf.py -p /dev/cu.usbmodemXXXX build flash
+idf.py build flash
 ```
 
 Do not split into separate `build` then `flash` unless the user asks.

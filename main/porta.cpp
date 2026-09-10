@@ -11,13 +11,13 @@
 #include "freertos/task.h"
 
 #include "gps.h"
-#include "nano_flasher.h"
+#include "sidekick_flasher.h"
 
 // ADV's own USB-C is a USB host while Mini-FT8 runs (QMX/Nano support), so
 // it never presents a serial console — ESP_LOG output here isn't reachable
 // without a G4/G5 USB-TTL adapter. debug_log_line_public() writes the
 // on-screen debug ring buffer (DEBUG UI mode) instead, same fix used for
-// nano_flasher's bring-up (RFC 0001 §5.2b).
+// sidekick_flasher's bring-up (RFC 0001 §5.2b).
 
 namespace {
 
@@ -144,7 +144,7 @@ void lock_role(PortaRole role) {
 // caller; s_companion_buf holds version[32] + checksum) and, if the XOR
 // checksum matches, locks kCompanion and compares against this ADV's own
 // embedded sidekick build (RFC 0001 §5.2b/§5.2c — same version-comparison
-// data nano_flasher already uses for the USB-C path, just reached without
+// data sidekick_flasher already uses for the USB-C path, just reached without
 // a USB-C session). A checksum failure is treated as line noise, not a
 // companion — discarded, scanning resumes rather than locking on a
 // corrupted frame.
@@ -163,7 +163,7 @@ void try_complete_companion_frame() {
 
   char local_version[kCompanionVersionLen + 1] = {};
   s_companion_version_matches =
-      nano_flasher_embedded_version(local_version, sizeof(local_version)) &&
+      sidekick_flasher_embedded_version(local_version, sizeof(local_version)) &&
       strncmp(s_companion_version, local_version, kCompanionVersionLen) == 0;
 
   lock_role(PortaRole::kCompanion);
