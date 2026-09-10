@@ -95,6 +95,48 @@ The operator reviews in chat, then green-lights each step. A good previous turn 
    - Uncommitted mixed with other dirty files: do **not** `git restore` (that drops the other work). One sentence in chat: cheap undo needs a commit. Ask them to checkpoint, then revert.
    Before an experiment they may want to unwind, ask for a checkpoint commit first.
 
+### Operating notes
+
+Working preferences the operator has stated. They live here, in the repo, because that is the only place
+every agent and every operator can see them — see "Memory lives in this repo" below.
+
+- **Build locally; do not round-trip CI for a test binary.** `idf.py build` is ~40 s against ~5 min for the
+  firmware CI job, and during bench debugging that latency dominates. The merged image lands in `build/`
+  (`POST_BUILD` writes `<sha>-minift8-dev.bin` alongside `MiniFT8_Merged_Auto.bin`). CI is for pre-merge
+  verification, where its value is real: it builds the PR *merge commit*, which is what actually lands, and
+  it runs the sidekick and host-test jobs too. Stated 2026-09-04.
+
+- **Assume another agent may be in this worktree.** The operator sometimes runs a second Claude Code session
+  on the same checkout. One worktree means one index, so a concurrent `git add -A` can sweep up files another
+  session wrote seconds earlier and commit them under an unrelated message — this happened on 2026-09-08
+  (`75e3ed0`). Re-check `git log -1` and `git status` immediately before committing rather than trusting
+  state read earlier in the turn, and stage explicit paths rather than `-A` unless staging everything is
+  genuinely the intent. If files have already been swept into someone else's pushed commit, say so and
+  cross-reference that SHA; do not rewrite pushed history to reclaim them.
+
+- **Gloss roadmap IDs in chat.** Write "B44 (the sidekick pulls its own firmware over HTTPS)", not "B44".
+  The operator does not hold the ID-to-topic mapping in their head, and a bare ID makes them go look it up
+  mid-conversation. Applies to backlog (`B*`) and initiative (`I*`) IDs and RFC section numbers. Test-plan
+  row IDs are fine bare when the surrounding text already says what the check does. Inside `ROADMAP.md` and
+  commit messages the bare ID is correct — this is about chat. Stated 2026-09-10.
+
+### Memory lives in this repo
+
+Agents with a private per-machine memory store must not use it for anything about this project. These docs
+are the memory: `README.md` for working agreement and operating notes, `ROADMAP.md` for plan and history,
+`TEST_PLAN.md` for what has and has not been verified on hardware, `STYLE.md` for code conventions.
+
+**Why:** a private store is scoped to one machine and one account. It is invisible to the operator, to a
+second agent on another machine, to a future operator, and to code review — so it silently diverges from the
+repo and cannot be corrected by anyone who has not got it. Four such notes existed on 2026-09-10 and were
+migrated here; one of them duplicated a `ROADMAP.md` row and said so in its own text, and another stated a
+commit-hygiene rule that the agent holding it broke twice the same day. A rule only one agent can read is
+not a rule.
+
+**How to apply:** when the operator states a preference worth keeping, put it in the right doc in the same
+turn and propose the commit. If something genuinely should not be published, say so rather than filing it
+somewhere the operator cannot see — this repo is public.
+
 ### Roadmap intake (ideas)
 
 If the operator asks to add an idea or “add to the backlog”:
