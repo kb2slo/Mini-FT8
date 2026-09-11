@@ -34,7 +34,14 @@ static const char *TAG = "sidekick";
 #define PORTA_SYNC_BYTE 0xC6
 #define PORTA_VERSION_LEN 32
 #define PORTA_FRAME_LEN (1 + PORTA_VERSION_LEN + 1)  // sync + version + checksum
-#define PORTA_BEACON_INTERVAL_MS 1000
+// 1 Hz made sense when the beacon was the entire conversation. It now shares
+// the wire with the host's event stream, where it is noise -- and nothing needs
+// a sub-5-second answer to "what version is the companion running".
+#define PORTA_BEACON_INTERVAL_MS 5000
+// The loop still ticks at 1 s so the alive line and anything else added later
+// keep their cadence; only the beacon is slowed.
+#define LOOP_TICK_MS 1000
+#define BEACON_EVERY (PORTA_BEACON_INTERVAL_MS / LOOP_TICK_MS)
 #define PORTA_RX_BUF 2048
 
 static void porta_beacon_init(void) {
@@ -142,13 +149,15 @@ void app_main(void)
 
     uint32_t heartbeat = 0;
     while (1) {
-        porta_beacon_send();
+        if (heartbeat % BEACON_EVERY == 0) {
+            porta_beacon_send();
+        }
         mark_valid_once_beaconing(heartbeat);
         if (heartbeat % 5 == 0) {
             ESP_LOGI(TAG, "alive: %" PRIu32 " wifi=%s", heartbeat / 5,
                      wifi_prov_is_online() ? "up" : (wifi_prov_ap_active() ? "ap" : "down"));
         }
         ++heartbeat;
-        vTaskDelay(pdMS_TO_TICKS(PORTA_BEACON_INTERVAL_MS));
+        vTaskDelay(pdMS_TO_TICKS(LOOP_TICK_MS));
     }
 }

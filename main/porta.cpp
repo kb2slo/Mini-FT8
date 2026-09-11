@@ -10,6 +10,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "main_services.h"
+
+// Defined in main.cpp; the host clock this stamps events with.
+int64_t rtc_now_ms();
 #include "porta_proto.h"
 #include "sidekick_flasher.h"
 
@@ -180,10 +183,22 @@ void drain_out() {
 
 }  // namespace
 
+// Stamped at emit, not at arrival. The queue can hold events through a burst,
+// and a viewer stamping on arrival would pile a whole slot's decodes onto
+// whatever second they happened to drain.
+uint32_t host_epoch_secs() {
+  const int64_t ms = rtc_now_ms();
+  // Before the clock is set the soft RTC reads as an implausible epoch. Zero
+  // means "unknown" on the wire, which the viewer renders as blank rather than
+  // as a 1970 timestamp that looks like data.
+  const int64_t secs = ms / 1000;
+  return (secs > 1000000000LL) ? (uint32_t)secs : 0u;
+}
+
 void porta_emit_log(const char* text) {
   if (!s_running || !text) return;
   uint8_t buf[PORTA_PROTO_MAX_FRAME];
-  const size_t n = porta_proto_encode_log(text, buf, sizeof(buf));
+  const size_t n = porta_proto_encode_log(host_epoch_secs(), text, buf, sizeof(buf));
   enqueue(buf, n);
 }
 
@@ -191,6 +206,7 @@ void porta_emit_decode(const char* text, int snr, int offset_hz, float dt_s,
                        bool is_cq, bool is_to_me, bool is_recent_qso) {
   if (!s_running || !text) return;
   porta_decode_event_t ev = {};
+  ev.epoch_secs = host_epoch_secs();
   strncpy(ev.text, text, sizeof(ev.text) - 1);
   // Clamped rather than cast: an out-of-range value should read as an extreme,
   // not wrap round to a plausible-looking wrong one.

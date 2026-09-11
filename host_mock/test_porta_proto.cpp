@@ -282,12 +282,14 @@ static void test_log_event()
     porta_decoder_init(&d);
     uint8_t buf[PORTA_PROTO_MAX_FRAME];
 
-    size_t n = porta_proto_encode_log("Queued: CQ KB2SLO FN30", buf, sizeof(buf));
+    size_t n = porta_proto_encode_log(1789000000u, "Queued: CQ KB2SLO FN30", buf, sizeof(buf));
     auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
     check(got.size() == 1, "log event decodes");
     if (got.size() == 1) {
         char text[PORTA_EVENT_TEXT_MAX + 1] = {};
-        check(porta_proto_parse_log(&got[0], text), "log event parses");
+        uint32_t ts = 0;
+        check(porta_proto_parse_log(&got[0], &ts, text), "log event parses");
+        check(ts == 1789000000u, "timestamp round-trips through the envelope");
         check(std::string(text) == "Queued: CQ KB2SLO FN30", "log text round-trips");
         // A decode parser must reject a log event and vice versa: same frame
         // type, different subtype, and confusing them would silently misread
@@ -298,20 +300,39 @@ static void test_log_event()
 
     // Empty text is legal -- a zero-length log line is odd but not malformed.
     porta_decoder_init(&d);
-    n = porta_proto_encode_log("", buf, sizeof(buf));
+    n = porta_proto_encode_log(0, "", buf, sizeof(buf));
     got = run(&d, std::vector<uint8_t>(buf, buf + n));
-    check(got.size() == 1 && got[0].len == 1, "empty log event is subtype only");
+    check(got.size() == 1 && got[0].len == 5, "empty log event is envelope only");
 
     // Longer than the field: truncated, not overflowed.
     porta_decoder_init(&d);
     std::string longtext(PORTA_EVENT_TEXT_MAX + 40, 'z');
-    n = porta_proto_encode_log(longtext.c_str(), buf, sizeof(buf));
+    n = porta_proto_encode_log(42u, longtext.c_str(), buf, sizeof(buf));
     got = run(&d, std::vector<uint8_t>(buf, buf + n));
     check(got.size() == 1, "over-long log event still encodes");
     if (got.size() == 1) {
         char text[PORTA_EVENT_TEXT_MAX + 1] = {};
-        porta_proto_parse_log(&got[0], text);
+        porta_proto_parse_log(&got[0], nullptr, text);
         check(std::strlen(text) == PORTA_EVENT_TEXT_MAX, "over-long text is truncated to the field");
+    }
+}
+
+// Zero is "the host does not know the time", which happens on a cold unit with
+// no GPS and no DS3231. It must survive as zero rather than being rejected or
+// substituted, because the viewer needs to tell "no clock" from "midnight".
+static void test_unset_clock_round_trips()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+    size_t n = porta_proto_encode_log(0, "no clock yet", buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "unset-clock log event decodes");
+    if (got.size() == 1) {
+        uint32_t ts = 12345;
+        char text[PORTA_EVENT_TEXT_MAX + 1] = {};
+        check(porta_proto_parse_log(&got[0], &ts, text), "unset-clock event parses");
+        check(ts == 0, "a zero timestamp stays zero");
     }
 }
 
@@ -323,6 +344,7 @@ static void test_decode_event()
 
     porta_decode_event_t in = {};
     std::snprintf(in.text, sizeof(in.text), "CQ DX W1AW FN31");
+    in.epoch_secs = 1789012345u;
     in.snr = -21;              // negative, to catch an unsigned round-trip
     in.offset_hz = 2750;       // above 2047, to catch a truncated width
     in.dt_centis = -145;       // negative, likewise
@@ -339,17 +361,18 @@ static void test_decode_event()
         check(out.snr == -21, "negative SNR round-trips");
         check(out.offset_hz == 2750, "offset above 2047 round-trips");
         check(out.dt_centis == -145, "negative dt round-trips");
+        check(out.epoch_secs == 1789012345u, "decode timestamp round-trips");
         check(out.is_cq && out.is_recent_qso && !out.is_to_me, "flags round-trip independently");
 
         char text[PORTA_EVENT_TEXT_MAX + 1] = {};
-        check(!porta_proto_parse_log(&got[0], text), "a decode event is not a log event");
+        check(!porta_proto_parse_log(&got[0], nullptr, text), "a decode event is not a log event");
     }
 
     // A frame carrying the subtype but not the fixed fields must be rejected
     // rather than read past its own length.
     porta_frame_t stub = {};
     stub.type = PORTA_MSG_EVENT;
-    stub.len = 4;
+    stub.len = 8;   // envelope plus part of the fixed body
     stub.payload[0] = PORTA_EVT_DECODE;
     porta_decode_event_t out;
     check(!porta_proto_parse_decode(&stub, &out), "a short decode event is rejected");
@@ -369,6 +392,7 @@ int main()
     test_hello_round_trip();
     test_hello_rejects_wrong_shape();
     test_log_event();
+    test_unset_clock_round_trips();
     test_decode_event();
 
     if (g_fail) {

@@ -160,6 +160,18 @@ bool porta_proto_parse_hello(const porta_frame_t *f, uint8_t *protocol_version_o
 // subtype and the rest is subtype-specific. New telemetry is a new subtype, not
 // a new frame type, so the type byte stops growing (RFC 0004 §6).
 //
+// Every event carries a timestamp in the envelope rather than in each subtype's
+// body, so a new subtype inherits one without thinking about it. It is the
+// moment the event *happened*, stamped by the host at emit -- not the moment it
+// arrived. Those differ: the outbound queue can hold events through a burst,
+// and a viewer that stamped on arrival would compress a whole slot's decodes
+// onto whatever second they finished draining.
+//
+// The sidekick has no clock of its own -- no RTC, no SNTP -- so the host is the
+// only possible source. Zero means "the host does not know the time either",
+// which is a real state on a cold unit with no GPS or DS3231, and must render
+// as blank rather than as 1970.
+//
 // Text fields run to the end of the frame rather than being padded to a fixed
 // width -- the frame already carries a length, so padding would only cost wire
 // bytes to say something already known.
@@ -171,13 +183,18 @@ typedef enum {
 
 #define PORTA_EVENT_TEXT_MAX 64  // matches RX_TEXT_MAX on the host
 
-size_t porta_proto_encode_log(const char *text, uint8_t *out, size_t out_cap);
+// `epoch_secs` is UTC seconds, or 0 when the host's clock is not set.
+size_t porta_proto_encode_log(uint32_t epoch_secs, const char *text,
+                              uint8_t *out, size_t out_cap);
 
 // `text_out` must hold PORTA_EVENT_TEXT_MAX + 1 bytes. Always NUL-terminated
-// on success. False if the frame is not a well-formed log event.
-bool porta_proto_parse_log(const porta_frame_t *f, char *text_out);
+// on success. `epoch_secs_out` may be NULL. False if the frame is not a
+// well-formed log event.
+bool porta_proto_parse_log(const porta_frame_t *f, uint32_t *epoch_secs_out,
+                           char *text_out);
 
 typedef struct {
+    uint32_t epoch_secs;   // UTC seconds, 0 when the host's clock is not set
     char     text[PORTA_EVENT_TEXT_MAX + 1];
     int8_t   snr;          // FT8 reports span roughly -24..+50, so int8 is ample
     uint16_t offset_hz;    // 200..3000 in practice

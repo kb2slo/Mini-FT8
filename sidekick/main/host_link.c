@@ -22,6 +22,7 @@ static const char *TAG = "host";
 
 typedef struct {
     uint32_t seq;
+    uint32_t epoch_secs;   // host's clock at the moment of the event, 0 if unset
     bool     is_decode;
     char     text[PORTA_EVENT_TEXT_MAX + 1];
     int8_t   snr;
@@ -113,13 +114,14 @@ static esp_err_t get_events(httpd_req_t *req)
         int n;
         if (e.is_decode) {
             n = snprintf(row, sizeof(row),
-                         "%s{\"s\":%" PRIu32 ",\"d\":1,\"x\":\"%s\",\"snr\":%d,"
-                         "\"hz\":%u,\"dt\":%.2f,\"cq\":%d,\"me\":%d}",
-                         first ? "" : ",", e.seq, esc, e.snr, e.offset_hz,
+                         "%s{\"s\":%" PRIu32 ",\"t\":%" PRIu32 ",\"d\":1,\"x\":\"%s\","
+                         "\"snr\":%d,\"hz\":%u,\"dt\":%.2f,\"cq\":%d,\"me\":%d}",
+                         first ? "" : ",", e.seq, e.epoch_secs, esc, e.snr, e.offset_hz,
                          e.dt_centis / 100.0, e.is_cq ? 1 : 0, e.is_to_me ? 1 : 0);
         } else {
-            n = snprintf(row, sizeof(row), "%s{\"s\":%" PRIu32 ",\"d\":0,\"x\":\"%s\"}",
-                         first ? "" : ",", e.seq, esc);
+            n = snprintf(row, sizeof(row),
+                         "%s{\"s\":%" PRIu32 ",\"t\":%" PRIu32 ",\"d\":0,\"x\":\"%s\"}",
+                         first ? "" : ",", e.seq, e.epoch_secs, esc);
         }
         if (n > 0) {
             httpd_resp_sendstr_chunk(req, row);
@@ -136,29 +138,59 @@ static esp_err_t get_events(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
+// Newest at the bottom, terminal-style, with the standard stick-to-bottom
+// mechanic: measure whether the view is already at the bottom *before*
+// appending, and only scroll if it was. Scrolling up is therefore a deliberate
+// act that is never undone by an arriving row -- which is the whole point, since
+// the rows arrive on their own schedule and reading history is when you least
+// want the view yanked away.
+//
+// Two details that matter and are easy to miss. `overflow-anchor: none` stops
+// the browser's own scroll anchoring from fighting the same job and producing a
+// jitter neither mechanism intends. And trimming old rows happens only while
+// following: removing from the top while someone is reading history shifts
+// everything under their eyes.
+//
+// An unset host clock renders as --:--:-- rather than as a 1970 timestamp or a
+// blank. FT8 will not decode without a synced clock, so "the host does not know
+// what time it is" is diagnostic information, not an absence.
 static const char kViewerPage[] =
     "<!doctype html><meta charset=utf-8>"
     "<meta name=viewport content='width=device-width,initial-scale=1'>"
     "<title>Mini-FT8 host log</title>"
-    "<style>body{font-family:ui-monospace,monospace;margin:0;padding:.5rem;"
+    "<style>html,body{height:100%;margin:0}"
+    "body{display:flex;flex-direction:column;font-family:ui-monospace,monospace;"
     "background:#111;color:#ddd;font-size:13px}"
-    "#s{color:#888;font-size:11px;padding:.2rem 0}"
-    "div.r{padding:.15rem 0;border-bottom:1px solid #222;white-space:pre-wrap}"
-    ".cq{color:#7fd}.me{color:#fd7}.lg{color:#999}</style>"
-    "<div id=s>connecting…</div><div id=o></div>"
-    "<script>let q=0,o=document.getElementById('o'),s=document.getElementById('s');"
-    "async function t(){try{"
-    "let r=await fetch('/api/events?since='+q),j=await r.json();"
-    "for(const e of j.events){let d=document.createElement('div');d.className='r';"
-    "d.textContent=e.d?((e.snr>0?'+':'')+e.snr).padStart(3)+' '+String(e.hz).padStart(4)+'Hz '"
-    "+(e.dt>0?'+':'')+e.dt.toFixed(1)+' '+e.x:'· '+e.x;"
-    "if(e.d&&e.me)d.classList.add('me');else if(e.d&&e.cq)d.classList.add('cq');"
-    "else if(!e.d)d.classList.add('lg');"
-    "o.insertBefore(d,o.firstChild);}"
-    "q=j.seq;while(o.childNodes.length>200)o.removeChild(o.lastChild);"
-    "s.textContent='live · '+q+' events';"
-    "}catch(e){s.textContent='disconnected — retrying';}"
-    "setTimeout(t,1000);}t();</script>";
+    "#s{flex:none;color:#888;font-size:11px;padding:.35rem .5rem;border-bottom:1px solid #222}"
+    "#o{flex:1;overflow-y:auto;overflow-anchor:none;padding:.25rem .5rem}"
+    "div.r{padding:.1rem 0;white-space:pre-wrap;word-break:break-word}"
+    ".ts{color:#555}.cq{color:#7fd}.me{color:#fd7}.lg{color:#999}</style>"
+    "<div id=s>connecting\xE2\x80\xA6</div><div id=o></div>"
+    "<script>"
+    "let q=0,o=document.getElementById('o'),s=document.getElementById('s'),follow=true;"
+    "function atBottom(){return o.scrollHeight-o.scrollTop-o.clientHeight<40}"
+    "function stat(){s.textContent=follow?('live \xC2\xB7 '+q+' events')"
+    ":('paused \xC2\xB7 scroll to the bottom to follow \xC2\xB7 '+q+' events')}"
+    "o.addEventListener('scroll',function(){follow=atBottom();stat()});"
+    "function hhmmss(t){if(!t)return'--:--:--';"
+    "return new Date(t*1000).toISOString().substr(11,8)}"
+    "function row(e){var d=document.createElement('div');d.className='r';"
+    "var a=document.createElement('span');a.className='ts';a.textContent=hhmmss(e.t)+' ';"
+    "var b=document.createElement('span');"
+    "if(e.d){b.textContent=((e.snr>0?'+':'')+e.snr).padStart(3)+' '"
+    "+String(e.hz).padStart(4)+' '+(e.dt>0?'+':'')+e.dt.toFixed(1)+' '+e.x;"
+    "b.className=e.me?'me':(e.cq?'cq':'')}"
+    "else{b.textContent='\xC2\xB7 '+e.x;b.className='lg'}"
+    "d.appendChild(a);d.appendChild(b);return d}"
+    "async function tick(){try{"
+    "var r=await fetch('/api/events?since='+q),j=await r.json();"
+    "if(j.events.length){var was=atBottom();"
+    "for(var i=0;i<j.events.length;i++)o.appendChild(row(j.events[i]));"
+    "if(was){o.scrollTop=o.scrollHeight;follow=true}"
+    "if(follow){while(o.childNodes.length>300)o.removeChild(o.firstChild)}}"
+    "q=j.seq;stat()}"
+    "catch(e){s.textContent='disconnected \xE2\x80\x94 retrying'}"
+    "setTimeout(tick,1000)}tick();</script>";
 
 static esp_err_t get_viewer(httpd_req_t *req)
 {
@@ -188,12 +220,13 @@ static void porta_rx_task(void *arg)
                 continue;
             }
             entry_t e = {0};
-            if (porta_proto_parse_log(&frame, text)) {
+            if (porta_proto_parse_log(&frame, &e.epoch_secs, text)) {
                 strncpy(e.text, text, sizeof(e.text) - 1);
                 ESP_LOGI(TAG, "%s", e.text);
                 ring_push(&e);
             } else if (porta_proto_parse_decode(&frame, &ev)) {
                 e.is_decode = true;
+                e.epoch_secs = ev.epoch_secs;
                 strncpy(e.text, ev.text, sizeof(e.text) - 1);
                 e.snr = ev.snr;
                 e.offset_hz = ev.offset_hz;

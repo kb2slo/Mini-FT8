@@ -1204,6 +1204,36 @@ static void draw_tx_hud(bool force) {
   }
   ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked,
                  power_w, swr, force, aborted, now_ms);
+
+  // Mirror the HUD to the log, on transitions only. This function runs twice a
+  // second while transmitting, so logging per call would bury everything else;
+  // and power and SWR do not exist at the start of a transmission, since they
+  // are polled from the radio during it. So: the message when TX begins, and
+  // what the radio actually did when it ends.
+  static bool s_was_tx = false;
+  static float s_last_power = -1.f;
+  static float s_last_swr = -1.f;
+  if (power_w >= 0.f) s_last_power = power_w;
+  if (swr >= 0.f) s_last_swr = swr;
+
+  if (g_tx_active && !s_was_tx) {
+    char line[64];
+    snprintf(line, sizeof(line), "TX %.40s", tx_text[0] ? tx_text : "(empty)");
+    debug_log_line(line);
+    s_last_power = -1.f;
+    s_last_swr = -1.f;
+  } else if (!g_tx_active && s_was_tx) {
+    char line[64];
+    if (aborted) {
+      snprintf(line, sizeof(line), "TX abort %.32s", g_tx_abort_text);
+    } else if (s_last_power >= 0.f && s_last_swr >= 0.f) {
+      snprintf(line, sizeof(line), "TX end %.1fW SWR %.1f", s_last_power, s_last_swr);
+    } else {
+      snprintf(line, sizeof(line), "TX end (no power/SWR read)");
+    }
+    debug_log_line(line);
+  }
+  s_was_tx = g_tx_active;
 }
 
 static void draw_rx_screen(int flash_index = -1) {
