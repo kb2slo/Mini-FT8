@@ -78,8 +78,8 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
 ### Hardware
 (I have no affiliation with the vendors.)
   - Must order: https://shop.m5stack.com/products/m5stack-cardputer-adv-version-esp32-s3 or from digikey: https://www.digikey.com/en/products/detail/m5stack-technology-co-ltd/K132-ADV/27685158
-  - Optional: [https://shop.m5stack.com/products/gps-bds-unit-v1-1-at6668](https://shop.m5stack.com/products/gps-bds-unit-v1-1-at6668) (PORTA GPS for Date/Time/Grid; other UART NMEA GPS modules work too)
-  - Optional: M5Stack LoRa-1262 cap GNSS (set `GNSS_LoRa:ON`; only the GNSS is used)
+  - Optional: M5Stack LoRa-1262 cap GNSS for Date/Time/Grid — the only supported GPS in this fork; only the GNSS side is used. No setting to enable it: fit it and it works
+  - **Not supported in this fork:** a PORTA/Grove GPS puck. That port is the companion sidekick's
   - Optional: DS3231 RTC module on I2C `G8/G9` (for retained UTC date/time without GPS)
   - For KH1 TX: https://shop.m5stack.com/products/4pin-buckled-grove-cable, for a custom serial cable
   - For KH1-USBC RX: [USB-C microphone adapter](https://www.amazon.com/dp/B0FWC9ZFC4?ref=ppx_yo2ov_dt_b_fed_asin_title&th=1). Other adapters may also work, but this one is confirmed. KH1-MIC uses the Cardputer built-in microphone, so the USB-C adapter is optional.
@@ -98,7 +98,7 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
 | `G` | GPS | View GPS telemetry and synchronization status. |
 | `M` | MENU P1 | Configure core station and operator settings. |
 | `N` | MENU P2 | Configure radio, input, and comment settings. |
-| `O` | MENU P3 | Configure logging, active bands, GNSS LoRa GPS, copy-to-SD, and retry settings. |
+| `O` | MENU P3 | Configure logging, active bands, copy-to-SD, and retry settings. |
 | `Q` | QSO | Browse QSO and log files, and view entries. |
 | `D` | Delete Files | Browse and delete files stored in internal FATFS. |
 | `B` | BAND | Edit per-band frequencies. |
@@ -148,9 +148,8 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
 | `O` (MENU P3) | `1` | Turn RxTx log on/off. Note: RxTxLog has been renamed to `RT[YYMMDD].txt`. |
 |  | `2` | Turn SkipTX1 on/off. Skips `dxcall mycall mygrid` and replies with the SNR report. |
 |  | `3` | Edit active bands (Long Edit). Used by STATUS -> Band. |
-|  | `4` | Toggle `GNSS_LoRa`. `OFF` uses PORTA GPS; `ON` uses the LoRa-1262 cap GNSS. |
-|  | `5` | Copy files to SD. Feedback is `Copied OK` or `Missed [n]`. |
-|  | `6` | Edit max retry (in place). Accepts any natural number or `0`. |
+|  | `4` | Copy files to SD. Feedback is `Copied OK` or `Missed [n]`. **Was `5`** — the `GNSS_LoRa` row above it was removed in this fork, and MENU positions are derived from the row order. |
+|  | `5` | Edit max retry (in place). Accepts any natural number or `0`. **Was `6`.** |
 | `Q` (QSO) | `1..6` | Open the selected ADIF file. |
 |  | `◀` `▶` | Switch columns (Default view or SNR view). |
 | `D` (Delete Files) | `1..6` | Delete the selected file immediately, without confirmation. |
@@ -172,12 +171,16 @@ Mini-FT8 is built on Karlis Goba’s ft8_lib. It’s also a joint adventure betw
 
 ## GPS Connections
 
-Mini-FT8 supports two GPS sources selected from MENU P3 (`O -> 4`):
+**GPS over PORTA was removed in this fork, along with the `GNSS_LoRa` setting.** There is now one GPS source and no choice to make: the M5Stack LoRa-1262 cap GNSS on UART2 (`RX=G15`, `TX=G13`) at 115200 baud. The LoRa/SX1262 radio side is not used and never was. Fit the cap and GPS works; leave it off and there is simply no fix — presence is observed, not configured.
 
-- `GNSS_LoRa:OFF` uses the PORTA GPS wiring below. Both 9600 and 115200 baud GPS modules are supported and auto-detected. **Make sure the micro switch is on the left.** Once Mini-FT8 gets its time/grid, the GPS can be removed, this is important for KH1.
-- `GNSS_LoRa:ON` uses the M5Stack LoRa-1262 cap GNSS on UART2 (`RX=G15`, `TX=G13`) at 115200 baud. The LoRa/SX1262 radio side is not used. This source can keep running while KH1 CAT uses PORTA/UART1.
+Wei's PORTA GPS wiring below therefore does not apply to this fork. A Grove GPS puck on `G1`/`G2` will not be read.
 
-When `GNSS_LoRa` is `ON`, the physical G4/G5 debug UART path is disabled and the pins are left as floating inputs to avoid conflicts. USB Serial/JTAG host commands still work.
+**Why:** PORTA and the cap were alternatives, and selecting the cap meant the PORTA port was never opened at all. That port carries the companion sidekick, so a GPS setting could silently disable the companion link — and in the headless direction this fork is heading, where the sidekick *is* the user interface, it would have removed the only UI along with the only control able to restore it. One device per port, chosen at build time rather than by a menu item, removes the whole class of problem.
+
+Two consequences worth stating plainly:
+
+- **The G4/G5 debug UART is gone.** `G5` is the cap's SX1262 chip-select, so the console and the cap could never coexist; the setting existed to pick one. Those pins are now always left to the cap. Use the on-screen log (`P` then `.`) instead — and the console is coming back on better wiring: once the companion protocol carries log events, the sidekick prints them to **its** USB-C, which is idle while the Cardputer's own USB-C is busy hosting the radio. That is the case the G4/G5 console existed for and never served well.
+- **MENU P3 renumbered.** Copy-to-SD moved from `5` to `4`, max retry from `6` to `5`.
 
 The GPS view shows the active source on its first line.
 ```text

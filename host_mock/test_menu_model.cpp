@@ -41,22 +41,26 @@ static void check_eq_str(const char* got, const char* want, const char* what)
 
 static void test_shape(void)
 {
-    check_eq_int(menu_row_count(), 18, "row count");
+    check_eq_int(menu_row_count(), 17, "row count");
     check_eq_int(menu_page_count(), 3, "page count");
     check_eq_int(kMenuRowsPerPage, 6, "rows per page");
 }
 
 static void test_page_and_key(void)
 {
-    // Row 0 is page 0 key '1'; row 17 is page 2 key '6'.
+    // Row 0 is page 0 key '1'. The last row is 16 since gnss_lora went, so
+    // page 2 holds five rows and key '6' on that page is unmapped.
     check_eq_int(menu_page_of(0), 0, "row 0 page");
     check(menu_key_of(0) == '1', "row 0 key");
     check_eq_int(menu_page_of(5), 0, "row 5 page");
     check(menu_key_of(5) == '6', "row 5 key");
     check_eq_int(menu_page_of(6), 1, "row 6 page");
     check(menu_key_of(6) == '1', "row 6 key");
-    check_eq_int(menu_page_of(17), 2, "row 17 page");
-    check(menu_key_of(17) == '6', "row 17 key");
+    check_eq_int(menu_page_of(16), 2, "row 16 page");
+    check(menu_key_of(16) == '5', "row 16 key");
+    // Page 2's sixth slot is empty now. It must map to nothing rather than
+    // wrapping to another row -- the failure mode a derived layout invites.
+    check_eq_int(menu_index_for(2, '6'), -1, "page 2 key '6' is unmapped");
 }
 
 static void test_roundtrip(void)
@@ -77,9 +81,9 @@ static void test_roundtrip(void)
 static void test_out_of_range(void)
 {
     check_eq_int(menu_page_of(-1), -1, "page_of(-1)");
-    check_eq_int(menu_page_of(18), -1, "page_of(18)");
+    check_eq_int(menu_page_of(17), -1, "page_of(17)");
     check(menu_key_of(-1) == 0, "key_of(-1)");
-    check(menu_key_of(18) == 0, "key_of(18)");
+    check(menu_key_of(17) == 0, "key_of(17)");
     check_eq_int(menu_index_for(-1, '1'), -1, "index_for(page -1)");
     check_eq_int(menu_index_for(3, '1'), -1, "index_for(page 3) -- no 4th page");
     check_eq_int(menu_index_for(0, '0'), -1, "index_for key '0'");
@@ -100,7 +104,7 @@ static void test_ids(void)
     static const char* kExpected[] = {
         "cq_type", "send_ft", "freetext", "call", "grid", "sleep_batt",
         "offset_src", "offset_hz", "radio", "ignore_list", "comment", "protocol",
-        "rxtx_log", "skip_tx1", "band_config", "gnss_lora", "copy_to_sd", "max_retry",
+        "rxtx_log", "skip_tx1", "band_config", "copy_to_sd", "max_retry",
     };
     check_eq_int((int)(sizeof(kExpected) / sizeof(kExpected[0])), menu_row_count(),
                  "expected-id list length matches row count");
@@ -126,7 +130,7 @@ static void test_edit_classes(void)
     check(menu_edit_class(3) == MenuEdit::Callsign, "call is Callsign");
     check(menu_edit_class(4) == MenuEdit::Callsign, "grid is Callsign");
     check(menu_edit_class(7) == MenuEdit::Numeric, "offset_hz is Numeric");
-    check(menu_edit_class(17) == MenuEdit::Numeric, "max_retry is Numeric");
+    check(menu_edit_class(16) == MenuEdit::Numeric, "max_retry is Numeric");
 
     int editable = 0;
     for (int i = 0; i < menu_row_count(); ++i) {
@@ -135,11 +139,13 @@ static void test_edit_classes(void)
     check_eq_int(editable, 4, "exactly four editable rows");
 
     // REGRESSION: the old filter tested `menu_edit_idx % 6 == 3 || 4 || 5`,
-    // meaning "position on page". 17 % 6 == 5, so Max Retry -- a digits-only
-    // field -- was silently treated as an upper-casing text field. Harmless
-    // only because toupper('7') == '7'; it would have broken as soon as a row
-    // was added or reordered. Max Retry must be Numeric, never Callsign.
-    check(menu_edit_class(17) != MenuEdit::Callsign,
+    // meaning "position on page". Max Retry -- a digits-only field -- was
+    // silently treated as an upper-casing text field. Harmless only because
+    // toupper('7') == '7'; it would have broken as soon as a row was added or
+    // reordered. It since has been: dropping gnss_lora moved Max Retry from
+    // index 17 to 16, and 16 % 6 == 4 is still inside the accidental set the
+    // original bug matched, so this case is as live as it ever was.
+    check(menu_edit_class(16) != MenuEdit::Callsign,
           "REGRESSION: max_retry must not inherit Callsign via idx % 6 == 5");
 
     // REGRESSION: `menu_edit_idx == 10` was a live branch that could never

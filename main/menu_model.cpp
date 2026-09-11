@@ -24,7 +24,6 @@ const MenuRow kMenuRows[] = {
     { "rxtx_log",    MenuEdit::None     },
     { "skip_tx1",    MenuEdit::None     },
     { "band_config", MenuEdit::None     },
-    { "gnss_lora",   MenuEdit::None     },
     { "copy_to_sd",  MenuEdit::None     },
     { "max_retry",   MenuEdit::Numeric  },
 };

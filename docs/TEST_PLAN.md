@@ -48,7 +48,7 @@ surfaced in CI. The commands below are the full local set.
 | `host_test_usb_c_presence` | USB-C presence detection policy |
 | `host_test_datetime_field` | STATUS date/time editor: cursor movement over separators, digit overwrite, and strict range validation. Carries regression cases for the dates `mktime` used to silently roll over, plus an exhaustive sweep of every day in a leap and non-leap year |
 | `host_test_screen_model` | Screen navigation: key to screen, R never toggling, the seven plain toggles, M/N/O sharing MENU across three pages, P cycling stats to log to RX, and `C` staying inert after B23 |
-| `host_test_porta_proto` | Sidekick/host frame codec (I28a): encode/decode round-trip, zero-length and 255-byte payloads, and a sync byte appearing *inside* a payload — which it will, since payloads are binary. Sweeps **every single-bit flip** in every framed byte and requires the CRC to reject all of them, which a sum-of-bytes checksum (what the old beacon used) does not. Pins recovery after truncation and after leading garbage, and pins the one deliberate limitation: a corrupt frame is dropped without rescanning the bytes it consumed, so a stray sync byte in noise costs exactly one real frame. Counters survive the decoder's own resync but not an explicit init — a distinction that started as a bug, since preserving them meant reading uninitialised memory on first use |
+| `host_test_porta_proto` | Sidekick/main frame codec (I28a): encode/decode round-trip, zero-length and 255-byte payloads, and a sync byte appearing *inside* a payload — which it will, since payloads are binary. Sweeps **every single-bit flip** in every framed byte and requires the CRC to reject all of them, which a sum-of-bytes checksum (what the old beacon used) does not. Pins recovery after truncation and after leading garbage, and pins the one deliberate limitation: a corrupt frame is dropped without rescanning the bytes it consumed, so a stray sync byte in noise costs exactly one real frame. Counters survive the decoder's own resync but not an explicit init — a distinction that started as a bug, since preserving them meant reading uninitialised memory on first use |
 | `host_test_menu_model` | MENU layout arithmetic (page/key round-trip for all 18 rows), row identity and order, inline-edit character classes and filter, and the long-edit rules (per-kind case handling and the ignore-list cap). Carries regression cases for both defects B32 fixed |
 
 ### What automation cannot see
@@ -70,8 +70,9 @@ Named explicitly so nobody mistakes a green run for coverage. None of the follow
 Real hardware. An agent proposes these and never marks them passed.
 
 Standing rig: Cardputer ADV + QMX (or QMX+) over USB-C. The Cardputer's USB-C is **either** ESP serial/JTAG
-**or** USB host for the radio, never both — live logs with the radio attached need the console UART on
-**G4 (TX) / G5 (RX)**, and that path is off when `GNSS_LoRa:ON`.
+**or** USB host for the radio, never both — so with the radio attached there is **no serial console at all**.
+The G4/G5 console went with the `GNSS_LoRa` setting: `G5` is the cap's SX1262 chip-select, the two could
+never coexist, and the setting existed only to choose between them. The on-screen log is the console now.
 
 **Where the on-screen log lives: `P`, then `.`** — the PERF screen's second page. `;` returns to the stats
 page, `.` pages further down the log. Every "the log shows …" expectation below means that screen.
@@ -156,9 +157,9 @@ For each row: press the key, confirm the effect, and confirm no *other* row chan
 | `1` | `RxTxLog:ON/OFF` | Toggles and persists |
 | `2` | `SkipTX1:ON/OFF` | Toggles and persists |
 | `3` | `Band config` | Enters the BAND config screen |
-| `4` | `GNSS_LoRa:ON/OFF` | Toggles; GPS and PORTA restart on the other pin set |
-| `5` | copy-to-SD line | `Copied OK`, or `Missed [n]`, or a blocked message if TX/decode/streaming is active |
-| `6` | `Max Retry:<n>` | Inline edit, **digits only**; `0` is accepted |
+| `4` | copy-to-SD line | `Copied OK`, or `Missed [n]`, or a blocked message if TX/decode/streaming is active. **Moved from `5`** when the `GNSS_LoRa` row was removed |
+| `5` | `Max Retry:<n>` | Inline edit, **digits only**; `0` is accepted. **Moved from `6`** |
+| `6` | — | **Nothing.** Page 3 has five rows now; this key must do nothing at all. A derived layout that wrapped it round to another row would be the failure mode to catch |
 
 #### Menu paging and edit-mode guards
 
@@ -434,6 +435,7 @@ a change touches a field-only path, naming the change and the exact check.
 | I3d–I3h (WiFi provisioning) | S2c, all rows | **owed.** Partially exercised on 2026-09-09 but not against current firmware: the AP came up, the scan found networks, and a join succeeded — but the join that crashed (I3f), the credential erase that failed to stick (I3g) and the stale scan list (I3h) were all fixed *after* that session, and the captive portal has never been seen working |
 | mDNS + station-mode server | S2d, all rows | **owed** — no part of it has run on hardware |
 | I3a (payload gate) | S3.2 if a real NanoC6 is to hand — the refusal is the whole point of the gate | owed |
+| I28a (drop Grove GPS) | MENU P3 renumbering (`O` `4` copies to SD, `5` is max retry, `6` does nothing); the cap's GNSS still locks with no setting to enable it and `G` reads `Src:cap GNSS`; the sidekick beacon still arrives on `P` then `.` with the cap fitted, which it never could before; and an existing `Station.txt` carrying `gnss_lora=` still loads | **owed** — the last one matters most: PORTA and the cap were mutually exclusive, so "both at once" has never run on hardware |
 | B46 (restore script) | Phase 10 | owed, and optional. Rewritten for `esp32s3` / `0x800000` and never run; the failure mode is losing the unit's only stock image |
 
 ### Standing watch — B36, unproven

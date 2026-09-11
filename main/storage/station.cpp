@@ -144,8 +144,6 @@ enum class StationKey {
     OffsetSrc,
     Radio,
     GpsBaud,
-    GnssLora,
-    GpsSource,
     CqFt,
     FreeText,
     Call,
@@ -170,8 +168,6 @@ StationKey key_from_name(const std::string& name)
     if (name == "offset_src") return StationKey::OffsetSrc;
     if (name == "radio") return StationKey::Radio;
     if (name == "gps_baud") return StationKey::GpsBaud;
-    if (name == "gnss_lora") return StationKey::GnssLora;
-    if (name == "gps_source") return StationKey::GpsSource;
     if (name == "cq_ft") return StationKey::CqFt;
     if (name == "free_text") return StationKey::FreeText;
     if (name == "call") return StationKey::Call;
@@ -224,16 +220,6 @@ void apply_key(StationSettings* io, StationKey key, const std::string& value)
         case StationKey::GpsBaud:
             if (sscanf(value.c_str(), "%d", &val) == 1) {
                 io->gps_baud = normalize_gps_baud(val);
-            }
-            break;
-        case StationKey::GnssLora:
-            if (sscanf(value.c_str(), "%d", &val) == 1) {
-                io->gnss_lora = (val != 0);
-            }
-            break;
-        case StationKey::GpsSource:
-            if (sscanf(value.c_str(), "%d", &val) == 1 && val == 2) {
-                io->gnss_lora = true;
             }
             break;
         case StationKey::CqFt:
@@ -380,7 +366,6 @@ std::string station_serialize(const StationSettings& in)
     out << "offset_src=" << in.offset_src << "\n";
     out << "radio=" << in.radio << "\n";
     out << "gps_baud=" << normalize_gps_baud(in.gps_baud) << "\n";
-    out << "gnss_lora=" << (in.gnss_lora ? 1 : 0) << "\n";
     out << "comment1=" << in.comment1 << "\n";
     out << "ignore_prefixes=" << in.ignore_prefixes << "\n";
     out << "rxtx_log=" << (in.rxtx_log ? 1 : 0) << "\n";

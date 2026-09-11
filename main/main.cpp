@@ -462,8 +462,6 @@ static std::string menu_sleep_batt_line();
 static void enter_charge_mode();
 static int normalize_gps_baud_value(int value);
 static gps_pins_t gps_pins_for_current_source();
-static const char* gps_source_name();
-static void apply_debug_uart_pin_policy();
 static void restore_debug_uart_pins_after_sd();
 static bool rtc_set_from_strings_source(RtcTimeSource source);
 static esp_err_t rtc_write_external_from_soft(const char* reason);
@@ -580,7 +578,6 @@ int g_freq_osr = 1;
 static OffsetSrc g_offset_src = OffsetSrc::RANDOM;
 static RadioType g_radio = RadioType::QMX;       
 static int g_gps_baud = 115200;
-static bool g_gnss_lora_enabled = false;
 static std::string g_comment1 = "MiniFT8 /Radio";   
 static std::string g_ignore_prefix_text;
 static std::vector<std::string> g_ignore_prefixes;  
@@ -1099,33 +1096,30 @@ static void set_gpio_floating_input(gpio_num_t pin) {
   gpio_intr_disable(pin);
 }
 
-static void apply_debug_uart_pin_policy() {
-  const bool enable = !g_gnss_lora_enabled;
-  if (enable && g_debug_uart_pins_enabled) return;
-
-  const gpio_num_t tx = (gpio_num_t)CONFIG_ESP_CONSOLE_UART_TX_GPIO;
-  const gpio_num_t rx = (gpio_num_t)CONFIG_ESP_CONSOLE_UART_RX_GPIO;
-  if (enable) {
-    uart_set_pin(UART_NUM_0, tx, rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    uart_inject_last_was_cr = false;
-    g_debug_uart_pins_enabled = true;
-    ESP_LOGI(TAG, "G4/G5 debug UART enabled");
-  } else {
-    if (s_key_inject_queue) xQueueReset(s_key_inject_queue);
-    uart_inject_last_was_cr = false;
-    g_uart_mirror_pending = false;
-    set_gpio_floating_input(tx);
-    set_gpio_floating_input(rx);
-    const bool changed = g_debug_uart_pins_enabled;
-    g_debug_uart_pins_enabled = false;
-    if (changed) ESP_LOGI(TAG, "G4/G5 debug UART disabled for GNSS LoRa");
-  }
+// G4/G5 are left to the GNSS/LoRa cap, always. They used to be shared with a
+// serial console, selected by the GNSS_LoRa menu toggle -- but GPIO5 is the
+// cap's SX1262 chip-select, so the two could never coexist, and the toggle
+// existed to pick one. The console went when the toggle did: the operator had
+// never used it, the on-screen log (P then '.') covers the same need without a
+// second cable, and keeping a setting alive to arbitrate a facility nobody
+// reaches was the worse trade. If it is ever wanted back it is this function,
+// inverted.
+static void release_debug_uart_pins() {
+  if (!g_debug_uart_pins_enabled) return;
+  if (s_key_inject_queue) xQueueReset(s_key_inject_queue);
+  uart_inject_last_was_cr = false;
+  g_uart_mirror_pending = false;
+  set_gpio_floating_input((gpio_num_t)CONFIG_ESP_CONSOLE_UART_TX_GPIO);
+  set_gpio_floating_input((gpio_num_t)CONFIG_ESP_CONSOLE_UART_RX_GPIO);
+  g_debug_uart_pins_enabled = false;
+  ESP_LOGI(TAG, "G4/G5 released for the GNSS/LoRa cap");
 }
 
+// SD mount briefly drives GPIO5 HIGH as the LoRa-1262 CS, which can leave the
+// pin driven; force it back to a floating input afterwards.
 static void restore_debug_uart_pins_after_sd() {
-  // Force re-apply: SD mount briefly drives GPIO5 HIGH as LoRa-1262 CS.
-  g_debug_uart_pins_enabled = false;
-  apply_debug_uart_pin_policy();
+  g_debug_uart_pins_enabled = true;  // force release_debug_uart_pins() to act
+  release_debug_uart_pins();
 }
 
 struct WAVHeader {
@@ -1334,13 +1328,13 @@ void apply_radio_profile_binding() {
   g_gps_baud = normalize_gps_baud_value(g_gps_baud);
   const RadioProfile& profile = radio_profile_get(g_radio);
 
-  if (g_gnss_lora_enabled) {
-    gps_start(gps_pins_for_current_source());
-  } else {
-    // PORTA is either/or with a companion Nano (RFC 0001 §5.2); arbitrate
-    // by listening rather than assuming GPS.
-    porta_start(g_gps_baud);
-  }
+  // Both, always. These used to be alternatives: PORTA carried either a Grove
+  // GPS puck or the sidekick, so choosing the cap's GNSS meant PORTA never
+  // started at all -- which in a headless build (I28) would have deleted the
+  // only UI, with no way left to undo it. Grove GPS is gone, so the Grove port
+  // is the sidekick's and the cap's GNSS is the only GPS.
+  porta_start();
+  gps_start(gps_pins_for_current_source());
   audio_source_set_backend(profile.audio_backend);
   radio_control_set_backend(profile.radio_backend);
   if (audio_source_is_streaming() && prev_audio != profile.audio_backend) {
@@ -1473,11 +1467,8 @@ static void gps_runtime_tick() {
   static bool s_gps_grid_logged = false;
   static int s_last_time_sync_hour_key = -1;
 
-  if (g_gnss_lora_enabled) {
-    gps_tick();
-  } else {
-    porta_tick();
-  }
+  gps_tick();
+  porta_tick();
 
   int detected_baud = 0;
   if (gps_take_baud_update(&detected_baud)) {
@@ -1656,31 +1647,20 @@ static int normalize_gps_baud_value(int value) {
   return (value == 9600 || value == 115200) ? value : 115200;
 }
 
+// The cap's ATGM336H on UART2, and nothing else. No fix simply means no cap
+// fitted (or no sky) -- presence is observed, not configured.
 static gps_pins_t gps_pins_for_current_source() {
   gps_pins_t pins = {};
-  if (g_gnss_lora_enabled) {
-    pins.uart = UART_NUM_2;
-    pins.rx = GPIO_NUM_15;
-    pins.tx = GPIO_NUM_13;
-    // Cap GNSS defaults to 115200. Some hosts (Launcher 2.8) drive G13/G15 as
-    // GPIO outputs and can leave the ATGM336H at 9600 or wedged; recover baud
-    // via CASIC and probe both rates like PORTA.
-    pins.default_baud = normalize_gps_baud_value(g_gps_baud);
-    pins.auto_baud = true;
-    pins.casic_baud_recover = true;
-  } else {
-    pins.uart = UART_NUM_1;
-    pins.rx = GPIO_NUM_1;
-    pins.tx = GPIO_NUM_2;
-    pins.default_baud = normalize_gps_baud_value(g_gps_baud);
-    pins.auto_baud = true;
-    pins.casic_baud_recover = false;
-  }
+  pins.uart = UART_NUM_2;
+  pins.rx = GPIO_NUM_15;
+  pins.tx = GPIO_NUM_13;
+  // Cap GNSS defaults to 115200. Some hosts (Launcher 2.8) drive G13/G15 as
+  // GPIO outputs and can leave the ATGM336H at 9600 or wedged; recover baud
+  // via CASIC and probe both rates.
+  pins.default_baud = normalize_gps_baud_value(g_gps_baud);
+  pins.auto_baud = true;
+  pins.casic_baud_recover = true;
   return pins;
-}
-
-static const char* gps_source_name() {
-  return g_gnss_lora_enabled ? "GNSS_LoRa" : "PORTA";
 }
 
 
@@ -3395,7 +3375,6 @@ static std::string ml_protocol() {
 static std::string ml_rxtx_log()    { return std::string("RxTxLog:") + (g_rxtx_log ? "ON" : "OFF"); }
 static std::string ml_skip_tx1()    { return std::string("SkipTX1:") + (g_skip_tx1 ? "ON" : "OFF"); }
 static std::string ml_band_config() { return "Band config"; }
-static std::string ml_gnss_lora()   { return std::string("GNSS_LoRa:") + (g_gnss_lora_enabled ? "ON" : "OFF"); }
 static std::string ml_copy_to_sd()  { return copy_to_sd_menu_item(rtc_now_ms()); }
 static std::string ml_max_retry() {
   return std::string("Max Retry:") +
@@ -3496,15 +3475,6 @@ static void ma_band_config() {
   band_config_reset((int)g_bands.size());
   enter_mode(UIMode::BAND);
 }
-static void ma_gnss_lora() {
-  gps_stop();
-  porta_stop();
-  g_gnss_lora_enabled = !g_gnss_lora_enabled;
-  apply_debug_uart_pin_policy();
-  save_station_data();
-  apply_radio_profile_binding();
-  draw_menu_view();
-}
 static void ma_copy_to_sd() {
   CopyBlockInputs in;
   in.writes_blocked   = storage_writes_blocked();
@@ -3541,12 +3511,11 @@ static const MenuItem kMenuItems[] = {
   { "rxtx_log",    ml_rxtx_log,     ma_rxtx_log },
   { "skip_tx1",    ml_skip_tx1,     ma_skip_tx1 },
   { "band_config", ml_band_config,  ma_band_config },
-  { "gnss_lora",   ml_gnss_lora,    ma_gnss_lora },
   { "copy_to_sd",  ml_copy_to_sd,   ma_copy_to_sd },
   { "max_retry",   ml_max_retry,    ma_max_retry },
 };
 static constexpr int kMenuItemCount = (int)(sizeof(kMenuItems) / sizeof(kMenuItems[0]));
-static_assert(kMenuItemCount == 18, "menu item count changed; check menu_model.cpp");
+static_assert(kMenuItemCount == 17, "menu item count changed; check menu_model.cpp");
 
 // The two tables must stay index-parallel. Checked once at startup rather than
 // at compile time because menu_row_id() is not constexpr; a mismatch here means
@@ -3604,7 +3573,7 @@ static void draw_gps_view(bool force_redraw) {
   std::vector<std::string> lines;
   lines.reserve(6);
   gps_state_t state = gps_get_state();
-  lines.push_back(std::string("Src:") + gps_source_name());
+  lines.push_back("Src:cap GNSS");
   if (state.valid_fix) {
     lines.push_back(std::string("Fix: 3D (") + std::to_string(state.satellites) + " Sats)");
   } else {
@@ -4223,7 +4192,6 @@ static void station_fill_from_globals(StationSettings* s) {
   s->offset_src = (int)g_offset_src;
   s->radio = (int)radio_profile_canonical(g_radio);
   s->gps_baud = g_gps_baud;
-  s->gnss_lora = g_gnss_lora_enabled;
   s->comment1 = g_comment1;
   s->ignore_prefixes = g_ignore_prefix_text;
   s->rxtx_log = g_rxtx_log;
@@ -4268,7 +4236,6 @@ static void station_apply_to_globals(const StationSettings& s) {
   g_offset_src = (OffsetSrc)s.offset_src;
   g_radio = radio_profile_from_saved_int(s.radio);
   g_gps_baud = normalize_gps_baud_value(s.gps_baud);
-  g_gnss_lora_enabled = s.gnss_lora;
   g_comment1 = s.comment1;
   g_ignore_prefix_text = clamp_ignore_prefix_text(s.ignore_prefixes);
   g_rxtx_log = s.rxtx_log;
@@ -4293,7 +4260,6 @@ static void load_station_data() {
 
   g_autoseq_max_retry = AUTOSEQ_MAX_RETRY;
   g_gps_baud = 115200;
-  g_gnss_lora_enabled = false;
   g_grid_saved_manual = g_grid;
   g_grid_from_gps = false;
   g_grid_gps_display8.clear();
@@ -4601,7 +4567,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
 
   ui_mode = UIMode::RX;
   load_station_data();
-  apply_debug_uart_pin_policy();
+  release_debug_uart_pins();
   apply_radio_profile_binding();
   update_autoseq_cq_type();
 
@@ -4664,7 +4630,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
       uart_ll_read_rxfifo(hw, scratch, n);
     }
   }
-  apply_debug_uart_pin_policy();
+  release_debug_uart_pins();
 
   // UI loop
   char last_key = 0;

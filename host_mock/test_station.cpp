@@ -129,8 +129,10 @@ int main()
     {
         StationSettings s;
         station_settings_init(&s);
-        station_parse("gps_source=2\nactive_band=5\n", &s);
-        expect_true(s.gnss_lora, "legacy gps_source=2");
+        // gps_source / gnss_lora are gone with Grove GPS; an old Station.txt
+        // that still carries them must load without complaint rather than
+        // failing, so the surviving legacy key is checked alongside them.
+        station_parse("gps_source=2\ngnss_lora=1\nactive_band=5\n", &s);
         expect_str(s.active_bands, "5", "legacy active_band");
     }
 

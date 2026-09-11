@@ -24,7 +24,6 @@ struct StationSettings {
     int offset_src;
     int radio;
     int gps_baud;
-    bool gnss_lora;
     std::string comment1;
     std::string ignore_prefixes;
     bool rxtx_log;
