@@ -43,13 +43,14 @@ USB_C_PRESENCE_TARGET = host_test_usb_c_presence
 MENU_MODEL_TARGET = host_test_menu_model
 SCREEN_MODEL_TARGET = host_test_screen_model
 DATETIME_FIELD_TARGET = host_test_datetime_field
+PORTA_PROTO_TARGET = host_test_porta_proto
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
      $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_TARGET) $(SCREEN_MODEL_TARGET) \
-     $(DATETIME_FIELD_TARGET)
+     $(DATETIME_FIELD_TARGET) $(PORTA_PROTO_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -112,6 +113,14 @@ SCREEN_MODEL_OBJ = screen_model.o test_screen_model.o
 screen_model.o: ../main/screen_model.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(SCREEN_MODEL_TARGET): $(SCREEN_MODEL_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+PORTA_PROTO_OBJ = porta_proto.o test_porta_proto.o
+porta_proto.o: ../components/porta_proto/porta_proto.c
+	$(CC) $(CFLAGS) -I../components/porta_proto/include -c $< -o $@
+test_porta_proto.o: test_porta_proto.cpp
+	$(CXX) $(CXXFLAGS) -I../components/porta_proto/include -c $< -o $@
+$(PORTA_PROTO_TARGET): $(PORTA_PROTO_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 DATETIME_FIELD_OBJ = datetime_field.o test_datetime_field.o
