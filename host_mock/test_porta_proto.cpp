@@ -53,16 +53,16 @@ static void test_round_trip()
     porta_decoder_init(&d);
 
     std::vector<uint8_t> payload = {0x01, 0x02, 0x03, 0xFF, 0x00};
-    auto wire = encode(PORTA_MSG_STATUS, payload);
+    auto wire = encode(PORTA_MSG_CONFIG_VALUE, payload);
     check(wire.size() == payload.size() + 4, "frame is payload + 4 overhead bytes");
     check(wire[0] == PORTA_PROTO_SYNC, "frame starts with the sync byte");
-    check(wire[1] == PORTA_MSG_STATUS, "type is second");
+    check(wire[1] == PORTA_MSG_CONFIG_VALUE, "type is second");
     check(wire[2] == payload.size(), "length is third");
 
     auto got = run(&d, wire);
     check(got.size() == 1, "one frame in, one frame out");
     if (got.size() == 1) {
-        check(got[0].type == PORTA_MSG_STATUS, "type round-trips");
+        check(got[0].type == PORTA_MSG_CONFIG_VALUE, "type round-trips");
         check(got[0].len == payload.size(), "length round-trips");
         check(std::memcmp(got[0].payload, payload.data(), payload.size()) == 0,
               "payload round-trips");
@@ -86,7 +86,7 @@ static void test_empty_and_max_payload()
     for (size_t i = 0; i < big.size(); ++i) {
         big[i] = (uint8_t)(i * 7 + 3);
     }
-    auto wire = encode(PORTA_MSG_DECODE, big);
+    auto wire = encode(PORTA_MSG_FILE_DATA, big);
     check(wire.size() == PORTA_PROTO_MAX_FRAME, "max frame is 259 bytes");
     got = run(&d, wire);
     check(got.size() == 1, "max-length frame decodes");
@@ -105,7 +105,7 @@ static void test_sync_byte_inside_payload()
     porta_decoder_init(&d);
 
     std::vector<uint8_t> payload = {PORTA_PROTO_SYNC, PORTA_PROTO_SYNC, 0x00, PORTA_PROTO_SYNC};
-    auto got = run(&d, encode(PORTA_MSG_DECODE, payload));
+    auto got = run(&d, encode(PORTA_MSG_FILE_DATA, payload));
     check(got.size() == 1, "a payload full of sync bytes is still one frame");
     if (got.size() == 1) {
         check(got[0].len == 4 && got[0].payload[0] == PORTA_PROTO_SYNC,
@@ -119,7 +119,7 @@ static void test_sync_byte_inside_payload()
 static void test_crc_catches_every_single_bit_flip()
 {
     std::vector<uint8_t> payload = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70};
-    auto clean = encode(PORTA_MSG_STATUS, payload);
+    auto clean = encode(PORTA_MSG_CONFIG_VALUE, payload);
 
     int missed = 0;
     for (size_t byte = 0; byte < clean.size(); ++byte) {
@@ -144,7 +144,7 @@ static void test_truncated_frame_then_recovery()
     porta_decoder_t d;
     porta_decoder_init(&d);
 
-    auto full = encode(PORTA_MSG_STATUS, {1, 2, 3, 4, 5, 6, 7, 8});
+    auto full = encode(PORTA_MSG_CONFIG_VALUE, {1, 2, 3, 4, 5, 6, 7, 8});
     std::vector<uint8_t> truncated(full.begin(), full.end() - 3);
     auto got = run(&d, truncated);
     check(got.empty(), "a truncated frame yields nothing");
@@ -193,7 +193,7 @@ static void test_encode_refuses_a_short_buffer()
 {
     uint8_t small[4];
     std::vector<uint8_t> payload = {1, 2, 3, 4, 5};
-    check(porta_proto_encode(PORTA_MSG_STATUS, payload.data(), (uint8_t)payload.size(),
+    check(porta_proto_encode(PORTA_MSG_CONFIG_VALUE, payload.data(), (uint8_t)payload.size(),
                              small, sizeof(small)) == 0,
           "encode refuses rather than writing a partial frame");
 
@@ -241,7 +241,7 @@ static void test_hello_round_trip()
     if (got.size() == 1) {
         uint8_t ver = 0;
         char build[PORTA_HELLO_VERSION_LEN + 1] = {};
-        check(porta_proto_decode_hello(&got[0], &ver, build), "hello payload parses");
+        check(porta_proto_parse_hello(&got[0], &ver, build), "hello payload parses");
         check(ver == PORTA_PROTO_VERSION, "protocol version round-trips");
         check(std::string(build) == "f0c79d3-dirty", "build version round-trips");
     }
@@ -256,7 +256,7 @@ static void test_hello_round_trip()
     if (got.size() == 1) {
         uint8_t ver = 0;
         char build[PORTA_HELLO_VERSION_LEN + 1] = {};
-        check(porta_proto_decode_hello(&got[0], &ver, build), "full-width hello parses");
+        check(porta_proto_parse_hello(&got[0], &ver, build), "full-width hello parses");
         check(std::string(build) == full, "a 32-character version is not truncated");
     }
 }
@@ -264,13 +264,95 @@ static void test_hello_round_trip()
 static void test_hello_rejects_wrong_shape()
 {
     porta_frame_t f = {};
-    f.type = PORTA_MSG_STATUS;
+    f.type = PORTA_MSG_CONFIG_VALUE;
     f.len = PORTA_HELLO_PAYLOAD_LEN;
-    check(!porta_proto_decode_hello(&f, nullptr, nullptr), "wrong type is not a hello");
+    check(!porta_proto_parse_hello(&f, nullptr, nullptr), "wrong type is not a hello");
 
     f.type = PORTA_MSG_HELLO;
     f.len = 4;
-    check(!porta_proto_decode_hello(&f, nullptr, nullptr), "wrong length is not a hello");
+    check(!porta_proto_parse_hello(&f, nullptr, nullptr), "wrong length is not a hello");
+}
+
+// EVENT is a namespace: subtype first, body after. These pin the field packing
+// and, more importantly, the boundaries -- an empty text, a full-width text, and
+// a frame one byte too short to hold the fixed part.
+static void test_log_event()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    size_t n = porta_proto_encode_log("Queued: CQ KB2SLO FN30", buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "log event decodes");
+    if (got.size() == 1) {
+        char text[PORTA_EVENT_TEXT_MAX + 1] = {};
+        check(porta_proto_parse_log(&got[0], text), "log event parses");
+        check(std::string(text) == "Queued: CQ KB2SLO FN30", "log text round-trips");
+        // A decode parser must reject a log event and vice versa: same frame
+        // type, different subtype, and confusing them would silently misread
+        // the first seven bytes of a message as numeric fields.
+        porta_decode_event_t dec;
+        check(!porta_proto_parse_decode(&got[0], &dec), "a log event is not a decode event");
+    }
+
+    // Empty text is legal -- a zero-length log line is odd but not malformed.
+    porta_decoder_init(&d);
+    n = porta_proto_encode_log("", buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1 && got[0].len == 1, "empty log event is subtype only");
+
+    // Longer than the field: truncated, not overflowed.
+    porta_decoder_init(&d);
+    std::string longtext(PORTA_EVENT_TEXT_MAX + 40, 'z');
+    n = porta_proto_encode_log(longtext.c_str(), buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "over-long log event still encodes");
+    if (got.size() == 1) {
+        char text[PORTA_EVENT_TEXT_MAX + 1] = {};
+        porta_proto_parse_log(&got[0], text);
+        check(std::strlen(text) == PORTA_EVENT_TEXT_MAX, "over-long text is truncated to the field");
+    }
+}
+
+static void test_decode_event()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    porta_decode_event_t in = {};
+    std::snprintf(in.text, sizeof(in.text), "CQ DX W1AW FN31");
+    in.snr = -21;              // negative, to catch an unsigned round-trip
+    in.offset_hz = 2750;       // above 2047, to catch a truncated width
+    in.dt_centis = -145;       // negative, likewise
+    in.is_cq = true;
+    in.is_recent_qso = true;
+
+    size_t n = porta_proto_encode_decode(&in, buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "decode event decodes");
+    if (got.size() == 1) {
+        porta_decode_event_t out;
+        check(porta_proto_parse_decode(&got[0], &out), "decode event parses");
+        check(std::string(out.text) == "CQ DX W1AW FN31", "text round-trips");
+        check(out.snr == -21, "negative SNR round-trips");
+        check(out.offset_hz == 2750, "offset above 2047 round-trips");
+        check(out.dt_centis == -145, "negative dt round-trips");
+        check(out.is_cq && out.is_recent_qso && !out.is_to_me, "flags round-trip independently");
+
+        char text[PORTA_EVENT_TEXT_MAX + 1] = {};
+        check(!porta_proto_parse_log(&got[0], text), "a decode event is not a log event");
+    }
+
+    // A frame carrying the subtype but not the fixed fields must be rejected
+    // rather than read past its own length.
+    porta_frame_t stub = {};
+    stub.type = PORTA_MSG_EVENT;
+    stub.len = 4;
+    stub.payload[0] = PORTA_EVT_DECODE;
+    porta_decode_event_t out;
+    check(!porta_proto_parse_decode(&stub, &out), "a short decode event is rejected");
 }
 
 int main()
@@ -286,6 +368,8 @@ int main()
     test_counters();
     test_hello_round_trip();
     test_hello_rejects_wrong_shape();
+    test_log_event();
+    test_decode_event();
 
     if (g_fail) {
         std::printf("FAILED: %d check(s)\n", g_fail);

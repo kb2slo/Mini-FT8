@@ -1,5 +1,6 @@
 #include "porta.h"
 
+#include <cinttypes>
 #include <cstring>
 #include <string>
 
@@ -9,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "main_services.h"
+#include "porta_proto.h"
 #include "sidekick_flasher.h"
 
 namespace {
@@ -20,6 +22,9 @@ constexpr gpio_num_t kPortaTxPin = GPIO_NUM_2;
 // Fixed. The sidekick only ever speaks 115200 (sidekick/main/main.c), and with
 // GPS off this port there is nothing else on the wire to probe for.
 constexpr int kBaud = 115200;
+
+// Big enough that one frame per tick never finds it full; see drain_out().
+constexpr int kTxBufBytes = 4096;
 
 constexpr uint8_t kCompanionSync = 0xC6;
 // sidekick's beacon (RFC 0001 §5.2c): sync + version[32] + XOR checksum,
@@ -125,7 +130,84 @@ void ingest(const uint8_t* data, int len) {
   }
 }
 
+// Outbound queue. Sized for a busy slot: roughly 30 decodes plus whatever the
+// log produces, at 259 bytes worst case. 24 entries is ~6 KB, which is cheap
+// against the alternative of dropping most of a slot's decodes.
+constexpr size_t kOutQueueLen = 24;
+
+struct OutFrame {
+  uint8_t bytes[PORTA_PROTO_MAX_FRAME];
+  size_t len;
+};
+
+OutFrame s_out[kOutQueueLen];
+size_t s_out_head = 0;   // next to send
+size_t s_out_count = 0;
+uint32_t s_dropped = 0;
+
+// Drops the oldest rather than the newest. On a link that has fallen behind,
+// the recent decodes are the ones worth having; discarding them to preserve a
+// backlog would make the viewer lag further the busier the band got.
+void enqueue(const uint8_t* bytes, size_t len) {
+  if (len == 0 || len > PORTA_PROTO_MAX_FRAME) return;
+  if (s_out_count == kOutQueueLen) {
+    s_out_head = (s_out_head + 1) % kOutQueueLen;
+    s_out_count--;
+    s_dropped++;
+  }
+  const size_t slot = (s_out_head + s_out_count) % kOutQueueLen;
+  memcpy(s_out[slot].bytes, bytes, len);
+  s_out[slot].len = len;
+  s_out_count++;
+}
+
+// One frame per tick, which is the rate limit that keeps the TX ring from ever
+// filling. A full frame is 259 bytes and the line carries ~11 KB/s, so even at
+// a 50 Hz tick this emits under 13 KB/s of worst-case frames into a 4 KB ring
+// that drains continuously -- and real traffic is far below that, since a busy
+// slot's decodes arrive spread over fifteen seconds. Bursts are absorbed by the
+// queue, not by writing harder.
+constexpr int kMaxSendPerTick = 1;
+
+void drain_out() {
+  for (int i = 0; i < kMaxSendPerTick && s_out_count > 0; ++i) {
+    const OutFrame& f = s_out[s_out_head];
+    uart_write_bytes(kPortaUart, (const char*)f.bytes, f.len);
+    s_out_head = (s_out_head + 1) % kOutQueueLen;
+    s_out_count--;
+  }
+}
+
 }  // namespace
+
+void porta_emit_log(const char* text) {
+  if (!s_running || !text) return;
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  const size_t n = porta_proto_encode_log(text, buf, sizeof(buf));
+  enqueue(buf, n);
+}
+
+void porta_emit_decode(const char* text, int snr, int offset_hz, float dt_s,
+                       bool is_cq, bool is_to_me, bool is_recent_qso) {
+  if (!s_running || !text) return;
+  porta_decode_event_t ev = {};
+  strncpy(ev.text, text, sizeof(ev.text) - 1);
+  // Clamped rather than cast: an out-of-range value should read as an extreme,
+  // not wrap round to a plausible-looking wrong one.
+  ev.snr = (int8_t)(snr < -128 ? -128 : (snr > 127 ? 127 : snr));
+  ev.offset_hz = (uint16_t)(offset_hz < 0 ? 0 : (offset_hz > 65535 ? 65535 : offset_hz));
+  const long centis = (long)(dt_s * 100.0f);
+  ev.dt_centis = (int16_t)(centis < -32768 ? -32768 : (centis > 32767 ? 32767 : centis));
+  ev.is_cq = is_cq;
+  ev.is_to_me = is_to_me;
+  ev.is_recent_qso = is_recent_qso;
+
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  const size_t n = porta_proto_encode_decode(&ev, buf, sizeof(buf));
+  enqueue(buf, n);
+}
+
+uint32_t porta_dropped_events() { return s_dropped; }
 
 void porta_start() {
   if (s_running) return;
@@ -133,10 +215,13 @@ void porta_start() {
   gpio_reset_pin(kPortaTxPin);
   gpio_reset_pin(kPortaRxPin);
 
-  esp_err_t err = uart_driver_install(kPortaUart, 2048, 0, 0, nullptr, 0);
+  // A TX ring buffer is not optional now that this port transmits. With a
+  // tx_buffer_size of 0, uart_write_bytes() blocks until every byte has left
+  // the FIFO -- about 22 ms for a full frame at 115200, inside the slot loop.
+  esp_err_t err = uart_driver_install(kPortaUart, 2048, kTxBufBytes, 0, nullptr, 0);
   if (err == ESP_ERR_INVALID_STATE) {
     uart_driver_delete(kPortaUart);
-    err = uart_driver_install(kPortaUart, 2048, 0, 0, nullptr, 0);
+    err = uart_driver_install(kPortaUart, 2048, kTxBufBytes, 0, nullptr, 0);
   }
   if (err != ESP_OK) {
     ESP_LOGW(kTag, "UART driver install failed: %d", (int)err);
@@ -170,6 +255,18 @@ void porta_tick() {
   const int len = uart_read_bytes(kPortaUart, buf, sizeof(buf), 0);
   if (len > 0) {
     ingest(buf, len);
+  }
+
+  drain_out();
+
+  // Report drops when the count moves. Without this the queue silently eats
+  // events and the browser's view just looks thinner than the screen's, with
+  // nothing to say why -- and the drop count is the only evidence that the
+  // per-tick send rate is too slow for the traffic.
+  static uint32_t s_reported_drops = 0;
+  if (s_dropped != s_reported_drops) {
+    s_reported_drops = s_dropped;
+    ESP_LOGW(kTag, "Dropped %" PRIu32 " outbound events (queue full)", s_dropped);
   }
 
   // Abandon a frame that stopped arriving mid-way rather than holding the

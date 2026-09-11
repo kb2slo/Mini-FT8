@@ -25,5 +25,10 @@ if(DIRTY)
     set(PROJECT_VER "${PROJECT_VER}-dirty")
 endif()
 
+# The frame codec is shared with the ADV rather than duplicated: two idf.py
+# projects compiling one file is RFC 0002 §5.1's named exception for
+# components/, and a second copy of a wire format is how the two ends drift.
+set(EXTRA_COMPONENT_DIRS "${CMAKE_CURRENT_LIST_DIR}/../components/porta_proto")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(sidekick)

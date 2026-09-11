@@ -3014,6 +3014,14 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   // ---- Zero-heap handoff: static s_dec[] → ui.cpp's static rx_lines[] ----
   if (s_dec_count > 0) {
     ui_set_rx_list_static(s_dec, s_dec_count);
+    // Same list, same moment, same order as the screen gets -- which is what
+    // makes the on-screen log a free oracle for the link: if the browser and
+    // the R screen disagree, the fault is between here and the browser.
+    for (int i = 0; i < s_dec_count; ++i) {
+      const RxDecodeEntry& e = s_dec[i];
+      porta_emit_decode(e.text, e.snr, e.offset_hz, e.time_s,
+                        e.is_cq, e.is_to_me, e.is_recent_qso);
+    }
     if (update_ui) {
       draw_rx_screen();
       char buf[64];
@@ -4128,6 +4136,12 @@ static void debug_update_app_core0_stack_hud(bool redraw_now) {
 }
 
 static void debug_log_line(const std::string& msg) {
+  // Mirror to the sidekick. Hooked here rather than at each call site because
+  // this is the one funnel every on-screen line already passes through, so the
+  // browser's view and the P-then-'.' screen cannot drift apart. A no-op until
+  // PORTA is up, and droppable if the link falls behind.
+  porta_emit_log(msg.c_str());
+
   debug_ensure_hud_lines();
   if (g_debug_lines.size() >= DEBUG_MAX_LINES) {
     if (g_debug_lines.size() > DEBUG_HUD_LINES) {

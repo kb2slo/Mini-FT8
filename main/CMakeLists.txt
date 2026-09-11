@@ -31,7 +31,7 @@ idf_component_register(
          "time/external_rtc.cpp"
          "storage/storage_service.cpp"
     INCLUDE_DIRS "." "radio" "audio" "storage" "time"
-    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib sidekick_flasher
+    REQUIRES ui M5Unified M5GFX M5Cardputer board_cardputer_adv ft8_lib sidekick_flasher porta_proto
              usb_host_uac usb_host_cdc_acm usb espressif__esp_tinyusb
              bt nvs_flash efuse esp_partition esp_hw_support
              driver esp_driver_i2c fatfs sdmmc wear_levelling

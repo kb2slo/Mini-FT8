@@ -69,17 +69,35 @@ extern "C" {
 #define PORTA_PROTO_MAX_PAYLOAD 255u
 #define PORTA_PROTO_MAX_FRAME (1u + 1u + 1u + PORTA_PROTO_MAX_PAYLOAD + 1u)  // 259
 
-// v1 message types. Reserved here as one list so both ends cannot drift;
-// payload codecs arrive with the slices that need them.
+// v1 message types, derived by walking the host's existing UI surface rather
+// than sketched: ~16 of its affordances are config values, ~13 are actions, and
+// the rest are live views or paged bulk data. Three of these are *namespaces*
+// addressed by an inner byte -- CONFIG by key, ACTION by verb, EVENT by subtype
+// -- so new settings, verbs and telemetry are added inside a namespace and this
+// list stops growing. That is why it is short and why it should stay short.
 typedef enum {
-    PORTA_MSG_HELLO   = 0x01,  // either end: protocol version + build version
-    PORTA_MSG_POLL    = 0x02,  // sidekick -> main: anything pending?
-    PORTA_MSG_NOTHING = 0x03,  // main -> sidekick: nothing pending
-    PORTA_MSG_DECODE  = 0x04,  // main -> sidekick: one decode record
-    PORTA_MSG_STATUS  = 0x05,  // main -> sidekick: band, TX state, clock source
-    PORTA_MSG_COMMAND = 0x06,  // sidekick -> main: a command
-    PORTA_MSG_ACK     = 0x07,  // accepted
-    PORTA_MSG_NAK     = 0x08,  // rejected, payload carries the reason
+    PORTA_MSG_HELLO        = 0x01,  // either end: protocol version + build version
+    PORTA_MSG_POLL         = 0x02,  // sidekick -> host: anything pending?
+    PORTA_MSG_NOTHING      = 0x03,  // host -> sidekick: nothing pending
+    PORTA_MSG_DESCRIBE     = 0x04,  // sidekick -> host: describe yourself
+    PORTA_MSG_MANIFEST     = 0x05,  // host -> sidekick: config metadata, actions, events
+    PORTA_MSG_CONFIG_GET   = 0x06,
+    PORTA_MSG_CONFIG_SET   = 0x07,
+    PORTA_MSG_CONFIG_VALUE = 0x08,
+    PORTA_MSG_ACTION       = 0x09,  // namespace: verb in the payload
+    PORTA_MSG_EVENT        = 0x0A,  // namespace: subtype in the payload
+    PORTA_MSG_FILE_LIST    = 0x0B,
+    PORTA_MSG_FILE_READ    = 0x0C,
+    PORTA_MSG_FILE_DATA    = 0x0D,
+    PORTA_MSG_ACK          = 0x0E,
+    PORTA_MSG_NAK          = 0x0F,  // payload carries the reason
+    // Firmware push toward the host (web app -> sidekick -> host). Separate
+    // from the FILE_* messages on purpose: the failure semantics are different,
+    // a 2 MB image takes minutes on this link, and a transfer that dies partway
+    // must resume rather than restart.
+    PORTA_MSG_FW_BEGIN     = 0x10,
+    PORTA_MSG_FW_CHUNK     = 0x11,
+    PORTA_MSG_FW_END       = 0x12,
 } porta_msg_type_t;
 
 typedef struct {
@@ -134,8 +152,43 @@ size_t porta_proto_encode_hello(uint8_t protocol_version, const char *build_vers
 // `build_version_out` must hold PORTA_HELLO_VERSION_LEN + 1 bytes; it is always
 // NUL-terminated on success even when the wire field is not. False if the frame
 // is not a well-formed HELLO.
-bool porta_proto_decode_hello(const porta_frame_t *f, uint8_t *protocol_version_out,
-                              char *build_version_out);
+bool porta_proto_parse_hello(const porta_frame_t *f, uint8_t *protocol_version_out,
+                             char *build_version_out);
+
+// --- EVENT payloads ------------------------------------------------------
+// EVENT is a namespace, not a single message: the first payload byte is the
+// subtype and the rest is subtype-specific. New telemetry is a new subtype, not
+// a new frame type, so the type byte stops growing (RFC 0004 §6).
+//
+// Text fields run to the end of the frame rather than being padded to a fixed
+// width -- the frame already carries a length, so padding would only cost wire
+// bytes to say something already known.
+
+typedef enum {
+    PORTA_EVT_LOG    = 0x01,  // one line of the host's on-screen log
+    PORTA_EVT_DECODE = 0x02,  // one decoded FT8/FT4 message
+} porta_event_subtype_t;
+
+#define PORTA_EVENT_TEXT_MAX 64  // matches RX_TEXT_MAX on the host
+
+size_t porta_proto_encode_log(const char *text, uint8_t *out, size_t out_cap);
+
+// `text_out` must hold PORTA_EVENT_TEXT_MAX + 1 bytes. Always NUL-terminated
+// on success. False if the frame is not a well-formed log event.
+bool porta_proto_parse_log(const porta_frame_t *f, char *text_out);
+
+typedef struct {
+    char     text[PORTA_EVENT_TEXT_MAX + 1];
+    int8_t   snr;          // FT8 reports span roughly -24..+50, so int8 is ample
+    uint16_t offset_hz;    // 200..3000 in practice
+    int16_t  dt_centis;    // time offset in hundredths of a second, signed
+    bool     is_cq;
+    bool     is_to_me;
+    bool     is_recent_qso;
+} porta_decode_event_t;
+
+size_t porta_proto_encode_decode(const porta_decode_event_t *d, uint8_t *out, size_t out_cap);
+bool porta_proto_parse_decode(const porta_frame_t *f, porta_decode_event_t *out);
 
 #ifdef __cplusplus
 }

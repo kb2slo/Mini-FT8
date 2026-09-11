@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdint.h>
+
 // ============================================================================
 // porta.h — the sidekick link on Grove G1/G2 (UART1).
 //
@@ -29,5 +31,26 @@ void porta_start();
 // Releases the UART.
 void porta_stop();
 
-// Periodic pump — call every main-loop tick.
+// Periodic pump — call every main-loop tick. Drains the outbound queue as well
+// as reading beacons.
 void porta_tick();
+
+// ---------------------------------------------------------------------------
+// Outbound events (I28a). Queued, never sent inline: the callers are the slot
+// loop and the log path, and neither can afford to wait on a UART. The queue is
+// bounded and **drops the oldest** when full rather than blocking or growing --
+// a lost log line costs nothing, a missed TX window costs a QSO.
+//
+// Silently a no-op until porta_start() has run, so callers need no guard.
+// ---------------------------------------------------------------------------
+
+// One line of the on-screen log.
+void porta_emit_log(const char* text);
+
+// One decoded message. `dt_s` is the decoder's time offset in seconds.
+void porta_emit_decode(const char* text, int snr, int offset_hz, float dt_s,
+                       bool is_cq, bool is_to_me, bool is_recent_qso);
+
+// Frames dropped because the queue was full — the number that matters when the
+// browser's view looks thinner than the screen's.
+uint32_t porta_dropped_events();
