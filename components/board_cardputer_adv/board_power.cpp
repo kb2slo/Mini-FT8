@@ -27,6 +27,10 @@ static bool g_cali_ok = false;
 static bool g_tx_halted = false;
 static bool g_writes_blocked = false;
 static int g_ema_mv = -1;
+// Separate from g_ema_mv on purpose: the halt gates want to react, the screen
+// wants to sit still. Sharing one filter is what made the charge screen jump.
+static int g_display_mv = -1;
+static int g_display_percent = -1;
 static int64_t g_tx_low_since_us = 0;
 static int64_t g_write_low_since_us = 0;
 
@@ -154,6 +158,9 @@ esp_err_t board_power_read(board_power_status_t* out_status)
         } else {
             g_ema_mv = (g_ema_mv * kEmaNum + bat_mv) / kEmaDen;
         }
+        g_display_mv = power_display_ema(g_display_mv, bat_mv);
+        g_display_percent = power_display_percent(g_display_percent,
+                                                  voltage_to_percent(g_display_mv));
 
         const bool was_tx = g_tx_halted;
         const bool was_wr = g_writes_blocked;
@@ -184,7 +191,9 @@ esp_err_t board_power_read(board_power_status_t* out_status)
 
     out_status->valid = true;
     out_status->voltage_mv = sense_ok ? g_ema_mv : bat_mv;
-    out_status->percent = sense_ok ? voltage_to_percent(g_ema_mv) : -1;
+    // The slow, deadbanded value -- this is the only consumer that is read by a
+    // human. Everything protective below still uses the fast filter.
+    out_status->percent = sense_ok ? g_display_percent : -1;
     out_status->pack_present = sense_ok;
     out_status->halted = g_tx_halted;
     out_status->writes_blocked = g_writes_blocked;

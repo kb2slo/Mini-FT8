@@ -40,7 +40,7 @@ surfaced in CI. The commands below are the full local set.
 | `host_test_decode_sort` | Decode list ordering |
 | `host_test_radio_profile` | Radio profile table; retired `KH1_USBC`/`KH1_MIC` values fall back to QMX |
 | `host_test_band_config` | Band config parse and toggle policy |
-| `host_test_power_hysteresis` | Battery hold / low-batt hysteresis |
+| `host_test_power_hysteresis` | Battery hold / low-batt hysteresis, and the **display** smoothing that is deliberately separate from it (B49): the slow EMA absorbs a 20-point noise excursion into about one point while still reaching a sustained change, and the one-point deadband stops the boundary flicker an EMA cannot fix. 0% and 100% bypass the deadband, being statements rather than measurements |
 | `host_test_copy_block` | Copy-to-SD blocking policy and menu line |
 | `host_test_cts_time` | CTS / phone time parsing to `timeval` |
 | `host_test_tx_hud_banner` | TX HUD banner state |
@@ -436,6 +436,7 @@ a change touches a field-only path, naming the change and the exact check.
 | mDNS + station-mode server | S2d, all rows | **owed** — no part of it has run on hardware |
 | I3a (payload gate) | S3.2 if a real NanoC6 is to hand — the refusal is the whole point of the gate | owed |
 | I28a (host -> sidekick events) | With the Grove cable connected, run `cd sidekick && idf.py monitor` on the sidekick's **own** USB-C while operating the ADV normally. Every line that appears on the ADV's `P` then `.` screen must also appear as `HOST: <line>`, and each decoded message as `HOST: decode <snr> <hz> <dt> <text>`. The two views are the check: **if the browser-side list and the R screen disagree, the fault is in the link**, and that oracle is free on every slot. Watch for `Dropped N outbound events` on the ADV (the per-tick send rate cannot keep up) and `link: N CRC errors` on the sidekick (the wire is noisy). Both should stay at zero | **owed** — the host has never transmitted on this port before; it has only ever listened |
+| B49 (charge screen) | Sit on the charge screen (MENU `M` then `6`) while charging and watch the percentage. It should step, not flicker: with 8 mV to a percentage point and the charge current modulating the rail, this is the worst case for a noisy reading. **TX halt behaviour must be unchanged** — it reads the fast filter, not this one, so a low pack should still abort TX exactly as before | owed |
 | I28a (drop Grove GPS) | MENU P3 renumbering (`O` `4` copies to SD, `5` is max retry, `6` does nothing); the cap's GNSS still locks with no setting to enable it and `G` reads `Src:cap GNSS`; the sidekick beacon still arrives on `P` then `.` with the cap fitted, which it never could before; and an existing `Station.txt` carrying `gnss_lora=` still loads | **owed** — the last one matters most: PORTA and the cap were mutually exclusive, so "both at once" has never run on hardware |
 | B46 (restore script) | Phase 10 | owed, and optional. Rewritten for `esp32s3` / `0x800000` and never run; the failure mode is losing the unit's only stock image |
 
