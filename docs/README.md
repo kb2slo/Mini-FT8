@@ -21,9 +21,9 @@ At the start of a session, read `docs/ROADMAP.md` (and the architecture or RFC f
 
 **Workflow matches documentation.** Committed docs are the workflow: this file, `ROADMAP.md`, `STYLE.md`, RFCs, and the architecture notes. Cite the relevant doc when proposing or making a change.
 
-**Push back before tools.** Classify the request against `ROADMAP.md` Now, the active RFC, and `STYLE.md` **before any edit of implementation, or before exploration spanning more than one file.** If it is not the current Now theme, not an explicit exception in those docs, or is still Ideas/Backlog (including “quick” UI/product tweaks), the first reply cites the doc and talks it through. No open-ended codebase exploration to be helpful — that is exactly the token spend this rule exists to stop. A single cheap lookup (one grep, one file read, "where is X defined") can just be answered without the gate. Tools only after the operator retracts, grants an exception, or updates the doc in the same turn. Docs and roadmap questions are allowed without that gate.
+**A line earns its place here if it changes what an agent does.** If it only explains how a rule came about, it belongs in the commit message, not in this file.
 
-If the operator asks for something that violates those docs, point it out, cite the rule, and talk it through **before** coding. Then the operator may retract, grant a one-off exception, or update the doc in the same turn and proceed. Do not silently diverge. An exception or doc change is an explicit decision, not a shortcut.
+**Push back before tools.** Classify the request against `ROADMAP.md` Now, the active RFC, and `STYLE.md` **before any edit of implementation, or before exploration spanning more than one file.** If it is not the current Now theme, not an explicit exception in those docs, or is still Ideas/Backlog (including “quick” UI/product tweaks), the first reply cites the doc and talks it through. No open-ended codebase exploration to be helpful — that is exactly the token spend this rule exists to stop. A single cheap lookup (one grep, one file read, "where is X defined") can just be answered without the gate. Tools only after the operator retracts, grants an exception, or updates the doc in the same turn — an exception is an explicit decision, not a shortcut, and never a silent divergence. Docs and roadmap questions are allowed without that gate.
 
 Update `ROADMAP.md` in the **same turn** as the work:
 
@@ -57,7 +57,7 @@ State which of these you did in the turn you report the work. **"No test-plan ch
 
 **Fork README stays current.** The top of [`README.md`](../README.md) (above the Wei delimiter) is the public “why this fork” copy. When work is operator-visible (TX UX, meters, logging, flash/Launcher, Charge Mode, CQ/beacon, radios, …), audit that section in the **same turn**: propose the add, change, or drop in chat with the test plan and commit message. Include the accepted edit in the same commit and push as the feature. Do not rewrite Wei’s original below the delimiter. Skip agent, RFC, extract-only, or other work operators cannot feel on the radio.
 
-**Triggers, stated so they cannot be missed.** Audit that section when a change adds, alters, or **removes** any of: a key binding or screen; an on-screen string the README quotes; a documented workflow (log offload, flash/Launcher, charge, time sync); or a supported radio/board. **Removal counts, and is the easy one to miss** — a README documenting a key that now does nothing is worse than one that never mentioned it. If Wei’s original below the delimiter documents the same thing, do **not** edit it: put the correction in the fork note and let the delimiter rule (“use the fork notes above where they disagree”) carry it. When it genuinely does not apply, say “no README change needed” **explicitly in that turn** — an audit you skipped and an audit you did are otherwise indistinguishable. CI enforces the mechanical half of this (`readme-audit` in `.github/workflows/ci.yml`): a PR that removes a `UIMode` enumerator or changes a key binding under `main/` without touching `README.md` fails, unless the PR body says `README-audit: none - <why>`. The check catches signals, not judgement — it will not notice a behaviour change that alters no enum and no key.
+**Triggers, stated so they cannot be missed.** Audit that section when a change adds, alters, or **removes** any of: a key binding or screen; an on-screen string the README quotes; a documented workflow (log offload, flash/Launcher, charge, time sync); or a supported radio/board. **Removal counts, and is the easy one to miss** — a README documenting a key that now does nothing is worse than one that never mentioned it. If Wei’s original below the delimiter documents the same thing, do **not** edit it: put the correction in the fork note and let the delimiter rule (“use the fork notes above where they disagree”) carry it. When it genuinely does not apply, say so explicitly in that turn, as above. CI enforces the mechanical half of this (`readme-audit` in `.github/workflows/ci.yml`): a PR that removes a `UIMode` enumerator or changes a key binding under `main/` without touching `README.md` fails, unless the PR body says `README-audit: none - <why>`. The check catches signals, not judgement — it will not notice a behaviour change that alters no enum and no key.
 
 Do not expand `main.cpp` without extracting a tested function. Extract/style/radio/`ft8_lib` campaign [RFC 0002](rfcs/0002-extract-and-boundaries.md) is Done. STYLE still applies. Radio-profile remainder is Backlog B14. Read the current Now from `ROADMAP.md` rather than trusting a name written here — this line has gone stale before.
 
@@ -94,6 +94,31 @@ The operator reviews in chat, then green-lights each step. A good previous turn 
    - Uncommitted, and those paths contain *only* the work to undo: `git restore -- <paths>`.
    - Uncommitted mixed with other dirty files: do **not** `git restore` (that drops the other work). One sentence in chat: cheap undo needs a commit. Ask them to checkpoint, then revert.
    Before an experiment they may want to unwind, ask for a checkpoint commit first.
+
+### Review before commit — nominate what is worth the operator's eyes
+
+The operator trades review time for speed and does not read every line. So do the triage: **with every commit
+proposal, give a "worth your eyes" list of one to three items**, each a `file.cpp:line` and one sentence on
+what could be wrong, then say plainly that the rest is mechanical. An unranked diff handed over is the same as
+handing over nothing.
+
+Prefer, in this order:
+
+1. **What needs the operator's domain knowledge and not the agent's** — what a real ADIF consumer accepts,
+   what an operator expects a key to do, whether a report format is right. The agent cannot grade these at all.
+2. **What compiles, passes, and is still wrong** — encoding, units, a flash offset, a label paired with the
+   wrong action.
+3. **Choices made unilaterally**, where another call was reasonable.
+4. **What is hard to undo** — pushed history, partition tables, key handling.
+
+Do not nominate what the compiler, a host test or CI already proves, or mechanical refactors. Saying "the rest
+is mechanical" is part of the job — it is what makes the nomination worth trusting.
+
+Nominate the places of least confidence, not the ones that look best: a highlight reel steers attention away
+from the risk. Never let "I verified it" stand in for evidence — say what was checked and give the command
+that re-checks it. Name what only hardware can catch, separately from what review can.
+
+If more than three items feel essential, the change is too big to review. Say so and propose splitting it.
 
 ### Operating notes
 
