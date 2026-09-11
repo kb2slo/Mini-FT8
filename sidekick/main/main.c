@@ -10,7 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "porta_proto.h"
+#include "host_link.h"
 #include "wifi_prov.h"
 
 static const char *TAG = "sidekick";
@@ -123,56 +123,6 @@ static void mark_valid_once_beaconing(uint32_t beacons_sent)
     }
 }
 
-// Inbound events from the host (I28a). Its own task rather than a poll in the
-// 1 Hz beacon loop: events arrive continuously and a second of latency would
-// make a live log viewer useless, quite apart from overrunning the RX buffer.
-//
-// For now these are printed on this device's USB-C -- which is the point. The
-// ADV's own USB-C is a USB host for the radio whenever the radio is attached,
-// so it has no console exactly when one is most wanted. This port is idle then.
-static void porta_rx_task(void *arg)
-{
-    (void)arg;
-    porta_decoder_t dec;
-    porta_decoder_init(&dec);
-
-    uint8_t buf[256];
-    porta_frame_t frame;
-    char text[PORTA_EVENT_TEXT_MAX + 1];
-    porta_decode_event_t ev;
-
-    while (1) {
-        // Blocks this task, not the beacon: a short timeout keeps latency low
-        // without spinning.
-        const int n = uart_read_bytes(PORTA_UART, buf, sizeof(buf), pdMS_TO_TICKS(50));
-        for (int i = 0; i < n; ++i) {
-            if (!porta_decoder_push(&dec, buf[i], &frame)) {
-                continue;
-            }
-            if (porta_proto_parse_log(&frame, text)) {
-                ESP_LOGI("HOST", "%s", text);
-            } else if (porta_proto_parse_decode(&frame, &ev)) {
-                ESP_LOGI("HOST", "decode %+d dB %4u Hz %+.2f s %s%s%s",
-                         ev.snr, ev.offset_hz, ev.dt_centis / 100.0,
-                         ev.is_to_me ? "[me] " : "",
-                         ev.is_cq ? "[cq] " : "",
-                         ev.text);
-            } else {
-                ESP_LOGW("HOST", "frame type 0x%02x len %u (no handler yet)",
-                         frame.type, frame.len);
-            }
-        }
-        if (dec.crc_errors) {
-            static uint32_t reported;
-            if (dec.crc_errors != reported) {
-                reported = dec.crc_errors;
-                ESP_LOGW("HOST", "link: %" PRIu32 " CRC errors, %" PRIu32 " frames ok",
-                         dec.crc_errors, dec.frames_ok);
-            }
-        }
-    }
-}
-
 void app_main(void)
 {
     ESP_LOGI(TAG, "Mini-FT8 sidekick booting (IDF %s)", esp_get_idf_version());
@@ -181,7 +131,7 @@ void app_main(void)
     // depends on; a sidekick that cannot reach WiFi is degraded, not broken,
     // so nothing about network bring-up is allowed to delay or block it.
     porta_beacon_init();
-    xTaskCreate(porta_rx_task, "porta_rx", 4096, NULL, 5, NULL);
+    host_link_start();
     wifi_prov_start();
 
     if (wifi_prov_is_online()) {

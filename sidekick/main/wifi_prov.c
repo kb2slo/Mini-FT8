@@ -17,6 +17,7 @@
 #include "nvs_flash.h"
 
 #include "dns_server.h"
+#include "host_link.h"
 #include "mdns.h"
 
 static const char *TAG = "wifi_prov";
@@ -652,6 +653,7 @@ static esp_err_t get_status(httpd_req_t *req)
         "<dt>Firmware</dt><dd>%s</dd>"
         "<dt>Uptime</dt><dd>%lld s</dd>"
         "</dl>"
+        "<p><a href=\"/log\">Host log and decodes &rarr;</a></p>"
         "<form method=POST action=/forget "
         "onsubmit=\"return confirm('Forget this network and restart into setup?')\">"
         "<button>Forget WiFi</button></form>",
@@ -692,6 +694,9 @@ static void httpd_start_status(void)
     };
     httpd_register_uri_handler(s_httpd, &status);
     httpd_register_uri_handler(s_httpd, &forget);
+    // Only in station mode: the viewer is for watching a working radio, and the
+    // provisioning AP exists precisely because there is not one yet.
+    host_link_register_uris(s_httpd);
 }
 
 // ---------------------------------------------------------------------------
