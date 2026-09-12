@@ -153,6 +153,32 @@ every agent and every operator can see them — see "Memory lives in this repo" 
   compare. Do not commit SVG or raster diagrams to `docs/` — SVG costs an agent far more to read than the
   content is worth, and images diff and grep not at all. Stated 2026-09-10.
 
+### Pre-alpha: do not carry the past
+
+This project is **pre-alpha**. No external users, no fleet anyone else owns, no promise that anything keeps
+working across a commit. Act accordingly: when something changes, change it and delete what it replaced. Do
+not write migration notes, deprecation notes, or "was X, now Y" bookkeeping, and do not keep code whose only
+job is accepting an older state.
+
+The boundary matters, because over-applying this would delete the reasoning the rest of these docs are built
+on:
+
+- **Keep: why the code is the way it is now.** A constraint, an approach that failed, an API that behaves
+  surprisingly. A future agent needs it to avoid re-breaking the thing. That is not legacy documentation.
+- **Drop: how to get from an older state to this one.** Upgrade steps, one-time reflash rows, "an old link
+  will 404", enum values retired but kept for an old file format.
+
+The test: **would a fresh clone and a fresh flash need this line?** If only an existing install needs it, it
+goes.
+
+**The one exception is upstream.** Deltas from Wei's Mini-FT8 stay documented — the fork section of
+[`../README.md`](../README.md) above the delimiter, and divergence notes in RFCs and roadmap rows. Someone
+arriving from upstream needs to know what is different here, and an agent needs it to avoid "fixing" a
+deliberate divergence back to upstream behaviour.
+
+**This ends when we cut a versioned release meant for someone other than the operator.** From then on
+back-compat is a real obligation and this section comes out.
+
 ### Memory lives in this repo
 
 Agents with a private per-machine memory store must not use it for anything about this project. These docs

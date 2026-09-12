@@ -287,21 +287,6 @@ role arbitration locks to GPS *or* companion, so an attached GPS wins and masks 
 | S2.3 | If **no** line appears at all | The Grove pins are wrong, or the cable is. Check the AtomS3 Lite's Grove GPIO numbers against `PORTA_TX_PIN`/`PORTA_RX_PIN` before suspecting anything else |
 | S2.4 | Confirm the ADV did not instead log `PORTA: GPS` | That means it locked onto the GPS role — something else is on the bus, or the beacon is being misread |
 
-### S2b. Re-flash after the OTA partition change — one-time, passed 2026-09-09
-
-Kept for the record, and for any part that has not yet crossed the partition change. A device already
-running an OTA-layout image does not need it again.
-
-The sidekick's flash map moved (RFC 0001 §5.2d): `factory` at `0x10000` became `ota_0` at `0x20000`, plus
-`otadata`. A device flashed before that change is running the old layout and must be reflashed over its own
-USB-C once.
-
-| # | Do | Expect |
-|---|---|---|
-| S2b.1 | `cd sidekick && idf.py flash monitor` | Boots and `alive:` counts, as S1 |
-| S2b.2 | Re-run S2 (Grove to PORTA, log on `P` then `.`) | Beacon still arrives — the partition move must not disturb the companion link |
-| S2b.3 | `idf.py partition-table` | Shows `ota_0` and `ota_1` at 3 MB each, `nvs` still at `0x9000` |
-
 ### S2c. WiFi provisioning (SoftAP)
 
 New in I3d. The sidekick raises its own access point when it has no working
@@ -431,7 +416,7 @@ a change touches a field-only path, naming the change and the exact check.
 
 | From | Check | Status |
 | --- | --- | --- |
-| I3a (sidekick retarget) | S0–S2, S2b | **passed 2026-09-09** — `X R: 181cbe0-dirty L: c0e52ec` on the ADV: a validated beacon frame, so the Grove pins, UART1 on S3, the framing and the version compare all work. The mismatch was expected (different builds). S2b (reflash after the OTA partition change, beacon re-checked) passed 2026-09-09 |
+| I3a (sidekick retarget) | S0–S2 | **passed 2026-09-09** — `X R: 181cbe0-dirty L: c0e52ec` on the ADV: a validated beacon frame, so the Grove pins, UART1 on S3, the framing and the version compare all work. The mismatch was expected (different builds) |
 | I3d–I3h (WiFi provisioning) | S2c, all rows | **owed.** Partially exercised on 2026-09-09 but not against current firmware: the AP came up, the scan found networks, and a join succeeded — but the join that crashed (I3f), the credential erase that failed to stick (I3g) and the stale scan list (I3h) were all fixed *after* that session, and the captive portal has never been seen working |
 | mDNS + station-mode server | S2d, all rows | **owed** — no part of it has run on hardware |
 | I3a (payload gate) | S3.2 if a real NanoC6 is to hand — the refusal is the whole point of the gate | owed |
