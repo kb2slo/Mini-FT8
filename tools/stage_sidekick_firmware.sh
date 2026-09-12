@@ -1,27 +1,24 @@
 #!/usr/bin/env bash
-# Copies a built sidekick image into components/sidekick_flasher/target_firmware/
-# so the ADV build embeds it (RFC 0001 §5.1). Run before `idf.py build` on the
-# ADV app; without this, sidekick_flasher_flash_embedded() just returns
-# ESP_ERR_NOT_FOUND and everything else still builds.
+# Copies a built sidekick image into components/sidekick_flasher/target_firmware/.
+#
+# **You do not need to run this.** Since B52 the ADV's own build produces the
+# payload (components/sidekick_flasher/CMakeLists.txt), so `idf.py build` alone
+# is enough and cannot embed a stale one.
+#
+# It survives for CI, which builds the sidekick in one job and uploads these
+# four files as an artifact for another. Deliberately does *not* invoke
+# `idf.py` itself: CI runs this in a plain shell where the ESP-IDF environment
+# is not on PATH -- it only exists inside the esp-idf action -- so a build here
+# fails. That was tried and broke CI on 2026-09-12.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIDEKICK_BUILD="$ROOT/sidekick/build"
 DEST="$ROOT/components/sidekick_flasher/target_firmware"
 
-# Build it rather than complaining that it is missing. This was two commands
-# the operator had to remember in the right order, and forgetting the first one
-# staged an old payload that the ADV would later install onto the companion --
-# a silent downgrade. idf.py is incremental, so this costs nothing when the
-# build is already current.
-echo "Building sidekick..."
-( cd "$ROOT/sidekick" && idf.py build >/dev/null ) || {
-    echo "error: sidekick build failed -- run 'cd sidekick && idf.py build' to see why" >&2
-    exit 1
-}
-
 if [[ ! -f "$SIDEKICK_BUILD/sidekick.bin" ]]; then
-    echo "error: $SIDEKICK_BUILD/sidekick.bin not found after a successful build." >&2
+    echo "error: $SIDEKICK_BUILD/sidekick.bin not found." >&2
+    echo "Build it first: (cd sidekick && idf.py build)" >&2
     exit 1
 fi
 

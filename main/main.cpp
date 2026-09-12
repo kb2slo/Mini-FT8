@@ -1227,10 +1227,22 @@ static void draw_tx_hud(bool force) {
     char line[64];
     if (aborted) {
       snprintf(line, sizeof(line), "TX abort %.32s", g_tx_abort_text);
-    } else if (s_last_power >= 0.f && s_last_swr >= 0.f) {
-      snprintf(line, sizeof(line), "TX end %.1fW SWR %.1f", s_last_power, s_last_swr);
     } else {
-      snprintf(line, sizeof(line), "TX end (no power/SWR read)");
+      // The HUD's numbers, on the one line where they all exist. Power and SWR
+      // are polled from the radio *during* a transmission, so they cannot
+      // appear on the start line -- and battery under TX load is the reading
+      // that matters, not the resting one. Kept inside the ~20-character row
+      // budget the on-screen log has; a longer line garbles the row below it.
+      board_power_status_t bp = {};
+      const bool bp_ok = (board_power_read(&bp) == ESP_OK) && bp.valid;
+      if (s_last_power >= 0.f && s_last_swr >= 0.f) {
+        snprintf(line, sizeof(line), "TX %.1fW SWR%.1f %d%%", s_last_power,
+                 s_last_swr, bp_ok ? bp.percent : -1);
+      } else if (bp_ok) {
+        snprintf(line, sizeof(line), "TX done %d%% %dmV", bp.percent, bp.voltage_mv);
+      } else {
+        snprintf(line, sizeof(line), "TX done (no readings)");
+      }
     }
     debug_log_line(line);
   }
@@ -2686,7 +2698,19 @@ static void advance_active_band(int delta) {
   }
   int n = (int)g_active_band_indices.size();
   pos = (pos + delta + n) % n;
+  const int was = g_band_sel;
   g_band_sel = g_active_band_indices[pos];
+
+  // Name the band, not just the fact of a change. "Band changed" tells the
+  // operator nothing they did not already know from pressing the key, and in
+  // the browser log -- where they are not looking at the radio -- it is the
+  // only way to know where the radio went.
+  if (g_band_sel != was) {
+    char line[32];
+    snprintf(line, sizeof(line), "Band %s %.3f", g_bands[g_band_sel].name,
+             0.001 * (double)g_bands[g_band_sel].freq);
+    debug_log_line(line);
+  }
 }
 
 static int tx_waterfall_hz_to_x(float tone_hz) {
