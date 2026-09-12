@@ -327,6 +327,13 @@ esp_err_t flash_after_connect(esp_loader_t* loader, bool allow_overwrite, bool p
             return ESP_FAIL;
         }
     }
+    // Leave it running, not sitting in the ROM bootloader. Without this the
+    // target stays in download mode after a successful write -- no app, so no
+    // WiFi, no mDNS, no companion beacon -- and the only cure is a power cycle
+    // the operator has no reason to expect. It went unnoticed because the bench
+    // procedure has you unplug and replug to re-probe, which is a power cycle.
+    esp_loader_reset_target(loader);
+
     ESP_LOGI(TAG, "Sidekick flash complete");
     if (out_info) out_info->status = SIDEKICK_FLASHER_STATUS_UPDATED;
     return ESP_OK;
