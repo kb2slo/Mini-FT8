@@ -26,7 +26,7 @@ kib() { python3 -c "print(f'{$1/1024:.1f} KiB')"; }
 
 echo "== Build identity =="
 if [[ -f "$IDENTITY" ]]; then
-    ver=$(sed -n 's/.*MINIFT8_PRODUCT_VER "\(.*\)"/\1/p' "$IDENTITY")
+    ver=$(sed -n 's/.*MINIFT8_VERSION_LINE "\(.*\)"/\1/p' "$IDENTITY")
     sha=$(sed -n 's/.*MINIFT8_GIT_SHA "\(.*\)"/\1/p' "$IDENTITY")
     dirty=$(sed -n 's/.*MINIFT8_GIT_DIRTY \(.*\)/\1/p' "$IDENTITY")
     kind=$(sed -n 's/.*MINIFT8_BUILD_KIND "\(.*\)"/\1/p' "$IDENTITY")

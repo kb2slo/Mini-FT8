@@ -476,7 +476,7 @@ static bool g_rx_dirty = false;
 
 
 static std::vector<std::string> g_startup_lines = {
-    "** Mini-FT8 V" MINIFT8_PRODUCT_VER " **",
+    "** Mini-FT8 " MINIFT8_VERSION_LINE " **",
     " S/R/T: Operate",
     " M/N/O: Menu",
     " Q/F/D: File",
@@ -1829,7 +1829,7 @@ static void charge_mode_paint() {
   }
 
   char title[40];
-  snprintf(title, sizeof(title), "Mini-FT8 V%s. %s", MINIFT8_PRODUCT_VER, MINIFT8_UI_LINE);
+  snprintf(title, sizeof(title), "Mini-FT8 %s", MINIFT8_VERSION_LINE);
 
   M5.Display.fillScreen(k_launcher_bgcolor);
   M5.Display.setTextColor(fg, k_launcher_bgcolor);
@@ -4198,7 +4198,7 @@ static void draw_perf_view(bool force_redraw) {
   perf_make_heap_line(lines[2], sizeof(lines[2]), "8B", MALLOC_CAP_8BIT);
   perf_make_heap_line(lines[3], sizeof(lines[3]), "IN", MALLOC_CAP_INTERNAL);
   perf_make_heap_line(lines[4], sizeof(lines[4]), "DM", MALLOC_CAP_DMA);
-  snprintf(lines[5], sizeof(lines[5]), "%s", MINIFT8_UI_LINE);
+  snprintf(lines[5], sizeof(lines[5]), "%s", MINIFT8_VERSION_LINE);
 
   const int line_h = 19;
   const int start_y = UI_START_Y;

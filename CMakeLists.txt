@@ -5,7 +5,12 @@ cmake_minimum_required(VERSION 3.16)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(mini_ft8)
 
-set(MINIFT8_BUILD_KIND "dev" CACHE STRING "Build kind: dev or rel")
+# rel is CI-only and gated in tools/gen_build_identity.cmake; leave this alone
+# and let the release workflow set it (docs/RELEASE_PROCESS.md).
+set(MINIFT8_BUILD_KIND "$ENV{MINIFT8_BUILD_KIND}" CACHE STRING "Build kind: dev or rel")
+if(NOT MINIFT8_BUILD_KIND)
+  set(MINIFT8_BUILD_KIND "dev")
+endif()
 set(MINIFT8_GEN_DIR "${CMAKE_BINARY_DIR}/generated")
 
 # Configure-time identity so the first compile finds build_identity.h;
@@ -15,6 +20,7 @@ execute_process(
         -DGIT_DIR=${CMAKE_SOURCE_DIR}
         -DOUT_DIR=${MINIFT8_GEN_DIR}
         -DMINIFT8_BUILD_KIND=${MINIFT8_BUILD_KIND}
+        -DMINIFT8_RELEASE_VERSION=$ENV{MINIFT8_RELEASE_VERSION}
         -DMINIFT8_GIT_SHA=$ENV{MINIFT8_GIT_SHA}
         -P ${CMAKE_SOURCE_DIR}/tools/gen_build_identity.cmake
 )
@@ -24,6 +30,7 @@ add_custom_target(minift8_build_identity
         -DGIT_DIR=${CMAKE_SOURCE_DIR}
         -DOUT_DIR=${MINIFT8_GEN_DIR}
         -DMINIFT8_BUILD_KIND=${MINIFT8_BUILD_KIND}
+        -DMINIFT8_RELEASE_VERSION=$ENV{MINIFT8_RELEASE_VERSION}
         -DMINIFT8_GIT_SHA=$ENV{MINIFT8_GIT_SHA}
         -P ${CMAKE_SOURCE_DIR}/tools/gen_build_identity.cmake
     COMMENT "Refreshing Mini-FT8 build identity"

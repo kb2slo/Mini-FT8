@@ -27,7 +27,7 @@ Pushes and pull requests run GitHub Actions (ESP-IDF **v5.5.1**, target **esp32s
 - Each merge to `main` that changes the firmware updates a prerelease at tag [`continuous`](https://github.com/kb2slo/Mini-FT8/releases/tag/continuous), holding one image named `YYYYMMDD-minift8-<commit>.bin` so it still says what it is after it lands in your Downloads folder. The tag always points at the tip of `main`. Flash at `0x0`.
 - Tags matching `v*` also create a versioned GitHub Release (`MiniFT8-<tag>-Merged.bin`).
 
-How the two paths differ, and what a version number does and does not set, is [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md).
+**Telling the two apart on the device:** a released build shows a version and nothing else (`Mini-FT8 3.0.0`); any other build shows its kind and commit and claims no version (`Mini-FT8 dev 60b64e3`, with `*` if it was built from a modified tree). The build refuses to claim a version unless it came from CI on a `v*` tag with a clean tree, so a number on that line is a guarantee rather than a label. Details, and how a release is cut, are in [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md).
 
 ```
 esptool.py --chip esp32s3 write_flash 0x0 20260912-minift8-60b64e3.bin
