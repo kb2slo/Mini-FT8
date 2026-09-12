@@ -8,6 +8,7 @@ Human- and tool-readable project memory. Prefer this tree over editor-specific r
 | [../README.md](../README.md) | Operator landing. Fork notes (why this tree) above the Wei delimiter; Wei’s original below. |
 | [STYLE.md](STYLE.md) | Coding standard for our C/C++ (not vendored `M5*` / `ft8_lib`). |
 | [TEST_PLAN.md](TEST_PLAN.md) | What is verified and by whom: agent-run automation vs operator field checks, plus field checks owed on the current branch. |
+| [RELEASE_PROCESS.md](RELEASE_PROCESS.md) | How a build becomes a download: the rolling `continuous` tag, versioned `v*` releases, what a version tag does **not** set, and what a rename/de-fork would break. |
 | [AUTOSEQ_ARCHITECTURE.md](AUTOSEQ_ARCHITECTURE.md) | Sequencer design (slot events, tick vs decode). |
 | [AUTOSEQ_INACTIVE_QUEUE.md](AUTOSEQ_INACTIVE_QUEUE.md) | Retry exhaustion / reincarnation / inactive zone. |
 | [FT8 Free-Text Reference Extension.md](FT8%20Free-Text%20Reference%20Extension.md) | Free-text / SOTA-style payload notes. |
@@ -176,8 +177,9 @@ goes.
 arriving from upstream needs to know what is different here, and an agent needs it to avoid "fixing" a
 deliberate divergence back to upstream behaviour.
 
-**This ends when we cut a versioned release meant for someone other than the operator.** From then on
-back-compat is a real obligation and this section comes out.
+**This ends when we cut a versioned release meant for someone other than the operator**
+([RELEASE_PROCESS.md](RELEASE_PROCESS.md)). From then on back-compat is a real obligation and this section
+comes out.
 
 ### Memory lives in this repo
 

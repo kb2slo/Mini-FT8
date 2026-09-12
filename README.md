@@ -4,7 +4,7 @@ This is Jeff KB2SLO’s continuation of Wei AG6AQ’s Mini-FT8 for the Cardputer
 
 - **Improved UX while transmitting.** The decode list stays tappable so you can queue a QSO; a one-row banner shows the TX message plus QMX power and SWR (abort and high SWR stay pinned). Leftover rows dim after the slot so they don’t look live.
 - **One tap, one callsign.** R-tap will not stack the same station twice.
-- **Flash without losing M5Launcher.** `tools/flash_keep_launcher.py` writes the app slot only. Merges that change firmware also publish `minift8-dev.bin`.
+- **Flash without losing M5Launcher.** `tools/flash_keep_launcher.py` writes the app slot only. Merges that change firmware also publish a rolling flashable image.
 - **Logs survive the workflow.** Copy-to-SD merges `.adi` instead of overwriting; internal FAT append no longer leaves empty QSO files. Critically low battery stops TX and flash writes so a dying pack does not corrupt the filesystem.
 - **Charge Mode, not a dead Sleep.** MENU charge matches Launcher: percent stripe (or `SW ON to charge`), then dim and screen off; first key wakes.
 - **Sync time from an iPhone.** Unplug the radio from USB-C first. `H` then `1`: Cardputer advertises `Mini-FT8-<call>`. Connect with nRF Connect or LightBlue every time (Settings → My Devices will connect and drop without setting time). After **Time OK**, plug the radio back in and **S → 2**. STATUS `P` is UTC (phone local converted with timezone/DST — check time.is, not the lock screen). Time only, no grid. NimBLE is torn down after the read. Leave the radio unplugged for the whole sync — NimBLE and QMX USB host cannot share the port’s DMA.
@@ -24,11 +24,13 @@ Existing trees: `git submodule update --init`.
 
 Pushes and pull requests run GitHub Actions (ESP-IDF **v5.5.1**, target **esp32s3**). When firmware sources change, the job uploads a flashable merged image as artifact **MiniFT8-Cardputer-ADV** (hash-first `.bin` inside the zip). Docs-only commits (roadmap, README, and similar) skip the IDF build and do not refresh the rolling image.
 
-- Each merge to `main` that changes the firmware updates a prerelease at tag [`dev`](https://github.com/kb2slo/Mini-FT8/releases/tag/dev) with `minift8-dev.bin`. Flash at `0x0`.
+- Each merge to `main` that changes the firmware updates a prerelease at tag [`continuous`](https://github.com/kb2slo/Mini-FT8/releases/tag/continuous), holding one image named `YYYYMMDD-minift8-<commit>.bin` so it still says what it is after it lands in your Downloads folder. The tag always points at the tip of `main`. Flash at `0x0`.
 - Tags matching `v*` also create a versioned GitHub Release (`MiniFT8-<tag>-Merged.bin`).
 
+How the two paths differ, and what a version number does and does not set, is [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md).
+
 ```
-esptool.py --chip esp32s3 write_flash 0x0 minift8-dev.bin
+esptool.py --chip esp32s3 write_flash 0x0 20260912-minift8-60b64e3.bin
 ```
 
 Host autoseq (`host_mock`) and `tests/tx_e2e` CTest run in a separate job. Hardware CAT/flash is still local.

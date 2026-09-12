@@ -2,8 +2,9 @@
 # Merged image is the same POST_BUILD output as a local `idf.py build`:
 #   build/MiniFT8_Merged_Auto.bin  — flash at 0x0 (8 MB, custom partitions).
 #
-# Firmware + the rolling `dev` release run only when sources that can change
-# the binary (or this workflow) change. Docs/roadmap-only commits skip them.
+# Firmware + the rolling `continuous` release run only when sources that can
+# change the binary (or this workflow) change. Docs/roadmap-only commits skip
+# them. How a build becomes a download: docs/RELEASE_PROCESS.md.
 name: CI
 
 on:
@@ -382,43 +383,76 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+
+      # Move the rolling tag ourselves, and keep this step. GitHub's release API
+      # honours target_commitish only when it *creates* a tag and ignores it
+      # ever after, so handing it to action-gh-release places the tag once and
+      # then silently freezes it there while the body and assets keep updating
+      # correctly on top -- a stale ref behind a current download, which nothing
+      # surfaces. docs/RELEASE_PROCESS.md.
+      - name: Move the continuous tag to this commit
+        run: git push --force origin ${{ github.sha }}:refs/tags/continuous
+
       - uses: actions/download-artifact@v7
         with:
           name: MiniFT8-Cardputer-ADV
           path: dist
 
+      # Self-identifying on disk: several of these land in one Downloads folder
+      # during a bench session, where a fixed name plus "(3)" says nothing.
+      # Date is the *commit* date in UTC, not the build date, so rebuilding a
+      # commit reproduces the name. `minift8` is the one string here that a
+      # project rename would have to change (docs/RELEASE_PROCESS.md).
       - name: Name rolling main binary
         run: |
           bin="$(awk -F= '/^bin=/{print $2}' dist/BUILD.txt)"
           test -n "$bin"
           test -f "dist/${bin}"
-          cp "dist/${bin}" dist/minift8-dev.bin
-          sha256sum dist/minift8-dev.bin | tee dist/minift8-dev.bin.sha256
-          echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+          short="${GITHUB_SHA:0:7}"
+          day="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d "${GITHUB_SHA}")"
+          asset="${day}-minift8-${short}.bin"
+          cp "dist/${bin}" "dist/${asset}"
+          sha256sum "dist/${asset}" | tee "dist/${asset}.sha256"
+          echo "SHORT_SHA=${short}" >> "$GITHUB_ENV"
           echo "HASH_BIN=${bin}" >> "$GITHUB_ENV"
+          echo "ASSET=${asset}" >> "$GITHUB_ENV"
+
+      # The asset name changes every merge, so uploads would otherwise pile up
+      # on this one rolling release forever. Clear the old ones; the release
+      # object itself is kept, so its page and tag survive.
+      - name: Clear previous rolling assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view continuous >/dev/null 2>&1; then
+            gh release view continuous --json assets -q '.assets[].name' | while read -r old; do
+              [ -n "$old" ] || continue
+              gh release delete-asset continuous "$old" --yes
+            done
+          fi
 
       - uses: softprops/action-gh-release@v3
         with:
-          tag_name: dev
-          target_commitish: ${{ github.sha }}
-          name: Mini-FT8 dev (${{ env.SHORT_SHA }})
+          tag_name: continuous
+          name: Mini-FT8 continuous (${{ env.SHORT_SHA }})
           prerelease: true
           make_latest: false
           files: |
-            dist/minift8-dev.bin
-            dist/minift8-dev.bin.sha256
+            dist/${{ env.ASSET }}
+            dist/${{ env.ASSET }}.sha256
             dist/BUILD.txt
           body: |
-            Rolling firmware from `main` (updated on each merge). Not a versioned product tag.
+            Rolling firmware from `main`, rebuilt on every merge that can change the binary. Not a versioned release — see `docs/RELEASE_PROCESS.md`.
 
             - Commit: `${{ github.sha }}`
             - Build image: `${{ env.HASH_BIN }}`
-            - Download: `minift8-dev.bin`
+            - Download: `${{ env.ASSET }}`
 
             Flash at `0x0` (full 8 MB image, custom FATFS partition table).
 
             ```
-            esptool.py --chip esp32s3 write_flash 0x0 minift8-dev.bin
+            esptool.py --chip esp32s3 write_flash 0x0 ${{ env.ASSET }}
             ```
 
             First boot may format the FATFS partition.
