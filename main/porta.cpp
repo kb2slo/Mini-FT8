@@ -11,8 +11,11 @@
 #include "freertos/task.h"
 #include "main_services.h"
 
-// Defined in main.cpp; the host clock this stamps events with.
+// Both defined in main.cpp: the clock this stamps events with, and the setter
+// the control direction reaches. The setter returns nullptr on success or a
+// short reason for the operator's log.
 int64_t rtc_now_ms();
+const char* porta_host_set_clock(uint32_t epoch_secs, uint16_t millis);
 #include "porta_proto.h"
 #include "sidekick_flasher.h"
 
@@ -29,31 +32,21 @@ constexpr int kBaud = 115200;
 // Big enough that one frame per tick never finds it full; see drain_out().
 constexpr int kTxBufBytes = 4096;
 
-constexpr uint8_t kCompanionSync = 0xC6;
-// sidekick's beacon (RFC 0001 §5.2c): sync + version[32] + XOR checksum,
-// matching sidekick/main/main.c's PORTA_* frame layout exactly.
-constexpr size_t kCompanionVersionLen = 32;
-constexpr size_t kCompanionTailLen = kCompanionVersionLen + 1;  // version + checksum
-// 34 bytes at 115200 baud is ~3 ms; a partial frame sitting this long means a
-// bit error corrupted it, not that the rest is still arriving.
-constexpr uint32_t kCompanionFrameTimeoutMs = 250;
-
 const char* kTag = "PORTA";
 
 bool s_running = false;
-bool s_collecting = false;
-uint8_t s_buf[kCompanionTailLen];
-size_t s_have = 0;
-uint32_t s_collect_start_ms = 0;
-char s_version[kCompanionVersionLen + 1] = {};
+porta_decoder_t s_dec;
+char s_version[PORTA_HELLO_VERSION_LEN + 1] = {};
+
+// Enough to miss two HELLOs at the 5 s cadence before concluding anything, so
+// one dropped frame or a moment of noise does not raise a prompt.
+constexpr uint32_t kCompanionQuietMs = 15000;
+uint32_t s_last_byte_ms = 0;    // anything at all arrived
+uint32_t s_last_frame_ms = 0;   // a valid frame arrived
+bool s_version_matches = false;
 
 inline uint32_t now_ms() {
   return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-}
-
-void reset_collection() {
-  s_collecting = false;
-  s_have = 0;
 }
 
 bool configure_uart() {
@@ -75,62 +68,6 @@ bool configure_uart() {
   }
   uart_flush_input(kPortaUart);
   return true;
-}
-
-// Validates a completed beacon (sync already consumed; s_buf holds
-// version[32] + checksum) and compares the version against this ADV's own
-// embedded sidekick build (RFC 0001 §5.2b/§5.2c) — the same comparison
-// sidekick_flasher makes over USB-C, reached without a USB-C session. A
-// checksum failure is line noise, not a companion: discard and resume.
-void try_complete_frame() {
-  uint8_t checksum = kCompanionSync;
-  for (size_t i = 0; i < kCompanionVersionLen; ++i) checksum ^= s_buf[i];
-  if (checksum != s_buf[kCompanionVersionLen]) {
-    ESP_LOGW(kTag, "Companion beacon checksum mismatch, discarding");
-    reset_collection();
-    return;
-  }
-
-  memcpy(s_version, s_buf, kCompanionVersionLen);
-  s_version[kCompanionVersionLen] = '\0';
-  reset_collection();
-
-  char local_version[kCompanionVersionLen + 1] = {};
-  const bool matches =
-      sidekick_flasher_embedded_version(local_version, sizeof(local_version)) &&
-      strncmp(s_version, local_version, kCompanionVersionLen) == 0;
-
-  if (matches) {
-    ESP_LOGI(kTag, "Companion version matches: %s", s_version);
-    // One line, not two — the log viewer jumps to whichever page the newest
-    // line landed on, so two related lines can straddle a page boundary and
-    // only the second is ever seen. Bench-confirmed 2026-09-04.
-    debug_log_line_public(std::string("OK ") + s_version);
-  } else {
-    ESP_LOGW(kTag, "Companion version MISMATCH: remote=%s local=%s",
-             s_version, local_version);
-    debug_log_line_public(std::string("X R:") + s_version);
-    debug_log_line_public(std::string("X L:") + local_version);
-  }
-}
-
-// One beacon per second, so this is a trickle. Sync is only meaningful while
-// idle: once collecting, every byte is frame content, because 0xC6 can occur
-// inside a version string's bytes as readily as anywhere else.
-void ingest(const uint8_t* data, int len) {
-  for (int i = 0; i < len; ++i) {
-    const uint8_t raw = data[i];
-    if (s_collecting) {
-      s_buf[s_have++] = raw;
-      if (s_have >= kCompanionTailLen) try_complete_frame();
-      continue;
-    }
-    if (raw == kCompanionSync) {
-      s_collecting = true;
-      s_have = 0;
-      s_collect_start_ms = now_ms();
-    }
-  }
 }
 
 // Outbound queue. Sized for a busy slot: roughly 30 decodes plus whatever the
@@ -181,6 +118,83 @@ void drain_out() {
   }
 }
 
+// HELLO replaces the ad-hoc beacon. Same purpose -- report the companion's
+// build so the operator learns, without a USB-C session, whether it matches the
+// image this ADV carries (RFC 0001 §5.2b/§5.2c) -- but it now arrives framed
+// and CRC-checked like everything else, and carries a protocol version the old
+// beacon had no room for.
+void handle_hello(const porta_frame_t& f) {
+  uint8_t proto = 0;
+  char remote[PORTA_HELLO_VERSION_LEN + 1] = {};
+  if (!porta_proto_parse_hello(&f, &proto, remote)) return;
+
+  if (proto != PORTA_PROTO_VERSION) {
+    // Said out loud rather than failing obscurely later: the two ends are
+    // flashed independently, so a mismatch is a normal state mid-update.
+    ESP_LOGW(kTag, "Companion speaks protocol v%u, we speak v%u", proto,
+             (unsigned)PORTA_PROTO_VERSION);
+  }
+
+  if (strncmp(remote, s_version, PORTA_HELLO_VERSION_LEN) == 0) {
+    return;   // unchanged; HELLO repeats every few seconds
+  }
+  strncpy(s_version, remote, sizeof(s_version) - 1);
+
+  char local_version[PORTA_HELLO_VERSION_LEN + 1] = {};
+  const bool matches =
+      sidekick_flasher_embedded_version(local_version, sizeof(local_version)) &&
+      strncmp(remote, local_version, PORTA_HELLO_VERSION_LEN) == 0;
+
+  s_version_matches = matches;
+  if (matches) {
+    ESP_LOGI(kTag, "Companion version matches: %s", remote);
+    // One line, not two -- the log viewer jumps to whichever page the newest
+    // line landed on, so two related lines can straddle a page boundary and
+    // only the second is ever seen. Bench-confirmed 2026-09-04.
+    debug_log_line_public(std::string("OK ") + remote);
+  } else {
+    ESP_LOGW(kTag, "Companion version MISMATCH: remote=%s local=%s", remote, local_version);
+    debug_log_line_public(std::string("X R:") + remote);
+    debug_log_line_public(std::string("X L:") + local_version);
+  }
+}
+
+// The control direction. Answered with ACK or NAK carrying the same verb, so
+// the sidekick can match a reply to its request without a sequence number.
+void handle_action(const porta_frame_t& f) {
+  if (f.len < 1) return;
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  const uint8_t verb = f.payload[0];
+
+  if (verb == PORTA_ACT_SET_CLOCK) {
+    uint32_t secs = 0;
+    uint16_t ms = 0;
+    if (!porta_proto_parse_set_clock(&f, &secs, &ms)) {
+      enqueue(buf, porta_proto_encode_nak(verb, "malformed", buf, sizeof(buf)));
+      return;
+    }
+    const char* why = porta_host_set_clock(secs, ms);
+    if (why) {
+      enqueue(buf, porta_proto_encode_nak(verb, why, buf, sizeof(buf)));
+    } else {
+      enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+    }
+    return;
+  }
+
+  enqueue(buf, porta_proto_encode_nak(verb, "unknown action", buf, sizeof(buf)));
+}
+
+void handle_frame(const porta_frame_t& f) {
+  switch (f.type) {
+  case PORTA_MSG_HELLO:  handle_hello(f);  break;
+  case PORTA_MSG_ACTION: handle_action(f); break;
+  default:
+    ESP_LOGD(kTag, "Unhandled frame type 0x%02x len %u", f.type, f.len);
+    break;
+  }
+}
+
 }  // namespace
 
 // Stamped at emit, not at arrival. The queue can hold events through a burst,
@@ -225,6 +239,18 @@ void porta_emit_decode(const char* text, int snr, int offset_hz, float dt_s,
 
 uint32_t porta_dropped_events() { return s_dropped; }
 
+PortaCompanion porta_companion_state() {
+  if (!s_running || s_last_byte_ms == 0) return PortaCompanion::kAbsent;
+  const uint32_t now = now_ms();
+  if (now - s_last_byte_ms > kCompanionQuietMs) return PortaCompanion::kAbsent;
+  // Something is talking and we cannot read it. That is the flag-day case: a
+  // sidekick on the previous wire format, which cannot tell us so itself.
+  if (s_last_frame_ms == 0 || now - s_last_frame_ms > kCompanionQuietMs) {
+    return PortaCompanion::kUnintelligible;
+  }
+  return s_version_matches ? PortaCompanion::kCurrent : PortaCompanion::kOutOfDate;
+}
+
 void porta_start() {
   if (s_running) return;
 
@@ -249,7 +275,7 @@ void porta_start() {
     return;
   }
 
-  reset_collection();
+  porta_decoder_init(&s_dec);
   s_version[0] = '\0';
   s_running = true;
   ESP_LOGI(kTag, "Started on UART%d TX=G%d RX=G%d baud=%d",
@@ -259,7 +285,7 @@ void porta_start() {
 void porta_stop() {
   if (!s_running) return;
   uart_driver_delete(kPortaUart);
-  reset_collection();
+  porta_decoder_init(&s_dec);
   s_running = false;
   ESP_LOGI(kTag, "Stopped");
 }
@@ -269,8 +295,15 @@ void porta_tick() {
 
   uint8_t buf[128];
   const int len = uart_read_bytes(kPortaUart, buf, sizeof(buf), 0);
+  porta_frame_t frame;
   if (len > 0) {
-    ingest(buf, len);
+    s_last_byte_ms = now_ms();
+  }
+  for (int i = 0; i < len; ++i) {
+    if (porta_decoder_push(&s_dec, buf[i], &frame)) {
+      s_last_frame_ms = now_ms();
+      handle_frame(frame);
+    }
   }
 
   drain_out();
@@ -285,10 +318,12 @@ void porta_tick() {
     ESP_LOGW(kTag, "Dropped %" PRIu32 " outbound events (queue full)", s_dropped);
   }
 
-  // Abandon a frame that stopped arriving mid-way rather than holding the
-  // collector open against the next beacon's sync byte.
-  if (s_collecting && now_ms() - s_collect_start_ms > kCompanionFrameTimeoutMs) {
-    ESP_LOGW(kTag, "Companion beacon timed out mid-frame, discarding");
-    reset_collection();
+  // Link health. A wire quietly failing a share of its frames looks identical
+  // to a quiet one from up here, so say so when the count moves.
+  static uint32_t s_reported_crc = 0;
+  if (s_dec.crc_errors != s_reported_crc) {
+    s_reported_crc = s_dec.crc_errors;
+    ESP_LOGW(kTag, "Link: %" PRIu32 " CRC errors, %" PRIu32 " frames ok",
+             s_dec.crc_errors, s_dec.frames_ok);
   }
 }

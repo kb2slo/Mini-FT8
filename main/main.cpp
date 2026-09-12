@@ -369,6 +369,7 @@ enum class RtcTimeSource : uint8_t {
   GPS,
   MANUAL,
   PHONE,
+  BROWSER,   // set over the companion link from a phone or laptop browser
 };
 static UIMode ui_mode = UIMode::RX;
 static int tx_page = 0;
@@ -2087,6 +2088,7 @@ static const char* rtc_time_source_suffix() {
     case RtcTimeSource::DS3231: return " R";
     case RtcTimeSource::GPS: return " G";
     case RtcTimeSource::PHONE: return " P";
+    case RtcTimeSource::BROWSER: return " W";
     case RtcTimeSource::SAVED:
     case RtcTimeSource::ESP_RTC:
     case RtcTimeSource::MANUAL:
@@ -2174,6 +2176,45 @@ static bool rtc_set_from_strings_source(RtcTimeSource source) {
 
 bool rtc_set_from_strings() {
   return rtc_set_from_strings_source(RtcTimeSource::SAVED);
+}
+
+// Clock set over the companion link, from a browser (I28a). Returns nullptr on
+// success, or a short reason for the operator's log.
+//
+// In a headless build this is the primary time source and needs to be: GPS
+// wants the cap and a view of the sky, DS3231 must have been set once already,
+// manual entry needs the keyboard this design removes, and NTP on the sidekick
+// needs internet -- which is missing in exactly the field situation where a
+// cold radio will not decode until UTC is right. The browser knows the time
+// without any of that, because the phone does.
+//
+// Only acts when it matters. The browser syncs on every connect, and writing
+// the clock on each page load would fill the log with entries about nothing
+// changing -- and would keep rewriting a DS3231 that is already correct.
+const char* porta_host_set_clock(uint32_t epoch_secs, uint16_t millis) {
+  // A plausibility floor rather than a range check: this is the only path that
+  // can set the clock without a human looking at it, so a zero or an obviously
+  // wrong value should be refused rather than written to the RTC.
+  if (epoch_secs < 1700000000u) {
+    return "implausible time";
+  }
+
+  const time_t now = rtc_current_epoch_seconds();
+  const long drift = (long)((time_t)epoch_secs - now);
+  if (rtc_valid && drift > -2 && drift < 2) {
+    return nullptr;   // already right; accept without touching anything
+  }
+
+  rtc_seed_epoch((time_t)epoch_secs,
+                 esp_timer_get_time() / 1000 - (int64_t)millis,
+                 RtcTimeSource::BROWSER);
+  rtc_sync_to_esp_rtc();
+  (void)rtc_write_external_from_soft("browser");
+
+  char line[48];
+  snprintf(line, sizeof(line), "Clock set from browser (%+ld s)", drift);
+  debug_log_line(line);
+  return nullptr;
 }
 
 void rtc_sync_to_esp_rtc() {
@@ -3913,7 +3954,14 @@ static void draw_bt_view(bool force_redraw) {
   // What pressing 2 will actually do, decided by the probe that ran when the
   // device was plugged in rather than by hope.
   if (!g_espressif_rom_present) {
-    lines.push_back("Time only, no grid");
+    // Nothing on USB-C. If PORTA says the companion is behind, this is where
+    // the operator finds out what to do about it.
+    const PortaCompanion comp = porta_companion_state();
+    if (comp == PortaCompanion::kOutOfDate || comp == PortaCompanion::kUnintelligible) {
+      lines.push_back("SK old: plug USB-C");
+    } else {
+      lines.push_back("Time only, no grid");
+    }
   } else if (!g_sidekick_probe_valid) {
     lines.push_back("2: Flash Sidekick");
   } else {
@@ -4531,6 +4579,34 @@ static void redraw_after_usb_toast() {
   }
 }
 
+// Tell the operator the companion needs updating, once, when it becomes true.
+//
+// The pieces to fix it already existed -- the ADV carries the sidekick image,
+// compares versions, and can flash it over USB-C without a computer (RFC 0001
+// §5.1). What was missing was the sentence joining them: the mismatch was two
+// cryptic lines on a screen you had to go looking for, while the action lived
+// on a different screen, and nothing pointed from one to the other.
+static void companion_update_toast_tick() {
+  static PortaCompanion s_last = PortaCompanion::kAbsent;
+  const PortaCompanion now = porta_companion_state();
+  if (now == s_last) return;
+  s_last = now;
+
+  // kAbsent and kCurrent say nothing. A prompt on every boot with no companion
+  // attached would be worse than no prompt at all.
+  if (now == PortaCompanion::kOutOfDate) {
+    debug_log_line("SK out of date: USB-C then H,2");
+    ui_draw_message_dialog("Sidekick", "Old: USB-C + H,2");
+    g_usb_toast_until_ms = rtc_now_ms() + 4000;
+  } else if (now == PortaCompanion::kUnintelligible) {
+    // It is transmitting and we cannot read it, so it cannot report its own
+    // version -- the operator is the only one who can resolve this.
+    debug_log_line("SK too old to talk: USB-C then H,2");
+    ui_draw_message_dialog("Sidekick", "Too old: USB-C+H,2");
+    g_usb_toast_until_ms = rtc_now_ms() + 4000;
+  }
+}
+
 static void usb_c_toast_tick() {
   UsbCPresenceEvent ev;
   bool showed = false;
@@ -4564,6 +4640,7 @@ static void usb_c_toast_tick() {
     showed = true;
   }
   sidekick_probe_attached_device();
+  companion_update_toast_tick();
   const int64_t now = rtc_now_ms();
   if (showed) {
     g_usb_toast_until_ms = now + 2000;

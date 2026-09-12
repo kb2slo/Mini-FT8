@@ -378,6 +378,72 @@ static void test_decode_event()
     check(!porta_proto_parse_decode(&stub, &out), "a short decode event is rejected");
 }
 
+// ACTION is the control direction, and the first thing to cross it is the
+// clock. These pin the round trip and, more importantly, that a reply can be
+// matched to its request by verb -- there is no sequence number, so a NAK that
+// forgot which verb it was answering would be unattributable.
+static void test_action_set_clock()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    size_t n = porta_proto_encode_set_clock(1789012345u, 750, buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "set_clock decodes");
+    if (got.size() == 1) {
+        uint32_t secs = 0; uint16_t ms = 0;
+        check(porta_proto_parse_set_clock(&got[0], &secs, &ms), "set_clock parses");
+        check(secs == 1789012345u, "epoch seconds round-trip");
+        check(ms == 750, "milliseconds round-trip");
+    }
+
+    // Wrong length must be refused rather than read past the payload.
+    porta_frame_t stub = {};
+    stub.type = PORTA_MSG_ACTION;
+    stub.len = 3;
+    stub.payload[0] = PORTA_ACT_SET_CLOCK;
+    uint32_t secs = 0;
+    check(!porta_proto_parse_set_clock(&stub, &secs, nullptr), "a short set_clock is refused");
+}
+
+static void test_ack_and_nak()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    size_t n = porta_proto_encode_ack(PORTA_ACT_SET_CLOCK, buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "ack decodes");
+    if (got.size() == 1) {
+        uint8_t verb = 0;
+        check(porta_proto_parse_ack(&got[0], &verb), "ack parses");
+        check(verb == PORTA_ACT_SET_CLOCK, "ack carries the verb it answers");
+        char reason[PORTA_EVENT_TEXT_MAX + 1] = {};
+        check(!porta_proto_parse_nak(&got[0], nullptr, reason), "an ack is not a nak");
+    }
+
+    porta_decoder_init(&d);
+    n = porta_proto_encode_nak(PORTA_ACT_SET_CLOCK, "clock is read-only", buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "nak decodes");
+    if (got.size() == 1) {
+        uint8_t verb = 0;
+        char reason[PORTA_EVENT_TEXT_MAX + 1] = {};
+        check(porta_proto_parse_nak(&got[0], &verb, reason), "nak parses");
+        check(verb == PORTA_ACT_SET_CLOCK, "nak carries the verb it answers");
+        check(std::string(reason) == "clock is read-only", "nak reason round-trips");
+        check(!porta_proto_parse_ack(&got[0], nullptr), "a nak is not an ack");
+    }
+
+    // A reason is optional; the verb alone is a valid refusal.
+    porta_decoder_init(&d);
+    n = porta_proto_encode_nak(PORTA_ACT_SET_CLOCK, nullptr, buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1 && got[0].len == 1, "a reasonless nak is one byte");
+}
+
 int main()
 {
     test_round_trip();
@@ -394,6 +460,8 @@ int main()
     test_log_event();
     test_unset_clock_round_trips();
     test_decode_event();
+    test_action_set_clock();
+    test_ack_and_nak();
 
     if (g_fail) {
         std::printf("FAILED: %d check(s)\n", g_fail);

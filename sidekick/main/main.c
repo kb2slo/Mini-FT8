@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 
 #include "host_link.h"
+#include "porta_proto.h"
 #include "wifi_prov.h"
 
 static const char *TAG = "sidekick";
@@ -31,9 +32,6 @@ static const char *TAG = "sidekick";
 #define PORTA_TX_PIN GPIO_NUM_1  // G1
 #define PORTA_RX_PIN GPIO_NUM_2  // G2
 #define PORTA_BAUD 115200
-#define PORTA_SYNC_BYTE 0xC6
-#define PORTA_VERSION_LEN 32
-#define PORTA_FRAME_LEN (1 + PORTA_VERSION_LEN + 1)  // sync + version + checksum
 // 1 Hz made sense when the beacon was the entire conversation. It now shares
 // the wire with the host's event stream, where it is noise -- and nothing needs
 // a sub-5-second answer to "what version is the companion running".
@@ -65,21 +63,19 @@ static void porta_beacon_init(void) {
                                   UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 }
 
+// HELLO replaces the hand-rolled beacon. Same job -- tell the host which build
+// is running here -- but framed and CRC-checked like every other message, and
+// carrying a protocol version the old format had no room for. The two formats
+// could not coexist: both begin with 0xC6, and the old one has no type or
+// length, so the host would have read a framed message as a beacon.
 static void porta_beacon_send(void) {
     const esp_app_desc_t *desc = esp_app_get_description();
-
-    uint8_t frame[PORTA_FRAME_LEN];
-    frame[0] = PORTA_SYNC_BYTE;
-    memset(&frame[1], 0, PORTA_VERSION_LEN);
-    strncpy((char *)&frame[1], desc->version, PORTA_VERSION_LEN - 1);
-
-    uint8_t checksum = 0;
-    for (int i = 0; i < 1 + PORTA_VERSION_LEN; ++i) {
-        checksum ^= frame[i];
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_hello(PORTA_PROTO_VERSION, desc->version,
+                                              frame, sizeof(frame));
+    if (n > 0) {
+        uart_write_bytes(PORTA_UART, (const char *)frame, n);
     }
-    frame[1 + PORTA_VERSION_LEN] = checksum;
-
-    uart_write_bytes(PORTA_UART, (const char *)frame, sizeof(frame));
 }
 
 // PORTA update flash (RFC 0001 §5.2c "Update flash over PORTA") — tried a

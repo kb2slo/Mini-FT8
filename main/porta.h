@@ -51,6 +51,20 @@ void porta_emit_log(const char* text);
 void porta_emit_decode(const char* text, int snr, int offset_hz, float dt_s,
                        bool is_cq, bool is_to_me, bool is_recent_qso);
 
+// What the companion looks like from here. Three failure states rather than
+// one, because they need different words: a sidekick that is merely behind can
+// be updated, one speaking an older protocol *also* needs updating but cannot
+// say so itself, and nothing plugged in must produce no prompt at all -- a
+// nag on every boot with no companion attached would be worse than silence.
+enum class PortaCompanion : uint8_t {
+    kAbsent,          // no bytes on the wire at all
+    kCurrent,         // HELLO matches the image this ADV carries
+    kOutOfDate,       // HELLO decodes, versions differ
+    kUnintelligible,  // bytes arriving, nothing decodes -- an older protocol
+};
+
+PortaCompanion porta_companion_state();
+
 // Frames dropped because the queue was full — the number that matters when the
 // browser's view looks thinner than the screen's.
 uint32_t porta_dropped_events();

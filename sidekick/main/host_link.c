@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "driver/uart.h"
@@ -182,15 +183,82 @@ static const char kViewerPage[] =
     "b.className=e.me?'me':(e.cq?'cq':'')}"
     "else{b.textContent='\xC2\xB7 '+e.x;b.className='lg'}"
     "d.appendChild(a);d.appendChild(b);return d}"
+    "var synced=false;"
+    "async function sync(){if(synced)return;synced=true;"
+    // Round-trip halving, the same reasoning NTP uses: the host should be set
+    // to the time at the midpoint of the exchange, not the time we started it.
+    // Over WiFi this is tens of milliseconds against FT8's one-second
+    // tolerance, so it is belt and braces rather than necessity.
+    "var t0=Date.now();"
+    "try{var r=await fetch('/api/time',{method:'POST',"
+    "body:String(t0+Math.round((Date.now()-t0)/2))});"
+    "var j=await r.json();"
+    "if(!j.ok)s.textContent='clock not set: '+j.why;}"
+    "catch(e){synced=false}}"
     "async function tick(){try{"
     "var r=await fetch('/api/events?since='+q),j=await r.json();"
     "if(j.events.length){var was=atBottom();"
     "for(var i=0;i<j.events.length;i++)o.appendChild(row(j.events[i]));"
     "if(was){o.scrollTop=o.scrollHeight;follow=true}"
     "if(follow){while(o.childNodes.length>300)o.removeChild(o.firstChild)}}"
-    "q=j.seq;stat()}"
+    "q=j.seq;stat();sync()}"
     "catch(e){s.textContent='disconnected \xE2\x80\x94 retrying'}"
     "setTimeout(tick,1000)}tick();</script>";
+
+// Last reply the host sent to an action, so the browser learns whether its
+// clock actually landed. One outstanding action at a time is all the polled
+// design allows, so a single slot is enough and a verb is enough to match it.
+static volatile uint8_t s_last_reply_verb;
+static volatile bool s_last_reply_ok;
+static char s_last_reply_reason[PORTA_EVENT_TEXT_MAX + 1];
+
+// POST /api/time  body: epoch_ms
+//
+// The browser is the clock source in a headless build -- it is the only device
+// present that knows the time without internet, which is the case that matters:
+// a cold radio on a summit will not decode until UTC is right, and NTP is
+// unavailable exactly there. The host decides whether to act; if it is already
+// correct it says so and changes nothing.
+static esp_err_t post_time(httpd_req_t *req)
+{
+    char body[48] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+
+    const long long epoch_ms = strtoll(body, NULL, 10);
+    if (epoch_ms <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad time");
+        return ESP_FAIL;
+    }
+
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_set_clock((uint32_t)(epoch_ms / 1000),
+                                                  (uint16_t)(epoch_ms % 1000),
+                                                  frame, sizeof(frame));
+    s_last_reply_verb = 0;
+    uart_write_bytes(PORTA_UART, (const char *)frame, n);
+
+    // Wait briefly for the host's answer. It is one frame over a 115200 link
+    // answered from the main loop, so this is milliseconds -- but the browser
+    // should be told what happened rather than assuming success.
+    for (int i = 0; i < 40 && s_last_reply_verb != PORTA_ACT_SET_CLOCK; ++i) {
+        vTaskDelay(pdMS_TO_TICKS(25));
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    if (s_last_reply_verb != PORTA_ACT_SET_CLOCK) {
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"no reply from host\"}");
+    }
+    if (s_last_reply_ok) {
+        return httpd_resp_sendstr(req, "{\"ok\":true}");
+    }
+    char out[PORTA_EVENT_TEXT_MAX + 32];
+    snprintf(out, sizeof(out), "{\"ok\":false,\"why\":\"%s\"}", s_last_reply_reason);
+    return httpd_resp_sendstr(req, out);
+}
 
 static esp_err_t get_viewer(httpd_req_t *req)
 {
@@ -237,6 +305,14 @@ static void porta_rx_task(void *arg)
                          e.snr, e.offset_hz, e.dt_centis / 100.0,
                          e.is_to_me ? "[me] " : "", e.is_cq ? "[cq] " : "", e.text);
                 ring_push(&e);
+            } else if (porta_proto_parse_ack(&frame, (uint8_t *)&s_last_reply_verb)) {
+                s_last_reply_ok = true;
+                s_last_reply_reason[0] = '\0';
+            } else if (porta_proto_parse_nak(&frame, (uint8_t *)&s_last_reply_verb,
+                                             s_last_reply_reason)) {
+                s_last_reply_ok = false;
+                ESP_LOGW(TAG, "host refused action 0x%02x: %s",
+                         s_last_reply_verb, s_last_reply_reason);
             } else {
                 ESP_LOGW(TAG, "frame type 0x%02x len %u (no handler yet)",
                          frame.type, frame.len);
@@ -269,6 +345,10 @@ void host_link_register_uris(httpd_handle_t server)
     static const httpd_uri_t events = {
         .uri = "/api/events", .method = HTTP_GET, .handler = get_events,
     };
+    static const httpd_uri_t settime = {
+        .uri = "/api/time", .method = HTTP_POST, .handler = post_time,
+    };
     httpd_register_uri_handler(server, &viewer);
     httpd_register_uri_handler(server, &events);
+    httpd_register_uri_handler(server, &settime);
 }

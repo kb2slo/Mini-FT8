@@ -267,3 +267,74 @@ bool porta_proto_parse_decode(const porta_frame_t *f, porta_decode_event_t *out)
     event_text_out(f, DECODE_BODY_OFFSET, out->text, sizeof(out->text));
     return true;
 }
+
+// --- ACTION payloads -----------------------------------------------------
+
+size_t porta_proto_encode_set_clock(uint32_t epoch_secs, uint16_t millis,
+                                    uint8_t *out, size_t out_cap)
+{
+    uint8_t payload[7];
+    payload[0] = PORTA_ACT_SET_CLOCK;
+    put_u32(&payload[1], epoch_secs);
+    payload[5] = (uint8_t)(millis & 0xFFu);
+    payload[6] = (uint8_t)(millis >> 8);
+    return porta_proto_encode(PORTA_MSG_ACTION, payload, sizeof(payload), out, out_cap);
+}
+
+bool porta_proto_parse_set_clock(const porta_frame_t *f, uint32_t *epoch_secs_out,
+                                 uint16_t *millis_out)
+{
+    if (!f || f->type != PORTA_MSG_ACTION || f->len != 7 ||
+        f->payload[0] != PORTA_ACT_SET_CLOCK) {
+        return false;
+    }
+    if (epoch_secs_out) {
+        *epoch_secs_out = get_u32(&f->payload[1]);
+    }
+    if (millis_out) {
+        *millis_out = (uint16_t)(f->payload[5] | ((uint16_t)f->payload[6] << 8));
+    }
+    return true;
+}
+
+size_t porta_proto_encode_ack(uint8_t verb, uint8_t *out, size_t out_cap)
+{
+    return porta_proto_encode(PORTA_MSG_ACK, &verb, 1, out, out_cap);
+}
+
+size_t porta_proto_encode_nak(uint8_t verb, const char *reason,
+                              uint8_t *out, size_t out_cap)
+{
+    uint8_t payload[1 + PORTA_EVENT_TEXT_MAX];
+    payload[0] = verb;
+    size_t n = reason ? strnlen(reason, PORTA_EVENT_TEXT_MAX) : 0;
+    if (n > 0) {
+        memcpy(&payload[1], reason, n);
+    }
+    return porta_proto_encode(PORTA_MSG_NAK, payload, (uint8_t)(1 + n), out, out_cap);
+}
+
+bool porta_proto_parse_ack(const porta_frame_t *f, uint8_t *verb_out)
+{
+    if (!f || f->type != PORTA_MSG_ACK || f->len != 1) {
+        return false;
+    }
+    if (verb_out) {
+        *verb_out = f->payload[0];
+    }
+    return true;
+}
+
+bool porta_proto_parse_nak(const porta_frame_t *f, uint8_t *verb_out, char *reason_out)
+{
+    if (!f || f->type != PORTA_MSG_NAK || f->len < 1) {
+        return false;
+    }
+    if (verb_out) {
+        *verb_out = f->payload[0];
+    }
+    if (reason_out) {
+        event_text_out(f, 1, reason_out, PORTA_EVENT_TEXT_MAX + 1);
+    }
+    return true;
+}

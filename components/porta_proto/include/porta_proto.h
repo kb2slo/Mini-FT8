@@ -207,6 +207,38 @@ typedef struct {
 size_t porta_proto_encode_decode(const porta_decode_event_t *d, uint8_t *out, size_t out_cap);
 bool porta_proto_parse_decode(const porta_frame_t *f, porta_decode_event_t *out);
 
+// --- ACTION payloads -----------------------------------------------------
+// ACTION is the other namespace: payload[0] is the verb, the rest is
+// verb-specific. Actions travel sidekick -> host and are answered with ACK or
+// NAK carrying the same verb, so a reply can be matched to its request without
+// a sequence number -- adequate while one action is outstanding at a time,
+// which is all the polled design permits.
+
+typedef enum {
+    PORTA_ACT_SET_CLOCK = 0x01,  // epoch seconds + milliseconds
+} porta_action_verb_t;
+
+// The browser is the clock source in a headless build: it is the only device
+// present that reliably knows the time, and unlike NTP it knows it without
+// internet -- which is the case that matters, since a cold radio on a summit
+// will not decode until UTC is right.
+size_t porta_proto_encode_set_clock(uint32_t epoch_secs, uint16_t millis,
+                                    uint8_t *out, size_t out_cap);
+bool porta_proto_parse_set_clock(const porta_frame_t *f, uint32_t *epoch_secs_out,
+                                 uint16_t *millis_out);
+
+size_t porta_proto_encode_ack(uint8_t verb, uint8_t *out, size_t out_cap);
+
+// `reason` is short free text for a human; it reaches the operator's log, so it
+// should say what was wrong rather than name a code.
+size_t porta_proto_encode_nak(uint8_t verb, const char *reason,
+                              uint8_t *out, size_t out_cap);
+
+bool porta_proto_parse_ack(const porta_frame_t *f, uint8_t *verb_out);
+
+// `reason_out` must hold PORTA_EVENT_TEXT_MAX + 1 bytes.
+bool porta_proto_parse_nak(const porta_frame_t *f, uint8_t *verb_out, char *reason_out);
+
 #ifdef __cplusplus
 }
 #endif
