@@ -4,7 +4,7 @@ Human- and tool-readable project memory. Prefer this tree over editor-specific r
 
 | File | Role |
 |---|---|
-| [ROADMAP.md](ROADMAP.md) | Plan: Now / Backlog / Ideas / Done. Chat is intake; this file is truth. |
+| [ROADMAP.md](ROADMAP.md) | Plan: Now / Backlog / Ideas. Chat is intake; this file is truth. Shipped work is dropped, not archived — git history is the record. |
 | [../README.md](../README.md) | Operator landing. Fork notes (why this tree) above the Wei delimiter; Wei’s original below. |
 | [STYLE.md](STYLE.md) | Coding standard for our C/C++ (not vendored `M5*` / `ft8_lib`). |
 | [TEST_PLAN.md](TEST_PLAN.md) | What is verified and by whom: agent-run automation vs operator field checks, plus field checks owed on the current branch. |
@@ -31,7 +31,7 @@ Update `ROADMAP.md` in the **same turn** as the work:
 - New idea → **Ideas** (do not implement until moved up)
 - Agreed / sequenced → **Backlog**
 - Next to build → **Now** (one theme)
-- Shipped → **Done**; drop the row from Now/Backlog
+- Shipped → drop the row from Now/Backlog. No separate Done archive — git history (and the commit that dropped the row) is the record.
 
 Each row is an ID plus a name. Do not mix a feature change with an unrelated fix in the same commit.
 
@@ -44,6 +44,12 @@ Judge by **verifiability**, not size, and say which of the three applied:
 3. **Neither can, yet** — an unreproducible hardware or timing bug. Prefer a change whose **worst case is no worse than current behaviour**, and ship the logging that makes the next occurrence diagnosable. Never let an unverified fix blend in with verified work: say plainly, in the commit and in chat, that it is unproven.
 
 An unproven fix is still worth making. Pretending it is proven is not.
+
+**Tier the model to the task, the same way work is tiered by verifiability above.** An agent can prove some things and not others; a model can carry some kinds of work well and not others, and a wrong choice here is not caught by the compiler the way a bad fix is. State which tier a task is before starting non-trivial work:
+
+1. **Mechanical, low blast radius** — `git mv`-shaped extracts, renames, doc formatting, running `host_mock`/`tx_e2e`/`idf.py build` and reporting the result, applying a change the operator already fully specified. Verified by the compiler or a host test regardless of which model did it — use whatever is fast and cheap.
+2. **Judgment under ambiguity** — RFC drafting, sizing a memory/timing budget, choosing an extract boundary, roadmap grooming, anything **Push back before tools** above would stop for. Use the strongest available model. Nothing mechanical catches a wrong call here, which is exactly what makes it expensive.
+3. **Field-only, no model tier substitutes** — USB/CDC/CAT, UAC timing, TX behaviour, anything [TEST_PLAN.md](TEST_PLAN.md) marks Pending. This is category 2/3 of the verifiability rubric above wearing a model-choice hat: a bigger model does not turn an operator-only or hardware-only check into something an agent can close. Say so plainly rather than picking a bigger model and reporting more confidence than the check supports.
 
 **Test plan matches the work too.** [TEST_PLAN.md](TEST_PLAN.md) is the same kind of living file as the roadmap, and gets updated in the **same turn** as the work:
 
@@ -210,14 +216,17 @@ If the operator asks to add an idea or “add to the backlog”:
 The grooming *workflow* is still TBD. Until then:
 
 - Once per session start, check `git log -1 --format=%ci -- docs/ROADMAP.md`.
-- If that commit is older than about **1–2 days**, remind the operator once that it is time to groom Now / Backlog / Ideas / Done (promote, drop shipped Now rows, sequence or park ideas).
+- If that commit is older than about **1–2 days**, remind the operator once that it is time to groom Now / Backlog / Ideas (promote, drop shipped Now rows, sequence or park ideas).
+- While grooming, run `awk '{ print length, NR }' docs/ROADMAP.md | sort -rn | head -5` and name any outlier row. Say what's in it and let the operator decide: trim in place, extract to an RFC (the "long features get an RFC" rule), or leave it — do not refine or extract unprompted.
 - Do not repeat the reminder in later turns of the same session, and do not interrupt an in-progress coding task.
 
-### Upstream pin watch (session start)
+### Upstream watches (session start)
 
-Once per session start, same rules as grooming (once, do not interrupt coding). Network fail → skip.
+Three watches, different cadences. Network fail → skip (any of them); do not interrupt an in-progress coding task.
 
-`ft8_lib` only ([RFC 0002](rfcs/0002-extract-and-boundaries.md) §6) — not Mini-FT8 `upstream`’s firmware, which is not ours to track. But the pin has **two** parents and both need watching. GitHub **Sync fork** on `kb2slo/ft8_lib` is off (parent is Wei, not Karlis).
+#### `ft8_lib` pin — every session start
+
+Scoped to the submodule pin ([RFC 0002](rfcs/0002-extract-and-boundaries.md) §6) only. General Mini-FT8 firmware drift is the separate watch below, not this one. The pin has **two** parents and both need watching. GitHub **Sync fork** on `kb2slo/ft8_lib` is off (parent is Wei, not Karlis).
 
 **Karlis** — protocol upstream:
 
@@ -243,6 +252,31 @@ Expect `message.c` to differ by our own `stpcpy_compat` removal (`f211146`); any
 **Why both.** Written 2026-09-08, after this watch missed a live stack overflow (B41): Karlis’s master has not moved since **2025-08-23**, while the one protocol fix worth having in that window came from Wei. Watching only Karlis watches the quiet parent.
 
 Then draft a Backlog row in chat. Do not commit it yet. Do not merge, bump the submodule, or open a kgoba PR in that turn. Done-when: written take (sync now / wait / drop). Sync uses RFC 0002 §6 and is a separate Now. Goldens gate the pin. If a row for that SHA already exists, remind; do not duplicate.
+
+#### Mini-FT8 upstream (`wcheng95/Mini-FT8`) — at least weekly
+
+**Last checked:** 2026-09-12 — 11 commits on `upstream/main` not in our `main`. `491e757` ("Fix telemetry decode buffer overflow") is already ported by hand as B41; the other 10 are upstream's own CI/test-tooling commits for an "RX-1A" reference-dump/regression harness, nothing that looks portable here. No row drafted.
+
+General drift, not just the `ft8_lib` files this repo shares with Wei's tree (that's the watch above). Feeds [I12](ROADMAP.md) ("Mine public Mini-FT8 forks"), which is Ideas, not a standing workflow — this session-start check is what keeps it from going stale between the occasional full sweep (the kind B39 did once by hand).
+
+```bash
+git fetch upstream
+git log --oneline main..upstream/main
+```
+
+If the date above is more than **7 days** old, run it even though it repeats what might be a no-op week to week, and update the date (and the one-line finding) regardless of outcome — that line is the only record of when this last actually ran. Something worth taking → draft an Ideas/Backlog row in chat citing the commit, same discipline as the pin watch: do not merge, do not commit the date bump silently — say what you found first.
+
+#### QMX panadapter project (`SteffenLav/qmx-panadapter`) — at least weekly
+
+**Last checked:** 2026-09-12 — large overlap with several open roadmap items, worth the operator's attention rather than an agent's judgment call. This is a shipping FT8/FT4 station on the **M5Stack Tab5 (ESP32-P4)**: QMX as a USB host (UAC audio + CAT), on-device FT8/FT4 decode and TX, a browser-streamed panadapter UI, ADIF logging with upload to QRZ/eQSL/LoTW/Cloudlog/Wavelog, POTA/SOTA activation logging, and live PSK Reporter/DX-cluster/POTA spotting. That bears directly on [B26](ROADMAP.md) (does a P4 host a QMX at all — this project says yes, in production), [I27](ROADMAP.md) (P4 headless design), [I26](ROADMAP.md) (decode headroom on P4), and [I28](ROADMAP.md)/[B48](ROADMAP.md) (headless web app, QRZ/PSKReporter from the browser). Not yet turned into a roadmap row — flagged for the operator to decide what, if anything, to look at more closely.
+
+Check for anything new via the repo's own version history (`docs/version-history.md` in that repo) rather than a git remote — it is not a fork parent, just a project worth watching for ideas:
+
+```bash
+gh repo view SteffenLav/qmx-panadapter --json pushedAt,description
+```
+
+If the date above is more than **7 days** old, look at what changed since the last check (the linked version history is newest-last) and update the date and one-line finding regardless of outcome. Insight, not code — do not port or copy from it without the operator's own read of the license and the code.
 
 ### Local IDF build / flash
 
