@@ -62,6 +62,13 @@ Named explicitly so nobody mistakes a green run for coverage. None of the follow
   uncovered is whether a row's *label* and *action* actually belong together — that pairing is still only
   verifiable by eye, which is why section 2 below checks label and effect together.
 - **The main loop and slot state machine.** `app_task_core0`, `tx_tick`, `check_slot_boundary`.
+- **The decode *parameters*, though not the decode *path*.** `tests/tx_e2e`'s `golden_rx` does run
+  `monitor_process` → `ftx_find_candidates` → `ftx_decode_candidate` over seven committed WAVs, so decoder
+  regressions are caught. What it does not catch is anything about our *tuning*: `decode_pcm()` hardcodes its
+  own `max_cand`, `min_score` and LDPC iteration count rather than the firmware's, reads `time_osr`/`freq_osr`
+  as literals instead of `g_time_osr`/`g_freq_osr`, stops at the first successful decode so it cannot count
+  yield, and skips the firmware's per-block AGC and decimation entirely. Every parameter in I26 could change
+  without moving one bit of its output. B25 is the harness that would notice.
 - **Any field-only path**: USB host / UAC audio, CAT, CDC, display and SPI, GPS, DS3231, SD card, flash.
 - **Timing.** Slot alignment, decode-window deadlines, TX start latency.
 
@@ -233,6 +240,23 @@ For each row: press the key, confirm the effect, and confirm no *other* row chan
 | 7.5 | Work a station that never sends a grid, then read the `.adi` | The record has **no** `gridsquare` field at all — not `<gridsquare:0>`. Two such QSOs appeared in the 2026-09-08 log (N2FSM, W4MAA) |
 | 7.3 | `O` `5` | Copy to SD reports `Copied OK`; files land on the card |
 | 7.4 | Reboot | Call, grid, band, and every menu toggle survived |
+
+### 8. Decode-yield measurement protocol
+
+Any change claiming to improve decoding is measured this way, not by impression. Cited by B53, B54, and
+every I26 experiment.
+
+- **Metric is unique decodes per slot.** Not total rows, not "it felt better".
+- **A/B at the same time of day, never the same evening.** Band conditions move faster than any change we
+  would make.
+- **Build the comparison version in a separate worktree**, so the two arms are not one tree at two times.
+- **Full chip erase before each flash.** NVS carryover has changed behaviour between arms before.
+- **60 slots (15 minutes) per arm.** Report **mean and standard deviation**, not the mean alone.
+- **Change one thing at a time.**
+
+σ is not decoration. Worked example from an independent project on this decoder: two arms at 15.38
+decodes/slot each, σ 5.70 against 6.65 — a suspected regression that was band fading. The statistics that
+stop you reporting a false regression are the same ones that stop you reporting a false improvement.
 
 ## Sidekick (AtomS3 Lite)
 
@@ -416,6 +440,7 @@ a change touches a field-only path, naming the change and the exact check.
 
 | From | Check | Status |
 | --- | --- | --- |
+| B53 (decode instrumentation) | On a **busy band at a busy hour**, run FT8 and then FT4, and read the per-slot line on `P` then `.`. Healthy reads `lost`≈0, `g`≈14 (FT8), `dec` well under 2360 ms. Sick reads `lost` non-zero and roughly tracking `dec`, with `g` collapsing toward 0 on slots where `cand` is high. Record `cand=` and `msg=` separately — whether a real band ever approaches the 50-candidate or 32-decode caps decides two I26 levers on its own. FT4 is the sharper test: near-identical guard band (2.46 s against 2.36 s) but 105 symbols to decode instead of 79. Ignore slots we transmitted in; those deliberately skip decode | **not built yet** — written before the code deliberately, so the pass/fail condition is fixed in advance rather than fitted to whatever the first run happens to show. Becomes owed when B53 lands |
 | I3a (sidekick retarget) | S0–S2 | **passed 2026-09-09** — `X R: 181cbe0-dirty L: c0e52ec` on the ADV: a validated beacon frame, so the Grove pins, UART1 on S3, the framing and the version compare all work. The mismatch was expected (different builds) |
 | I3d–I3h (WiFi provisioning) | S2c, all rows | **owed.** Partially exercised on 2026-09-09 but not against current firmware: the AP came up, the scan found networks, and a join succeeded — but the join that crashed (I3f), the credential erase that failed to stick (I3g) and the stale scan list (I3h) were all fixed *after* that session, and the captive portal has never been seen working |
 | mDNS + station-mode server | S2d, all rows | **owed** — no part of it has run on hardware |

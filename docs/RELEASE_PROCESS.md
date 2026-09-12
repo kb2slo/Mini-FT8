@@ -111,8 +111,8 @@ these has a field consequence rather than a cosmetic one.
 
 **The one that is not cosmetic:** the ADV decides whether an attached sidekick is *ours* by `strcmp` of the
 device's `esp_app_desc_t` project name against `kExpectedProjectName[] = "sidekick"`
-([`components/sidekick_flasher/sidekick_flasher.cpp:96`](../components/sidekick_flasher/sidekick_flasher.cpp)),
-set by `project(sidekick)` in [`sidekick/CMakeLists.txt:34`](../sidekick/CMakeLists.txt). Change that project
+([`components/sidekick_flasher/sidekick_flasher.cpp`](../components/sidekick_flasher/sidekick_flasher.cpp)),
+set by `project(sidekick)` in [`sidekick/CMakeLists.txt`](../sidekick/CMakeLists.txt). Change that project
 name and **every sidekick already in the field reads as a foreign device** — `H` offers `2: OVERWRITE it`
 instead of an update. That is [TEST_PLAN.md](TEST_PLAN.md) S3.5 working as designed, aimed at the wrong
 target. A rename must either leave `project(sidekick)` alone or ship knowing every companion needs a
@@ -122,7 +122,7 @@ The rest is naming, but all of it is operator-visible:
 
 - Asset and tag names in `ci.yml` (`MiniFT8-<tag>-Merged.bin`, `YYYYMMDD-minift8-<commit>.bin`).
 - `MERGED_BIN_NAME` in `gen_build_identity.cmake` — the hash-first name M5Launcher truncates (D12).
-- The `MINIFT8_*` macro names, and `project(mini_ft8)` in `CMakeLists.txt:6`.
+- The `MINIFT8_*` macro names, and `project(mini_ft8)` in `CMakeLists.txt`.
 - The mDNS hostname `minift8.local` (RFC 0001 §5.0), which is in operators' browser history.
 - Clone URLs and release links in `README.md` and `docs/`. GitHub redirects a renamed repo, so these keep
   working — but redirects are not a plan.
