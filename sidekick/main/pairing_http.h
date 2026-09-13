@@ -32,14 +32,22 @@ esp_err_t pairing_http_init(void);
 // never has to remember to check -- and never sees a request it should not.
 esp_err_t pairing_http_register(httpd_handle_t server, const httpd_uri_t *uri, pairing_policy_t policy);
 
-// Registers the token disclosure route. Call from both the provisioning and
-// station servers: the route exists in either mode, because RFC 0004 §1 makes
-// AP mode an operating mode rather than a setup state, and a retrieval path
-// that only worked during setup would be the assumption B55 warns about.
+// Registers the token disclosure route and the shared pairing.js script. Call
+// from both the provisioning and station servers: the route exists in either
+// mode, because RFC 0004 §1 makes AP mode an operating mode rather than a
+// setup state, and a retrieval path that only worked during setup would be the
+// assumption B55 warns about.
+//
+// Disclosure is one-shot: the first successful GET closes the window. The
+// long-lived NVS token is not rotated on retrieval -- that would log out every
+// already-paired browser. What "stops working" after re-auth is further
+// disclosure, not the credential itself.
 esp_err_t pairing_http_register_disclosure(httpd_handle_t server);
 
 // Opens the disclosure window (RFC 0004 §7). Driven by the AtomS3 Lite's user
 // button, which is physical and therefore correct in either mode -- gating
 // disclosure on AP mode would stop being a gate the moment the application
 // runs there. Re-arming while open extends the window rather than stacking.
+// The window still times out if nobody claims it; a successful GET claims it
+// immediately.
 void pairing_http_open_disclosure(void);

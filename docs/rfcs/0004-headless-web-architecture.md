@@ -335,12 +335,17 @@ catastrophic: a second device, a new phone, cleared browsing data, or Safari's I
 storage for a site untouched for seven days — which means a sidekick used monthly can lose it with no user
 action at all. So the requirement is that the token be **readable on demand**, not merely resettable.
 
-**The mechanism is the AtomS3 Lite's user button opening a short disclosure window** — press it and a route
-serves the token for a couple of minutes, then stops answering. GPIO41, plain input with the board's own
-pull-up, active low, read straight out of the `M5Unified` this repo already vendors, so no pin is being
-guessed. One gesture is enough for everything: with the token in hand the operator can call the guarded
-`/forget` to change networks, which removes any need for a button long-press, a boot-count trigger or an NVS
-reset path.
+**The mechanism is the AtomS3 Lite's user button opening a short disclosure window** — press it and a
+route serves the token. The window is **one-shot**: the first successful GET claims it and closes it, so a
+completed re-auth does not leave the secret readable for the rest of a timer; if nobody claims it, it still
+times out after a couple of minutes. GPIO41, plain input with the board's own pull-up, active low, read
+straight out of the `M5Unified` this repo already vendors, so no pin is being guessed. Every page loads a
+shared `/pairing.js` that polls for that claim and stores the token in `localStorage` — the operator presses
+the button; they do not copy JSON or answer a `prompt()`. One gesture is enough for everything: with the
+token in hand the operator can call the guarded `/forget` to change networks, which removes any need for a
+button long-press, a boot-count trigger or an NVS reset path. The long-lived NVS token is **not** rotated on
+retrieval: that would log out every already-paired browser. What stops after re-auth is further disclosure,
+not the credential itself.
 
 **Gating disclosure on the button rather than on AP mode is the point, not an implementation detail.**
 Gating it on AP mode was the obvious design and §1 rules it out: if the application runs over AP mode, then

@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "pairing_http.h"
 #include "porta_proto.h"
+#include "web_page.h"
 
 #define PORTA_UART UART_NUM_1
 
@@ -140,77 +141,8 @@ static esp_err_t get_events(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
-// Newest at the bottom, terminal-style, with the standard stick-to-bottom
-// mechanic: measure whether the view is already at the bottom *before*
-// appending, and only scroll if it was. Scrolling up is therefore a deliberate
-// act that is never undone by an arriving row -- which is the whole point, since
-// the rows arrive on their own schedule and reading history is when you least
-// want the view yanked away.
-//
-// Two details that matter and are easy to miss. `overflow-anchor: none` stops
-// the browser's own scroll anchoring from fighting the same job and producing a
-// jitter neither mechanism intends. And trimming old rows happens only while
-// following: removing from the top while someone is reading history shifts
-// everything under their eyes.
-//
-// An unset host clock renders as --:--:-- rather than as a 1970 timestamp or a
-// blank. FT8 will not decode without a synced clock, so "the host does not know
-// what time it is" is diagnostic information, not an absence.
-static const char kViewerPage[] =
-    "<!doctype html><meta charset=utf-8>"
-    "<meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>Mini-FT8 host log</title>"
-    "<style>html,body{height:100%;margin:0}"
-    "body{display:flex;flex-direction:column;font-family:ui-monospace,monospace;"
-    "background:#111;color:#ddd;font-size:13px}"
-    "#s{flex:none;color:#888;font-size:11px;padding:.35rem .5rem;border-bottom:1px solid #222}"
-    "#o{flex:1;overflow-y:auto;overflow-anchor:none;padding:.25rem .5rem}"
-    "div.r{padding:.1rem 0;white-space:pre-wrap;word-break:break-word}"
-    ".ts{color:#555}.cq{color:#7fd}.me{color:#fd7}.lg{color:#999}</style>"
-    "<div id=s>connecting\xE2\x80\xA6</div><div id=o></div>"
-    "<script>"
-    "let q=0,o=document.getElementById('o'),s=document.getElementById('s'),follow=true;"
-    "function atBottom(){return o.scrollHeight-o.scrollTop-o.clientHeight<40}"
-    "function stat(){s.textContent=follow?('live \xC2\xB7 '+q+' events')"
-    ":('paused \xC2\xB7 scroll to the bottom to follow \xC2\xB7 '+q+' events')}"
-    "o.addEventListener('scroll',function(){follow=atBottom();stat()});"
-    "function hhmmss(t){if(!t)return'--:--:--';"
-    "return new Date(t*1000).toISOString().substr(11,8)}"
-    "function row(e){var d=document.createElement('div');d.className='r';"
-    "var a=document.createElement('span');a.className='ts';a.textContent=hhmmss(e.t)+' ';"
-    "var b=document.createElement('span');"
-    "if(e.d){b.textContent=((e.snr>0?'+':'')+e.snr).padStart(3)+' '"
-    "+String(e.hz).padStart(4)+' '+(e.dt>0?'+':'')+e.dt.toFixed(1)+' '+e.x;"
-    "b.className=e.me?'me':(e.cq?'cq':'')}"
-    "else{b.textContent='\xC2\xB7 '+e.x;b.className='lg'}"
-    "d.appendChild(a);d.appendChild(b);return d}"
-    "var synced=false;"
-    "async function sync(){if(synced)return;synced=true;"
-    // Round-trip halving, the same reasoning NTP uses: the host should be set
-    // to the time at the midpoint of the exchange, not the time we started it.
-    // Over WiFi this is tens of milliseconds against FT8's one-second
-    // tolerance, so it is belt and braces rather than necessity.
-    "var t0=Date.now();"
-    // Setting the clock is a write, so it carries the pairing token while
-    // watching does not. An unpaired browser sees everything and changes
-    // nothing, which is the whole of RFC 0004 §7 in one request.
-    "try{var r=await fetch('/api/time',{method:'POST',"
-    "headers:{'X-MiniFT8-Token':localStorage.getItem('minift8_token')||''},"
-    "body:String(t0+Math.round((Date.now()-t0)/2))});"
-    "if(r.status==401){s.textContent="
-    "'clock not set \xE2\x80\x94 unpaired (button, then /api/pairing-token)';return}"
-    "var j=await r.json();"
-    "if(!j.ok)s.textContent='clock not set: '+j.why;}"
-    "catch(e){synced=false}}"
-    "async function tick(){try{"
-    "var r=await fetch('/api/events?since='+q),j=await r.json();"
-    "if(j.events.length){var was=atBottom();"
-    "for(var i=0;i<j.events.length;i++)o.appendChild(row(j.events[i]));"
-    "if(was){o.scrollTop=o.scrollHeight;follow=true}"
-    "if(follow){while(o.childNodes.length>300)o.removeChild(o.firstChild)}}"
-    "q=j.seq;stat();sync()}"
-    "catch(e){s.textContent='disconnected \xE2\x80\x94 retrying'}"
-    "setTimeout(tick,1000)}tick();</script>";
+// viewer.html, embedded by EMBED_TXTFILES (see main/CMakeLists.txt).
+extern const char viewer_html_start[] asm("_binary_viewer_html_start");
 
 // Last reply the host sent to an action, so the browser learns whether its
 // clock actually landed. One outstanding action at a time is all the polled
@@ -269,8 +201,10 @@ static esp_err_t post_time(httpd_req_t *req)
 
 static esp_err_t get_viewer(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html; charset=utf-8");
-    return httpd_resp_send(req, kViewerPage, HTTPD_RESP_USE_STRLEN);
+    // No substitutions -- the viewer fetches everything it shows from
+    // /api/events. Sent through web_page_send() anyway so a placeholder added
+    // to the file later is expanded rather than rendered as literal braces.
+    return web_page_send(req, viewer_html_start, NULL, 0);
 }
 
 // Its own task rather than a poll in the beacon loop: events arrive
@@ -297,7 +231,7 @@ static void porta_rx_task(void *arg)
             entry_t e = {0};
             if (porta_proto_parse_log(&frame, &e.epoch_secs, text)) {
                 strncpy(e.text, text, sizeof(e.text) - 1);
-                ESP_LOGI(TAG, "%s", e.text);
+                ESP_LOGI(TAG, "t=%" PRIu32 " %s", e.epoch_secs, e.text);
                 ring_push(&e);
             } else if (porta_proto_parse_decode(&frame, &ev)) {
                 e.is_decode = true;

@@ -1,0 +1,63 @@
+<!doctype html>
+<meta name=viewport content='width=device-width,initial-scale=1'>
+<title>Mini-FT8 sidekick</title>
+
+<!--
+  Station-mode status, served at / once joined. Open to anyone who can reach
+  it: this is a read of radio state, and anyone may listen (RFC 0004 section 7).
+
+  Every placeholder below is HTML-escaped on the way in. The network name is
+  the reason that is not optional -- an SSID is whatever a nearby access point
+  broadcast, chosen from a scan list, and this origin holds the pairing token
+  in localStorage.
+
+  Pairing is shared via /pairing.js: press the sidekick button; no prompt().
+-->
+
+<style>
+body{font-family:system-ui;margin:2rem auto;max-width:22rem;padding:0 1rem}
+dt{color:#666;font-size:.8rem;margin-top:.7rem}
+dd{margin:0;font-size:1rem}
+button{width:100%;padding:.7rem;font-size:1rem;margin-top:1.5rem}
+#m{color:#666;font-size:.85rem;min-height:1.2em}
+</style>
+
+<h2>Mini-FT8 sidekick</h2>
+<dl>
+  <dt>Network</dt><dd>{{ssid}}</dd>
+  <dt>Address</dt><dd>{{ip}}</dd>
+  <dt>Firmware</dt><dd>{{version}}</dd>
+  <dt>Uptime</dt><dd>{{uptime}} s</dd>
+</dl>
+
+<p><a href="/log">Host log and decodes &rarr;</a></p>
+
+<button id=f>Forget WiFi</button>
+<p id=m></p>
+
+<script src=/pairing.js></script>
+<script>
+var m = document.getElementById('m');
+
+MiniFT8Pairing.boot({
+  status: m,
+  onPaired: function () { m.textContent = 'Paired' }
+});
+
+document.getElementById('f').onclick = async function () {
+  if (!confirm('Forget this network and restart into setup?')) return;
+  if (!MiniFT8Pairing.getToken()) {
+    m.textContent = 'Press the sidekick button to pair first.';
+    MiniFT8Pairing.needsReauth();
+    return
+  }
+  var r = await MiniFT8Pairing.authFetch('/forget', { method: 'POST' });
+  if (r.status == 401) {
+    MiniFT8Pairing.needsReauth();
+    m.textContent = 'Press the sidekick button to pair';
+  } else {
+    document.body.innerHTML = '<h2>Forgotten</h2>'
+      + '<p>Restarting into setup. Look for the <b>MiniFT8-SK-…</b> network.</p>'
+  }
+}
+</script>

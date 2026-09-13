@@ -89,6 +89,12 @@ Host-testability does **not** force a component. `host_mock/Makefile` compiles s
 
 Being a component is a cost: a directory, a `CMakeLists.txt`, an `include/` level, a possible `idf_component.yml`, and an entry in someone's `REQUIRES`. Pay it for one of the two reasons above, not by default.
 
+**No HTML, CSS or JavaScript inside C or C++ source** (2026-09-12). A page is a `.html` file under `<project>/main/web/`, embedded with `EMBED_TXTFILES` and served through `web_page_send()`. Values are interpolated with `{{name}}` placeholders, not `printf`. Shared script that every page needs (pairing) is a `.js` file in the same directory, embedded the same way and served as its own route (`/pairing.js`); pages load it with `<script src=…>` rather than pasting a copy.
+
+The cost of the old way was not ugliness. CSS had to be written `width:100%%` to survive `snprintf`, which put every page outside the reach of a formatter, a validator, a browser or a linter — a page's JavaScript could not even be checked for a syntax error. A page split across four fragments could not be read as a document, and every wording change was a C change. The move also closed a live hole: the status page interpolated the stored SSID raw, and an SSID is whatever a nearby access point broadcast, so substitution now escapes by default and passing markup through takes an explicit flag.
+
+Two things stay in C: the choice of which page to serve, and the values substituted into it. Building markup in C by concatenation is what this rule exists to stop, with one exception — the scan list, which is a repeated element and is assembled in `wifi_prov.c` with each SSID escaped as it is rendered.
+
 Dead code is deleted in the unit you are extracting. No repo-wide unused-function hunt mixed with a feature.
 
 Fixes that belong inside an extract go with that extract (B5 overlapping `sscanf` with Station parse). Unrelated fixes stay out.

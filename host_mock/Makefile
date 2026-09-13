@@ -45,13 +45,15 @@ SCREEN_MODEL_TARGET = host_test_screen_model
 DATETIME_FIELD_TARGET = host_test_datetime_field
 PORTA_PROTO_TARGET = host_test_porta_proto
 PAIRING_TOKEN_TARGET = host_test_pairing_token
+WEB_PAGE_TARGET = host_test_web_page
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
      $(STATION_SAVE_TARGET) $(FILE_LIST_TARGET) $(RADIO_PROFILE_TARGET) $(TX_HUD_BANNER_TARGET) \
      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
      $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_TARGET) $(SCREEN_MODEL_TARGET) \
-     $(DATETIME_FIELD_TARGET) $(PORTA_PROTO_TARGET) $(PAIRING_TOKEN_TARGET)
+     $(DATETIME_FIELD_TARGET) $(PORTA_PROTO_TARGET) $(PAIRING_TOKEN_TARGET) \
+     $(WEB_PAGE_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -132,6 +134,14 @@ test_pairing_token.o: test_pairing_token.cpp
 $(PAIRING_TOKEN_TARGET): $(PAIRING_TOKEN_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+WEB_PAGE_OBJ = web_page.o test_web_page.o
+web_page.o: ../sidekick/main/web_page.c
+	$(CC) $(CFLAGS) -I../sidekick/main -c $< -o $@
+test_web_page.o: test_web_page.cpp
+	$(CXX) $(CXXFLAGS) -I../sidekick/main -c $< -o $@
+$(WEB_PAGE_TARGET): $(WEB_PAGE_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 DATETIME_FIELD_OBJ = datetime_field.o test_datetime_field.o
 datetime_field.o: ../main/datetime_field.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
@@ -193,6 +203,7 @@ clean:
 	      $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_OBJ) $(MENU_MODEL_TARGET) \
 	      $(SCREEN_MODEL_OBJ) $(SCREEN_MODEL_TARGET) \
 	      $(DATETIME_FIELD_OBJ) $(DATETIME_FIELD_TARGET) \
-	      $(PAIRING_TOKEN_OBJ) $(PAIRING_TOKEN_TARGET)
+	      $(PAIRING_TOKEN_OBJ) $(PAIRING_TOKEN_TARGET) \
+	      $(WEB_PAGE_OBJ) $(WEB_PAGE_TARGET)
 
 .PHONY: all clean

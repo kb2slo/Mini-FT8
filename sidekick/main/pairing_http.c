@@ -48,11 +48,21 @@ static char s_token[PAIRING_TOKEN_BUF];
 static volatile bool      s_disclosure_open;
 static esp_timer_handle_t s_disclosure_timer;
 
+static void disclosure_close(const char *why)
+{
+    if (s_disclosure_timer) {
+        (void)esp_timer_stop(s_disclosure_timer);
+    }
+    if (s_disclosure_open) {
+        s_disclosure_open = false;
+        ESP_LOGI(TAG, "Disclosure window closed (%s)", why);
+    }
+}
+
 static void disclosure_expired(void *arg)
 {
     (void)arg;
-    s_disclosure_open = false;
-    ESP_LOGI(TAG, "Disclosure window closed");
+    disclosure_close("timed out");
 }
 
 static bool token_load(void)
@@ -211,12 +221,20 @@ esp_err_t pairing_http_register(httpd_handle_t server, const httpd_uri_t *uri, p
 // Serves the token while the window is open. 404 when shut, not 403: a closed
 // window should look like a route that does not exist, so scanning the device
 // does not advertise that there is a token to go looking for.
+//
+// The first successful GET claims the window and closes it. Re-auth is one
+// retrieval, not a 120 s broadcast: any other client that polls afterward
+// sees 404. The NVS token itself is unchanged -- rotating it here would log
+// out every already-paired browser.
 static esp_err_t get_pairing_token(httpd_req_t *req)
 {
     if (!s_disclosure_open || !pairing_token_is_well_formed(s_token)) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "closed");
         return ESP_FAIL;
     }
+    // Claim before sending so two concurrent polls cannot both win.
+    disclosure_close("token retrieved");
+
     char body[PAIRING_TOKEN_BUF + 16];
     const int n = snprintf(body, sizeof(body), "{\"token\":\"%s\"}", s_token);
     if (n <= 0 || (size_t)n >= sizeof(body)) {
@@ -228,14 +246,35 @@ static esp_err_t get_pairing_token(httpd_req_t *req)
     return httpd_resp_send(req, body, n);
 }
 
+// pairing.js, embedded next to the HTML pages. OPEN: it carries no secret, and
+// every page loads it so re-auth is one shared path rather than a per-page
+// prompt() that only some screens remembered to offer.
+extern const char pairing_js_start[] asm("_binary_pairing_js_start");
+
+static esp_err_t get_pairing_js(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/javascript; charset=utf-8");
+    // Firmware-bound: a reflash can change the script, so do not let a browser
+    // keep an older copy across updates.
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    return httpd_resp_send(req, pairing_js_start, HTTPD_RESP_USE_STRLEN);
+}
+
 esp_err_t pairing_http_register_disclosure(httpd_handle_t server)
 {
     static const httpd_uri_t disclosure = {
         .uri = "/api/pairing-token", .method = HTTP_GET, .handler = get_pairing_token,
     };
+    static const httpd_uri_t script = {
+        .uri = "/pairing.js", .method = HTTP_GET, .handler = get_pairing_js,
+    };
     // PAIRING_OPEN, and this is the one route where that needs explaining:
     // requiring the token to read the token is the chicken-and-egg. What gates
     // it is the physical button, checked inside the handler, plus the window
-    // closing itself.
-    return pairing_http_register(server, &disclosure, PAIRING_OPEN);
+    // closing itself after one successful retrieval (or on timeout).
+    esp_err_t err = pairing_http_register(server, &disclosure, PAIRING_OPEN);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return pairing_http_register(server, &script, PAIRING_OPEN);
 }

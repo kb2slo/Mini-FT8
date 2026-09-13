@@ -20,8 +20,16 @@
 #include "host_link.h"
 #include "mdns.h"
 #include "pairing_http.h"
+#include "web_page.h"
 
 static const char *TAG = "wifi_prov";
+
+// Embedded by EMBED_TXTFILES (see main/CMakeLists.txt) so the pages stay real
+// .html files rather than C string literals.
+extern const char provision_html_start[] asm("_binary_provision_html_start");
+extern const char status_html_start[] asm("_binary_status_html_start");
+extern const char saved_html_start[] asm("_binary_saved_html_start");
+extern const char error_html_start[] asm("_binary_error_html_start");
 
 #define NVS_NAMESPACE "sidekick"
 #define NVS_KEY_SSID  "wifi_ssid"
@@ -216,18 +224,6 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     }
 }
 
-// ---------------------------------------------------------------------------
-// Provisioning page
-// ---------------------------------------------------------------------------
-
-// Declare the encoding rather than letting the browser guess. Without it a
-// browser falls back to Latin-1 and every multi-byte character arrives as
-// mojibake -- the ellipsis in the "Forgotten" page rendered as "a<TM>|".
-// Our own em dashes are the visible symptom; the case that matters is that
-// SSIDs are not ASCII-only, and the scan list renders whatever the neighbours
-// have named their networks straight into the dropdown.
-#define HTML_UTF8 "text/html; charset=utf-8"
-
 // Scan results are rendered into the form rather than fetched by script: no
 // JS means no second request, no JSON parser on the device, and it still works
 // in whatever browser a phone opens a captive portal in.
@@ -248,29 +244,6 @@ static int  s_scan_count;
 // HTML-escape into `out`. An SSID is arbitrary bytes chosen by someone else;
 // dropping it into a page unescaped is how a neighbour's network name becomes
 // script running on the operator's phone.
-static void html_escape(const char *in, char *out, size_t out_len)
-{
-    size_t w = 0;
-    for (const char *r = in; *r && w + 7 < out_len; ++r) {
-        const char *rep = NULL;
-        switch (*r) {
-        case '&':  rep = "&amp;";  break;
-        case '<':  rep = "&lt;";   break;
-        case '>':  rep = "&gt;";   break;
-        case '"':  rep = "&quot;"; break;
-        case '\'': rep = "&#39;";  break;
-        default: break;
-        }
-        if (rep) {
-            size_t n = strlen(rep);
-            memcpy(out + w, rep, n);
-            w += n;
-        } else {
-            out[w++] = *r;
-        }
-    }
-    out[w] = '\0';
-}
 
 // Renders <option> rows for the networks in range, strongest first (the
 // driver already sorts by RSSI). Returns the number found; 0 means the
@@ -308,7 +281,9 @@ static int render_scan_options(char *out, size_t out_len)
             continue;
         }
         char esc[SSID_MAX * 6 + 1];
-        html_escape(ssid, esc, sizeof(esc));
+        if (!web_html_escape(ssid, esc, sizeof(esc))) {
+            continue;  // absurdly long SSID; skip it rather than truncate markup
+        }
         int n = snprintf(out + w, out_len - w,
                          "<option value=\"%s\">%s%s</option>",
                          esc, esc, records[i].authmode == WIFI_AUTH_OPEN ? " (open)" : "");
@@ -327,39 +302,6 @@ static int render_scan_options(char *out, size_t out_len)
 // same string still joins it.
 #define SSID_OTHER "__other__"
 
-// The manual field is revealed rather than always shown: it was previously a
-// second always-visible box next to the dropdown, which made the form ask two
-// questions where the operator only has one answer. The <noscript> block keeps
-// it reachable if the captive-portal webview has scripting off -- without that
-// fallback, a browser with no JS could never enter a hidden network.
-static const char kFormOtherBox[] =
-    "<div id=oth hidden>"
-    "<label style='font-size:.85rem'>Network name</label>"
-    "<input id=othname name=ssid_manual maxlength=32></div>"
-    "<noscript><style>#oth{display:block!important}</style></noscript>";
-
-static const char kFormPage[] =
-    "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>Mini-FT8 sidekick</title>"
-    "<style>body{font-family:system-ui;margin:2rem auto;max-width:22rem;padding:0 1rem}"
-    "input,select{width:100%;padding:.6rem;margin:.3rem 0 1rem;font-size:1rem}"
-    "button{width:100%;padding:.7rem;font-size:1rem}</style>"
-    "<h2>Mini-FT8 sidekick</h2>"
-    "<p>Join this device to your WiFi. <b>2.4 GHz only</b> — this radio cannot see "
-    "5 GHz networks. An iPhone Personal Hotspot needs <i>Maximize Compatibility</i> "
-    "switched on before it will appear.</p>"
-    "<form method=POST action=/provision>";
-
-// Tail of the page, after the scan results are spliced in. The manual field
-// stays: a hidden SSID will not appear in a scan, and a network can be out of
-// range at provisioning time but present later.
-static const char kFormTail[] =
-    "<label>Password</label><input name=pass type=password maxlength=63>"
-    "<button>Save and join</button></form>"
-    "<p style='font-size:.85rem;color:#666'><a href='/rescan'>Scan again</a> "
-    "if your network is missing. This may briefly drop your phone's connection "
-    "to the sidekick.</p>";
-
 // Our own error response instead of httpd_resp_send_err(), which hardcodes
 // Content-Type: text/html with no charset -- the same Latin-1 guess that
 // mangled the pages above -- and is not overridable, because it sets the type
@@ -374,19 +316,10 @@ static const char kFormTail[] =
 static esp_err_t send_error(httpd_req_t *req, const char *status, const char *msg)
 {
     httpd_resp_set_status(req, status);
-    httpd_resp_set_type(req, HTML_UTF8);
-    char page[512];
-    snprintf(page, sizeof(page),
-             "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-             "<title>Mini-FT8 sidekick</title>"
-             "<body style='font-family:system-ui;margin:2rem auto;max-width:22rem;padding:0 1rem'>"
-             "<h2>Not saved</h2><p>%s</p><p><a href='/'>Back to the form</a></p>", msg);
-    httpd_resp_sendstr(req, page);
+    const web_sub_t subs[] = {{.key = "message", .value = msg}};
+    web_page_send(req, error_html_start, subs, 1);
     return ESP_FAIL;
 }
-
-static const char kManualOnly[] =
-    "<label>Network</label><input name=ssid maxlength=32 required autofocus>";
 
 // Minimal application/x-www-form-urlencoded field extractor. httpd_query_key_value
 // works on this encoding and handles the key matching; the only thing it leaves
@@ -442,36 +375,45 @@ static esp_err_t get_rescan(httpd_req_t *req)
 
 static esp_err_t get_form(httpd_req_t *req)
 {
-    const int found = s_scan_count;
-    const char *options = s_scan_options;
+    // Static rather than automatic: the options alone are SCAN_BUF_LEN, and
+    // the httpd task's stack is 4 KB. Safe because esp_http_server serves from
+    // a single task, which is also what lets s_scan_options be shared.
+    static char networks[SCAN_BUF_LEN + 384];
+    char failure[256] = "";
 
-    httpd_resp_set_type(req, HTML_UTF8);
-    httpd_resp_sendstr_chunk(req, kFormPage);
     if (s_last_disconnect_reason != 0) {
-        char why[160];
-        snprintf(why, sizeof(why),
-                 "<p style='background:#fee;padding:.6rem;border-radius:.3rem'>"
-                 "Last attempt failed: %s.</p>",
-                 disconnect_reason_text(s_last_disconnect_reason));
-        httpd_resp_sendstr_chunk(req, why);
+        char why[192];
+        if (web_html_escape(disconnect_reason_text(s_last_disconnect_reason), why, sizeof(why))) {
+            snprintf(failure, sizeof(failure), "<p class=failure>Last attempt failed: %s.</p>", why);
+        }
     }
-    if (found > 0) {
-        httpd_resp_sendstr_chunk(req,
-            "<label>Network</label><select name=ssid required autofocus "
-            "onchange=\"var b=document.getElementById('oth');"
-            "b.hidden=this.value!='" SSID_OTHER "';"
-            "if(!b.hidden)document.getElementById('othname').focus()\">");
-        httpd_resp_sendstr_chunk(req, options);
-        // Escape hatch for hidden or out-of-range networks, last in the list
-        // because it is the exception.
-        httpd_resp_sendstr_chunk(req,
-            "<option value=\"" SSID_OTHER "\">Other…</option></select>");
-        httpd_resp_sendstr_chunk(req, kFormOtherBox);
+
+    if (s_scan_count > 0) {
+        // The Other… entry is last in the list because it is the exception:
+        // an escape hatch for hidden or out-of-range networks.
+        snprintf(networks, sizeof(networks),
+                 "<label>Network</label><select name=ssid required autofocus "
+                 "onchange=\"var b=document.getElementById('oth');"
+                 "b.hidden=this.value!='" SSID_OTHER "';"
+                 "if(!b.hidden)document.getElementById('othname').focus()\">"
+                 "%s"
+                 "<option value=\"" SSID_OTHER "\">Other…</option></select>",
+                 s_scan_options);
     } else {
-        httpd_resp_sendstr_chunk(req, kManualOnly);
+        // No scan results: a plain text field, since an empty dropdown would
+        // offer the operator a choice of nothing.
+        snprintf(networks, sizeof(networks),
+                 "<label>Network</label><input name=ssid maxlength=32 required autofocus>");
     }
-    httpd_resp_sendstr_chunk(req, kFormTail);
-    return httpd_resp_sendstr_chunk(req, NULL);  // end of response
+
+    // Both are markup assembled here, not operator or scan text: the failure
+    // reason is escaped just above, and each SSID in the options is escaped as
+    // it is rendered.
+    const web_sub_t subs[] = {
+        {.key = "failure",  .value = failure,  .already_html = true},
+        {.key = "networks", .value = networks, .already_html = true},
+    };
+    return web_page_send(req, provision_html_start, subs, 2);
 }
 
 static esp_err_t post_provision(httpd_req_t *req)
@@ -528,12 +470,7 @@ static esp_err_t post_provision(httpd_req_t *req)
     // Answer before rebooting: the phone is on our AP, and the AP goes away
     // the moment we switch to station mode. Telling the operator what will
     // happen is the difference between "it worked" and "it hung".
-    httpd_resp_set_type(req, HTML_UTF8);
-    httpd_resp_sendstr(req,
-        "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>Saved</title><body style='font-family:system-ui;margin:2rem'>"
-        "<h2>Saved</h2><p>The sidekick is restarting to join that network. "
-        "This access point will disappear — reconnect your phone to your own WiFi.</p>");
+    web_page_send(req, saved_html_start, NULL, 0);
 
     // Restart rather than switching mode in place: a clean boot re-runs the
     // stored-credentials path, so there is one join path to get right instead
@@ -646,46 +583,22 @@ static esp_err_t get_status(httpd_req_t *req)
     }
     const esp_app_desc_t *desc = esp_app_get_description();
 
-    char page[2048];
-    snprintf(page, sizeof(page),
-        "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>Mini-FT8 sidekick</title>"
-        "<style>body{font-family:system-ui;margin:2rem auto;max-width:22rem;padding:0 1rem}"
-        "dt{color:#666;font-size:.8rem;margin-top:.7rem}dd{margin:0;font-size:1rem}"
-        "button{width:100%%;padding:.7rem;font-size:1rem;margin-top:1.5rem}</style>"
-        "<h2>Mini-FT8 sidekick</h2>"
-        "<dl>"
-        "<dt>Network</dt><dd>%s</dd>"
-        "<dt>Address</dt><dd>" IPSTR "</dd>"
-        "<dt>Firmware</dt><dd>%s</dd>"
-        "<dt>Uptime</dt><dd>%lld s</dd>"
-        "</dl>"
-        "<p><a href=\"/log\">Host log and decodes &rarr;</a></p>"
-        // Forget is a guarded write, so it cannot stay a plain form: a form
-        // cannot set the token header, and checking a `token=` body field
-        // would mean reading the body before the handler does (see
-        // pairing_token.h). A prompt() is a placeholder for the real app's
-        // pairing screen (I28d) -- crude, but it keeps this page usable
-        // without a second UI to maintain.
-        "<button id=f>Forget WiFi</button><p id=m></p>"
-        "<script>var K='minift8_token';"
-        "function tok(){var t=localStorage.getItem(K);"
-        "if(!t){t=prompt('Pairing token. Press the sidekick button, then open /api/pairing-token');"
-        "if(t){localStorage.setItem(K,t.trim())}}return t?t.trim():''}"
-        "document.getElementById('f').onclick=async function(){"
-        "if(!confirm('Forget this network and restart into setup?'))return;"
-        "var r=await fetch('/forget',{method:'POST',headers:{'X-MiniFT8-Token':tok()}});"
-        "if(r.status==401){localStorage.removeItem(K);"
-        "document.getElementById('m').textContent='Pairing required, or that token was wrong.'}"
-        "else{document.body.innerHTML='<h2>Forgotten</h2>"
-        "<p>Restarting into setup. Look for the <b>MiniFT8-SK-&hellip;</b> network.</p>'}}"
-        "</script>",
-        s_ssid[0] ? s_ssid : "(unknown)", IP2STR(&ip.ip),
-        desc ? desc->version : "?",
-        (long long)(esp_timer_get_time() / 1000000));
+    char ip_text[16];
+    snprintf(ip_text, sizeof(ip_text), IPSTR, IP2STR(&ip.ip));
+    char uptime[24];
+    snprintf(uptime, sizeof(uptime), "%lld", (long long)(esp_timer_get_time() / 1000000));
 
-    httpd_resp_set_type(req, HTML_UTF8);
-    return httpd_resp_send(req, page, HTTPD_RESP_USE_STRLEN);
+    // The SSID escapes, and that is the point rather than a formality: it is
+    // whatever a nearby access point broadcast, picked from the scan list, and
+    // this origin holds the pairing token in localStorage. A network named
+    // with a <script> tag used to execute here.
+    const web_sub_t subs[] = {
+        {.key = "ssid",    .value = s_ssid[0] ? s_ssid : "(unknown)"},
+        {.key = "ip",      .value = ip_text},
+        {.key = "version", .value = desc ? desc->version : "?"},
+        {.key = "uptime",  .value = uptime},
+    };
+    return web_page_send(req, status_html_start, subs, 4);
 }
 
 static esp_err_t post_forget(httpd_req_t *req)

@@ -91,6 +91,7 @@ const ProtocolConfig* g_protocol = &kProtocolFT8;
 #endif
 
 int64_t rtc_now_ms();
+uint32_t rtc_epoch_secs_or_zero();
 
 static void debug_log_line(const std::string& msg);
 //exported symbol (linkable from other .cpp)
@@ -2111,7 +2112,10 @@ static const char* rtc_time_source_suffix() {
 
 static void rtc_update_strings_from_epoch(time_t now) {
   struct tm t;
-  localtime_r(&now, &t);
+  // UTC on purpose: FT8 slots and ADIF dates are UTC, and the browser sends a
+  // UTC epoch. localtime_r would shift the STATUS date/time by the device TZ
+  // (often unset, but not something to depend on).
+  gmtime_r(&now, &t);
   char buf_date[32];
   snprintf(buf_date, sizeof(buf_date), "%04d-%02d-%02d",
            t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
@@ -2120,6 +2124,18 @@ static void rtc_update_strings_from_epoch(time_t now) {
   snprintf(buf_time, sizeof(buf_time), "%02d:%02d:%02d",
            t.tm_hour, t.tm_min, t.tm_sec);
   g_time = buf_time;
+}
+
+// STATUS only redraws Date when rtc_tick sees the string change across a one-
+// second boundary. A browser sync updates g_date in place, so without this the
+// Time line keeps ticking (it changes every second) while Date stays on the
+// pre-sync value until midnight or a full redraw.
+static void rtc_refresh_status_clock_lines() {
+  if (ui_mode != UIMode::STATUS || status_edit_idx != -1) {
+    return;
+  }
+  draw_status_line(4, std::string("Date: ") + g_date, false);
+  draw_status_line(5, std::string("Time: ") + g_time + rtc_time_source_suffix(), false);
 }
 
 static time_t rtc_current_epoch_seconds() {
@@ -2157,7 +2173,7 @@ static bool rtc_set_external_datetime_strings(const external_rtc_datetime_t& dat
 static external_rtc_datetime_t rtc_external_datetime_from_soft() {
   time_t now = rtc_current_epoch_seconds();
   struct tm t;
-  localtime_r(&now, &t);
+  gmtime_r(&now, &t);
 
   external_rtc_datetime_t datetime = {};
   datetime.year = (uint16_t)(t.tm_year + 1900);
@@ -2180,6 +2196,8 @@ static bool rtc_set_from_strings_source(RtcTimeSource source) {
   t.tm_hour = h;
   t.tm_min = m;
   t.tm_sec = s;
+  // Device TZ is unset in normal bring-up, so mktime agrees with the UTC
+  // strings STATUS shows (gmtime_r above). Do not invent a TZ here.
   time_t epoch = mktime(&t);
   if (epoch == (time_t)-1) return false;
   rtc_seed_epoch(epoch, esp_timer_get_time() / 1000, source);
@@ -2214,7 +2232,12 @@ const char* porta_host_set_clock(uint32_t epoch_secs, uint16_t millis) {
   const time_t now = rtc_current_epoch_seconds();
   const long drift = (long)((time_t)epoch_secs - now);
   if (rtc_valid && drift > -2 && drift < 2) {
-    return nullptr;   // already right; accept without touching anything
+    // Soft RTC is already right, but STATUS Date may still show a stale
+    // string from before this source existed -- refresh and repaint.
+    rtc_update_strings_from_epoch(rtc_current_epoch_seconds());
+    g_rtc_time_source = RtcTimeSource::BROWSER;
+    rtc_refresh_status_clock_lines();
+    return nullptr;
   }
 
   rtc_seed_epoch((time_t)epoch_secs,
@@ -2222,6 +2245,7 @@ const char* porta_host_set_clock(uint32_t epoch_secs, uint16_t millis) {
                  RtcTimeSource::BROWSER);
   rtc_sync_to_esp_rtc();
   (void)rtc_write_external_from_soft("browser");
+  rtc_refresh_status_clock_lines();
 
   char line[48];
   snprintf(line, sizeof(line), "Clock set from browser (%+ld s)", drift);
@@ -2343,10 +2367,21 @@ int64_t rtc_now_ms() {
   return (int64_t)rtc_epoch_base * 1000 + (esp_timer_get_time() / 1000 - rtc_ms_start);
 }
 
+// For PORTA event stamps: 0 means "clock unset" so the viewer can show --:--:--
+// instead of a 1970-looking fake. Uses rtc_valid rather than an epoch floor so
+// a just-set browser clock always stamps, and a never-set device never does.
+uint32_t rtc_epoch_secs_or_zero() {
+  if (!rtc_valid) {
+    return 0;
+  }
+  return (uint32_t)(rtc_now_ms() / 1000);
+}
+
 static void rtc_tick() {
   if (!rtc_valid) {
-    rtc_set_from_strings();
-    if (!rtc_valid) return;
+    // Do not seed from the STATUS edit-buffer defaults. A real source
+    // (browser / CTS / GPS / DS3231 / manual Enter on STATUS) must set it.
+    return;
   }
   int64_t now_ms = esp_timer_get_time() / 1000;
   if (now_ms - rtc_last_update >= 1000) {
@@ -4394,8 +4429,11 @@ static void load_station_data() {
 
   autoseq_set_max_retry(g_autoseq_max_retry);
   if (!rtc_init_from_ds3231() && !rtc_init_from_esp_rtc()) {
-    ESP_LOGI(TAG, "No valid DS3231 or ESP RTC time; placeholder until CTS, GPS, or S");
-    rtc_set_from_strings_source(RtcTimeSource::SAVED);
+    // Leave rtc_valid false. The STATUS edit buffers default to
+    // 2025-12-11 / 10:10:00 for typing, but those are not a clock -- seeding
+    // from them made the soft RTC look valid, the log viewer stamped 10:10,
+    // and FT8 would run against a fake date until something real arrived.
+    ESP_LOGI(TAG, "No valid DS3231 or ESP RTC time; waiting for browser, CTS, GPS, or STATUS");
   }
   rebuild_active_bands();
   rebuild_ignore_prefixes();

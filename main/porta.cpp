@@ -15,6 +15,7 @@
 // the control direction reaches. The setter returns nullptr on success or a
 // short reason for the operator's log.
 int64_t rtc_now_ms();
+uint32_t rtc_epoch_secs_or_zero();
 const char* porta_host_set_clock(uint32_t epoch_secs, uint16_t millis);
 #include "porta_proto.h"
 #include "sidekick_flasher.h"
@@ -201,12 +202,7 @@ void handle_frame(const porta_frame_t& f) {
 // and a viewer stamping on arrival would pile a whole slot's decodes onto
 // whatever second they happened to drain.
 uint32_t host_epoch_secs() {
-  const int64_t ms = rtc_now_ms();
-  // Before the clock is set the soft RTC reads as an implausible epoch. Zero
-  // means "unknown" on the wire, which the viewer renders as blank rather than
-  // as a 1970 timestamp that looks like data.
-  const int64_t secs = ms / 1000;
-  return (secs > 1000000000LL) ? (uint32_t)secs : 0u;
+  return rtc_epoch_secs_or_zero();
 }
 
 void porta_emit_log(const char* text) {

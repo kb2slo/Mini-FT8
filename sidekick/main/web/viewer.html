@@ -1,0 +1,120 @@
+<!doctype html>
+<meta charset=utf-8>
+<meta name=viewport content='width=device-width,initial-scale=1'>
+<title>Mini-FT8 host log</title>
+
+<!--
+  The host log and decode stream, served at /log.
+
+  Two details that matter and are easy to miss. `overflow-anchor: none` stops
+  the browser's own scroll anchoring from fighting the same job and producing
+  a jitter neither mechanism intends. And trimming old rows happens only while
+  following: removing from the top while someone is reading history shifts
+  everything under their eyes.
+
+  An unset host clock renders as --:--:-- rather than as a 1970 timestamp or a
+  blank. FT8 will not decode without a synced clock, so "the host does not
+  know what time it is" is diagnostic information, not an absence.
+
+  Pairing is shared: /pairing.js polls for a button press and stores the token.
+  Setting the clock is a write, so it waits on that; watching does not.
+-->
+
+<style>
+html,body{height:100%;margin:0}
+body{display:flex;flex-direction:column;font-family:ui-monospace,monospace;background:#111;color:#ddd;font-size:13px}
+#s{flex:none;color:#888;font-size:11px;padding:.35rem .5rem;border-bottom:1px solid #222}
+#o{flex:1;overflow-y:auto;overflow-anchor:none;padding:.25rem .5rem}
+div.r{padding:.1rem 0;white-space:pre-wrap;word-break:break-word}
+.ts{color:#555}
+.cq{color:#7fd}
+.me{color:#fd7}
+.lg{color:#999}
+</style>
+
+<div id=s>connecting…</div>
+<div id=o></div>
+
+<script src=/pairing.js></script>
+<script>
+let q = 0, o = document.getElementById('o'), s = document.getElementById('s'), follow = true;
+
+function atBottom() { return o.scrollHeight - o.scrollTop - o.clientHeight < 40 }
+
+function stat() {
+  s.textContent = follow ? ('live · ' + q + ' events')
+                         : ('paused · scroll to the bottom to follow · ' + q + ' events')
+}
+o.addEventListener('scroll', function () { follow = atBottom(); stat() });
+
+function hhmmss(t) {
+  if (!t) return '--:--:--';
+  return new Date(t * 1000).toISOString().substr(11, 8)
+}
+
+function row(e) {
+  var d = document.createElement('div'); d.className = 'r';
+  var a = document.createElement('span'); a.className = 'ts'; a.textContent = hhmmss(e.t) + ' ';
+  var b = document.createElement('span');
+  if (e.d) {
+    b.textContent = ((e.snr > 0 ? '+' : '') + e.snr).padStart(3) + ' '
+                  + String(e.hz).padStart(4) + ' '
+                  + (e.dt > 0 ? '+' : '') + e.dt.toFixed(1) + ' ' + e.x;
+    b.className = e.me ? 'me' : (e.cq ? 'cq' : '')
+  } else {
+    b.textContent = '· ' + e.x; b.className = 'lg'
+  }
+  d.appendChild(a); d.appendChild(b); return d
+}
+
+var synced = false;
+async function sync() {
+  if (synced) return;
+  if (!MiniFT8Pairing.getToken()) return;
+  synced = true;
+  // Round-trip halving, the same reasoning NTP uses: the host should be set to
+  // the time at the midpoint of the exchange, not the time we started it. Over
+  // WiFi this is tens of milliseconds against FT8's one-second tolerance, so
+  // it is belt and braces rather than necessity.
+  var t0 = Date.now();
+  try {
+    var r = await MiniFT8Pairing.authFetch('/api/time', {
+      method: 'POST',
+      body: String(t0 + Math.round((Date.now() - t0) / 2))
+    });
+    if (r.status == 401) {
+      synced = false;
+      MiniFT8Pairing.needsReauth();
+      return
+    }
+    var j = await r.json();
+    if (!j.ok) s.textContent = 'clock not set: ' + j.why;
+    else stat();
+  } catch (e) { synced = false }
+}
+
+MiniFT8Pairing.boot({
+  status: s,
+  onPaired: function () { synced = false; sync() }
+});
+
+async function tick() {
+  try {
+    var r = await fetch('/api/events?since=' + q), j = await r.json();
+    if (j.events.length) {
+      var was = atBottom();
+      for (var i = 0; i < j.events.length; i++) o.appendChild(row(j.events[i]));
+      if (was) { o.scrollTop = o.scrollHeight; follow = true }
+      if (follow) { while (o.childNodes.length > 300) o.removeChild(o.firstChild) }
+    }
+    q = j.seq;
+    // Do not overwrite a pairing prompt with "live".
+    if (MiniFT8Pairing.getToken() && s.textContent.indexOf('Press the sidekick') < 0) {
+      stat();
+    }
+    sync()
+  } catch (e) { s.textContent = 'disconnected — retrying' }
+  setTimeout(tick, 1000)
+}
+tick();
+</script>

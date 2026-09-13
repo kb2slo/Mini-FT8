@@ -1,0 +1,72 @@
+<!doctype html>
+<meta name=viewport content='width=device-width,initial-scale=1'>
+<title>Mini-FT8 sidekick</title>
+
+<!--
+  WiFi provisioning, served at / while the AP is up.
+
+  Rendered server-side rather than fetching the scan list as JSON. This is the
+  bootstrap-of-the-bootstrap: it is the only way into a factory device, so
+  making the network list depend on JavaScript plus a fetch would add a failure
+  mode in the one place there is no way to recover from one. The <noscript>
+  block below is there for the same reason.
+
+  {{failure}} is empty unless the last join attempt failed. {{networks}} is the
+  scan result: either a <select> of what was found, or a plain text field when
+  the scan came back empty. Both are built in wifi_prov.c, and the SSIDs inside
+  are escaped per item as they are rendered -- an SSID is whatever a nearby
+  access point broadcast, not the operator's own text.
+-->
+
+<style>
+body{font-family:system-ui;margin:2rem auto;max-width:22rem;padding:0 1rem}
+input,select{width:100%;padding:.6rem;margin:.3rem 0 1rem;font-size:1rem}
+button{width:100%;padding:.7rem;font-size:1rem}
+.failure{background:#fee;padding:.6rem;border-radius:.3rem}
+</style>
+
+<h2>Mini-FT8 sidekick</h2>
+
+<p>Join this device to your WiFi. <b>2.4 GHz only</b> — this radio cannot see
+5 GHz networks. An iPhone Personal Hotspot needs <i>Maximize Compatibility</i>
+switched on before it will appear.</p>
+
+{{failure}}
+
+<form method=POST action=/provision>
+
+  {{networks}}
+
+  <!--
+    The manual field stays even when the scan found networks: a hidden SSID
+    will not appear in a scan, and a network can be out of range at
+    provisioning time but present later.
+  -->
+  <div id=oth hidden>
+    <label style='font-size:.85rem'>Network name</label>
+    <input id=othname name=ssid_manual maxlength=32>
+  </div>
+  <!--
+    Revealed by the dropdown's onchange, which toggles the `hidden` attribute.
+    The override needs !important because it has to beat that attribute: a
+    browser with scripting off would otherwise never be able to reach a hidden
+    network's name field.
+  -->
+  <noscript><style>#oth{display:block!important}</style></noscript>
+
+  <label>Password</label>
+  <input name=pass type=password maxlength=63>
+  <button>Save and join</button>
+</form>
+
+<p style='font-size:.85rem;color:#666'>
+  <a href='/rescan'>Scan again</a> if your network is missing. This may briefly
+  drop your phone's connection to the sidekick.
+</p>
+
+<script src=/pairing.js></script>
+<script>
+// Same re-auth path as status/log: a button press while on this page
+// stores the token so the first STA page does not need a second gesture.
+MiniFT8Pairing.boot();
+</script>

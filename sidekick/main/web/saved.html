@@ -1,0 +1,18 @@
+<!doctype html>
+<meta name=viewport content='width=device-width,initial-scale=1'>
+<title>Saved</title>
+
+<!--
+  Sent after credentials are stored, before the restart. Answering first
+  matters: the phone is on our AP and the AP goes away the moment we switch to
+  station mode, so telling the operator what is about to happen is the
+  difference between "it worked" and "it hung".
+-->
+
+<body style='font-family:system-ui;margin:2rem'>
+<h2>Saved</h2>
+<p>The sidekick is restarting to join that network. This access point will
+disappear — reconnect your phone to your own WiFi.</p>
+
+<script src=/pairing.js></script>
+<script>MiniFT8Pairing.boot();</script>

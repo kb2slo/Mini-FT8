@@ -1,0 +1,20 @@
+<!doctype html>
+<meta name=viewport content='width=device-width,initial-scale=1'>
+<title>Mini-FT8 sidekick</title>
+
+<!--
+  Our own error page rather than httpd_resp_send_err(), which hardcodes
+  Content-Type: text/html with no charset -- the Latin-1 guess that mangled
+  these pages before -- and is not overridable, because it sets the type after
+  the handler has run. Error strings are the easiest place for that to go
+  unnoticed: written once, seen rarely, and exactly where a non-ASCII
+  character ends up when the text has something to explain.
+-->
+
+<body style='font-family:system-ui;margin:2rem auto;max-width:22rem;padding:0 1rem'>
+<h2>Not saved</h2>
+<p>{{message}}</p>
+<p><a href='/'>Back to the form</a></p>
+
+<script src=/pairing.js></script>
+<script>MiniFT8Pairing.boot();</script>
