@@ -2275,6 +2275,31 @@ const char* porta_host_set_clock(uint32_t epoch_secs, uint16_t millis) {
   return nullptr;
 }
 
+// Queue a free-text one-shot over the companion link (I28a Done-when). Same
+// path as MENU "Send FreeText", without rewriting the MENU FreeText field —
+// the browser supplies the text for this shot only.
+const char* porta_host_tx_free(const char* text) {
+  if (!text || text[0] == '\0') {
+    return "empty";
+  }
+  const int64_t now_slot = rtc_now_ms() / g_protocol->slot_time_ms;
+  const int fallback_parity = (int)((now_slot + 1) & 1);
+  if (!autoseq_schedule_freetext(text, fallback_parity)) {
+    // Empty was refused above; the other failure is "FT already pending".
+    return "FT already queued";
+  }
+  AutoseqTxEntry pending;
+  if (autoseq_fetch_pending_tx(pending)) {
+    arm_pending_tx(pending);
+  }
+  debug_log_line(std::string("Queued: ") + text);
+  return nullptr;
+}
+
+void porta_host_tx_cancel(void) {
+  request_tx_cancel();
+}
+
 void rtc_sync_to_esp_rtc() {
   if (!rtc_valid) return;
 

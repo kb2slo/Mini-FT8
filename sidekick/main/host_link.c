@@ -151,6 +151,27 @@ static volatile uint8_t s_last_reply_verb;
 static volatile bool s_last_reply_ok;
 static char s_last_reply_reason[PORTA_EVENT_TEXT_MAX + 1];
 
+// Wait briefly for the host's ACK/NAK. One frame over a 115200 link answered
+// from the main loop, so this is milliseconds -- but the browser should be
+// told what happened rather than assuming success.
+static esp_err_t wait_action_reply(httpd_req_t *req, uint8_t verb)
+{
+    for (int i = 0; i < 40 && s_last_reply_verb != verb; ++i) {
+        vTaskDelay(pdMS_TO_TICKS(25));
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    if (s_last_reply_verb != verb) {
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"no reply from host\"}");
+    }
+    if (s_last_reply_ok) {
+        return httpd_resp_sendstr(req, "{\"ok\":true}");
+    }
+    char out[PORTA_EVENT_TEXT_MAX + 32];
+    snprintf(out, sizeof(out), "{\"ok\":false,\"why\":\"%s\"}", s_last_reply_reason);
+    return httpd_resp_sendstr(req, out);
+}
+
 // POST /api/time  body: epoch_ms
 //
 // The browser is the clock source in a headless build -- it is the only device
@@ -179,24 +200,56 @@ static esp_err_t post_time(httpd_req_t *req)
                                                   frame, sizeof(frame));
     s_last_reply_verb = 0;
     uart_write_bytes(PORTA_UART, (const char *)frame, n);
+    return wait_action_reply(req, PORTA_ACT_SET_CLOCK);
+}
 
-    // Wait briefly for the host's answer. It is one frame over a 115200 link
-    // answered from the main loop, so this is milliseconds -- but the browser
-    // should be told what happened rather than assuming success.
-    for (int i = 0; i < 40 && s_last_reply_verb != PORTA_ACT_SET_CLOCK; ++i) {
-        vTaskDelay(pdMS_TO_TICKS(25));
+// POST /api/tx  body: plain free-text (I28a Done-when). Same one-shot path as
+// MENU "Send FreeText". Token required: this keys the transmitter.
+static esp_err_t post_tx(httpd_req_t *req)
+{
+    char body[PORTA_EVENT_TEXT_MAX + 1] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    while (received > 0) {
+        const char c = body[received - 1];
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') {
+            break;
+        }
+        body[--received] = '\0';
+    }
+    if (body[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty");
+        return ESP_FAIL;
     }
 
-    httpd_resp_set_type(req, "application/json");
-    if (s_last_reply_verb != PORTA_ACT_SET_CLOCK) {
-        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"no reply from host\"}");
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_tx_free(body, frame, sizeof(frame));
+    if (n == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty");
+        return ESP_FAIL;
     }
-    if (s_last_reply_ok) {
-        return httpd_resp_sendstr(req, "{\"ok\":true}");
+    s_last_reply_verb = 0;
+    uart_write_bytes(PORTA_UART, (const char *)frame, n);
+    return wait_action_reply(req, PORTA_ACT_TX_FREE);
+}
+
+// POST /api/tx/cancel — abort in-flight TX / clear an armed pending TX.
+static esp_err_t post_tx_cancel(httpd_req_t *req)
+{
+    // Drain any body so a client that POSTs with one does not leave bytes on
+    // the socket for the next request on this keep-alive connection.
+    char discard[64];
+    while (httpd_req_recv(req, discard, sizeof(discard)) > 0) {
     }
-    char out[PORTA_EVENT_TEXT_MAX + 32];
-    snprintf(out, sizeof(out), "{\"ok\":false,\"why\":\"%s\"}", s_last_reply_reason);
-    return httpd_resp_sendstr(req, out);
+
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_tx_cancel(frame, sizeof(frame));
+    s_last_reply_verb = 0;
+    uart_write_bytes(PORTA_UART, (const char *)frame, n);
+    return wait_action_reply(req, PORTA_ACT_TX_CANCEL);
 }
 
 static esp_err_t get_viewer(httpd_req_t *req)
@@ -289,10 +342,30 @@ void host_link_register_uris(httpd_handle_t server)
     static const httpd_uri_t settime = {
         .uri = "/api/time", .method = HTTP_POST, .handler = post_time,
     };
+    static const httpd_uri_t tx = {
+        .uri = "/api/tx", .method = HTTP_POST, .handler = post_tx,
+    };
+    static const httpd_uri_t tx_cancel = {
+        .uri = "/api/tx/cancel", .method = HTTP_POST, .handler = post_tx_cancel,
+    };
     // The viewer and the event feed are reads of radio data: open on
     // principle, since anyone may listen to what is on the air. Setting the
-    // host clock changes the device, so it needs the token.
-    pairing_http_register(server, &viewer, PAIRING_OPEN);
-    pairing_http_register(server, &events, PAIRING_OPEN);
-    pairing_http_register(server, &settime, PAIRING_REQUIRED);
+    // host clock or keying the transmitter changes the device, so those need
+    // the token.
+    const struct {
+        const httpd_uri_t *uri;
+        pairing_policy_t policy;
+    } routes[] = {
+        { &viewer, PAIRING_OPEN },
+        { &events, PAIRING_OPEN },
+        { &settime, PAIRING_REQUIRED },
+        { &tx, PAIRING_REQUIRED },
+        { &tx_cancel, PAIRING_REQUIRED },
+    };
+    for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); ++i) {
+        const esp_err_t err = pairing_http_register(server, routes[i].uri, routes[i].policy);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "register %s failed: %s", routes[i].uri->uri, esp_err_to_name(err));
+        }
+    }
 }

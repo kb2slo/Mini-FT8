@@ -523,6 +523,9 @@ static void httpd_start_provisioning(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
+    // Default is 8; provisioning is under that, but keep the same headroom as
+    // station mode so a new page here does not need a second bump.
+    cfg.max_uri_handlers = 16;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed");
         return;
@@ -616,6 +619,10 @@ static void httpd_start_status(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
+    // Station mode registers status, forget, pairing disclosure + script, and
+    // the host-link viewer/events/time/tx/cancel set — nine handlers. The IDF
+    // default is eight, so cancel was silently dropped (I28a field check).
+    cfg.max_uri_handlers = 16;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed");
         return;

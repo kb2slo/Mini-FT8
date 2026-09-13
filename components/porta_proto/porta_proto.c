@@ -297,6 +297,40 @@ bool porta_proto_parse_set_clock(const porta_frame_t *f, uint32_t *epoch_secs_ou
     return true;
 }
 
+size_t porta_proto_encode_tx_free(const char *text, uint8_t *out, size_t out_cap)
+{
+    if (!text || text[0] == '\0') {
+        return 0;
+    }
+    uint8_t payload[1 + PORTA_EVENT_TEXT_MAX];
+    payload[0] = PORTA_ACT_TX_FREE;
+    size_t n = strnlen(text, PORTA_EVENT_TEXT_MAX);
+    memcpy(&payload[1], text, n);
+    return porta_proto_encode(PORTA_MSG_ACTION, payload, (uint8_t)(1 + n), out, out_cap);
+}
+
+bool porta_proto_parse_tx_free(const porta_frame_t *f, char *text_out)
+{
+    if (!f || !text_out || f->type != PORTA_MSG_ACTION || f->len < 2 ||
+        f->payload[0] != PORTA_ACT_TX_FREE) {
+        return false;
+    }
+    event_text_out(f, 1, text_out, PORTA_EVENT_TEXT_MAX + 1);
+    return text_out[0] != '\0';
+}
+
+size_t porta_proto_encode_tx_cancel(uint8_t *out, size_t out_cap)
+{
+    const uint8_t verb = PORTA_ACT_TX_CANCEL;
+    return porta_proto_encode(PORTA_MSG_ACTION, &verb, 1, out, out_cap);
+}
+
+bool porta_proto_parse_tx_cancel(const porta_frame_t *f)
+{
+    return f && f->type == PORTA_MSG_ACTION && f->len == 1 &&
+           f->payload[0] == PORTA_ACT_TX_CANCEL;
+}
+
 size_t porta_proto_encode_ack(uint8_t verb, uint8_t *out, size_t out_cap)
 {
     return porta_proto_encode(PORTA_MSG_ACK, &verb, 1, out, out_cap);

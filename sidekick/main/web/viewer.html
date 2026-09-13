@@ -20,7 +20,9 @@
   without a page reload.
 
   Pairing is shared: /pairing.js polls for a button press and stores the token.
-  Setting the clock is a write, so it waits on that; watching does not.
+  Setting the clock and keying TX are writes, so they wait on that; watching
+  does not. Free-text TX is the I28a Done-when: same one-shot path as MENU
+  "Send FreeText", over Port A.
 -->
 
 <style>
@@ -28,6 +30,10 @@ html,body{height:100%;margin:0}
 body{display:flex;flex-direction:column;font-family:ui-monospace,monospace;background:#111;color:#ddd;font-size:13px}
 #s{flex:none;color:#888;font-size:11px;padding:.35rem .5rem;border-bottom:1px solid #222}
 #o{flex:1;overflow-y:auto;overflow-anchor:none;padding:.25rem .5rem}
+#tx{flex:none;display:flex;gap:.35rem;padding:.35rem .5rem;border-top:1px solid #222;background:#0a0a0a}
+#tx input{flex:1;min-width:0;background:#1a1a1a;border:1px solid #333;color:#ddd;font:inherit;padding:.3rem .4rem}
+#tx button{background:#222;border:1px solid #444;color:#ddd;font:inherit;padding:.3rem .55rem}
+#tx button:disabled{opacity:.4}
 div.r{padding:.1rem 0;white-space:pre-wrap;word-break:break-word}
 .ts{color:#555}
 .cq{color:#7fd}
@@ -37,10 +43,18 @@ div.r{padding:.1rem 0;white-space:pre-wrap;word-break:break-word}
 
 <div id=s>connecting…</div>
 <div id=o></div>
+<div id=tx>
+  <input id=msg maxlength=64 placeholder='free text…' autocomplete=off>
+  <button type=button id=send>TX</button>
+  <button type=button id=cancel>Cancel</button>
+</div>
 
 <script src=/pairing.js></script>
 <script>
 let q = 0, o = document.getElementById('o'), s = document.getElementById('s'), follow = true;
+var msg = document.getElementById('msg');
+var sendBtn = document.getElementById('send');
+var cancelBtn = document.getElementById('cancel');
 
 function atBottom() { return o.scrollHeight - o.scrollTop - o.clientHeight < 40 }
 
@@ -73,6 +87,14 @@ function row(e) {
 var synced = false;
 var syncInFlight = false;
 var nextSyncAfter = 0;
+var txBusy = false;
+var txStatusUntil = 0;
+
+function setTxBusy(busy) {
+  txBusy = busy;
+  sendBtn.disabled = busy;
+  cancelBtn.disabled = busy;
+}
 
 async function sync() {
   if (synced || syncInFlight) return;
@@ -114,6 +136,50 @@ async function sync() {
   }
 }
 
+async function postTx(url, body) {
+  if (!MiniFT8Pairing.getToken()) {
+    MiniFT8Pairing.needsReauth();
+    return
+  }
+  if (txBusy) return;
+  setTxBusy(true);
+  try {
+    var r = await MiniFT8Pairing.authFetch(url, { method: 'POST', body: body || '' });
+    if (r.status == 401) {
+      MiniFT8Pairing.needsReauth();
+      return
+    }
+    var j = await r.json();
+    if (!j.ok) {
+      s.textContent = 'TX: ' + (j.why || 'failed');
+      txStatusUntil = Date.now() + 4000;
+    } else {
+      txStatusUntil = 0;
+      stat();
+    }
+  } catch (e) {
+    s.textContent = 'TX: no reply';
+    txStatusUntil = Date.now() + 4000;
+  } finally {
+    setTxBusy(false);
+  }
+}
+
+sendBtn.addEventListener('click', function () {
+  var t = msg.value.trim();
+  if (!t) return;
+  postTx('/api/tx', t);
+});
+msg.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    sendBtn.click();
+  }
+});
+cancelBtn.addEventListener('click', function () {
+  postTx('/api/tx/cancel', '');
+});
+
 MiniFT8Pairing.boot({
   status: s,
   onPaired: function () { synced = false; nextSyncAfter = 0; sync() }
@@ -138,9 +204,10 @@ async function tick() {
     // Leave nextSyncAfter alone: after a failed offer (host still booting) the
     // backoff must stand, or a stream of t=0 events would POST every second.
     if (sawUnset) synced = false;
-    // Do not overwrite a pairing prompt or a clock-error line with "live".
+    // Do not overwrite a pairing prompt, clock-error, or brief TX-error line.
     if (MiniFT8Pairing.getToken() && s.textContent.indexOf('Press the sidekick') < 0 &&
-        s.textContent.indexOf('clock not set') < 0) {
+        s.textContent.indexOf('clock not set') < 0 &&
+        Date.now() >= txStatusUntil) {
       stat();
     }
     sync()

@@ -216,6 +216,8 @@ bool porta_proto_parse_decode(const porta_frame_t *f, porta_decode_event_t *out)
 
 typedef enum {
     PORTA_ACT_SET_CLOCK = 0x01,  // epoch seconds + milliseconds
+    PORTA_ACT_TX_FREE   = 0x02,  // free-text one-shot for the next matching slot
+    PORTA_ACT_TX_CANCEL = 0x03,  // abort in-flight / clear armed TX
 } porta_action_verb_t;
 
 // The browser is the clock source in a headless build: it is the only device
@@ -226,6 +228,16 @@ size_t porta_proto_encode_set_clock(uint32_t epoch_secs, uint16_t millis,
                                     uint8_t *out, size_t out_cap);
 bool porta_proto_parse_set_clock(const porta_frame_t *f, uint32_t *epoch_secs_out,
                                  uint16_t *millis_out);
+
+// Queue a free-text transmission the same way MENU "Send FreeText" does: one
+// shot, inherits slot parity from the autoseq head (or the next slot). Text
+// runs to the end of the frame; empty is refused at encode.
+size_t porta_proto_encode_tx_free(const char *text, uint8_t *out, size_t out_cap);
+bool porta_proto_parse_tx_free(const porta_frame_t *f, char *text_out);
+
+// Cancel: verb only.
+size_t porta_proto_encode_tx_cancel(uint8_t *out, size_t out_cap);
+bool porta_proto_parse_tx_cancel(const porta_frame_t *f);
 
 size_t porta_proto_encode_ack(uint8_t verb, uint8_t *out, size_t out_cap);
 

@@ -11,12 +11,14 @@
 #include "freertos/task.h"
 #include "main_services.h"
 
-// Both defined in main.cpp: the clock this stamps events with, and the setter
-// the control direction reaches. The setter returns nullptr on success or a
-// short reason for the operator's log.
+// Defined in main.cpp: the clock this stamps events with, and the control
+// actions the sidekick can request. Setters return nullptr on success or a
+// short reason for the operator's log / NAK.
 int64_t rtc_now_ms();
 uint32_t rtc_epoch_secs_or_zero();
 const char* porta_host_set_clock(uint32_t epoch_secs, uint16_t millis);
+const char* porta_host_tx_free(const char* text);
+void porta_host_tx_cancel(void);
 #include "porta_proto.h"
 #include "sidekick_flasher.h"
 
@@ -167,7 +169,8 @@ void handle_action(const porta_frame_t& f) {
   uint8_t buf[PORTA_PROTO_MAX_FRAME];
   const uint8_t verb = f.payload[0];
 
-  if (verb == PORTA_ACT_SET_CLOCK) {
+  switch (verb) {
+  case PORTA_ACT_SET_CLOCK: {
     uint32_t secs = 0;
     uint16_t ms = 0;
     if (!porta_proto_parse_set_clock(&f, &secs, &ms)) {
@@ -182,8 +185,33 @@ void handle_action(const porta_frame_t& f) {
     }
     return;
   }
-
-  enqueue(buf, porta_proto_encode_nak(verb, "unknown action", buf, sizeof(buf)));
+  case PORTA_ACT_TX_FREE: {
+    char text[PORTA_EVENT_TEXT_MAX + 1];
+    if (!porta_proto_parse_tx_free(&f, text)) {
+      enqueue(buf, porta_proto_encode_nak(verb, "malformed", buf, sizeof(buf)));
+      return;
+    }
+    const char* why = porta_host_tx_free(text);
+    if (why) {
+      enqueue(buf, porta_proto_encode_nak(verb, why, buf, sizeof(buf)));
+    } else {
+      enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+    }
+    return;
+  }
+  case PORTA_ACT_TX_CANCEL: {
+    if (!porta_proto_parse_tx_cancel(&f)) {
+      enqueue(buf, porta_proto_encode_nak(verb, "malformed", buf, sizeof(buf)));
+      return;
+    }
+    porta_host_tx_cancel();
+    enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+    return;
+  }
+  default:
+    enqueue(buf, porta_proto_encode_nak(verb, "unknown action", buf, sizeof(buf)));
+    return;
+  }
 }
 
 void handle_frame(const porta_frame_t& f) {

@@ -407,6 +407,51 @@ static void test_action_set_clock()
     check(!porta_proto_parse_set_clock(&stub, &secs, nullptr), "a short set_clock is refused");
 }
 
+static void test_action_tx_free_and_cancel()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    size_t n = porta_proto_encode_tx_free("CQ KB2SLO FN30", buf, sizeof(buf));
+    check(n > 0, "tx_free encodes");
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "tx_free decodes");
+    if (got.size() == 1) {
+        char text[PORTA_EVENT_TEXT_MAX + 1] = {};
+        check(porta_proto_parse_tx_free(&got[0], text), "tx_free parses");
+        check(std::string(text) == "CQ KB2SLO FN30", "tx_free text round-trips");
+        check(!porta_proto_parse_tx_cancel(&got[0]), "tx_free is not cancel");
+        check(!porta_proto_parse_set_clock(&got[0], nullptr, nullptr), "tx_free is not set_clock");
+    }
+
+    check(porta_proto_encode_tx_free("", buf, sizeof(buf)) == 0, "empty tx_free is refused at encode");
+    check(porta_proto_encode_tx_free(nullptr, buf, sizeof(buf)) == 0, "null tx_free is refused");
+
+    // Longer than the field is truncated rather than rejected: the frame length
+    // is the source of truth, and FT8 will NAK at the host if encode fails.
+    std::string long_text(PORTA_EVENT_TEXT_MAX + 8, 'A');
+    porta_decoder_init(&d);
+    n = porta_proto_encode_tx_free(long_text.c_str(), buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "an overlong tx_free still frames");
+    if (got.size() == 1) {
+        char text[PORTA_EVENT_TEXT_MAX + 1] = {};
+        check(porta_proto_parse_tx_free(&got[0], text), "overlong tx_free parses");
+        check(std::strlen(text) == PORTA_EVENT_TEXT_MAX, "overlong text is capped to the field");
+    }
+
+    porta_decoder_init(&d);
+    n = porta_proto_encode_tx_cancel(buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1 && got[0].len == 1, "tx_cancel is verb-only");
+    if (got.size() == 1) {
+        check(porta_proto_parse_tx_cancel(&got[0]), "tx_cancel parses");
+        char text[PORTA_EVENT_TEXT_MAX + 1] = {};
+        check(!porta_proto_parse_tx_free(&got[0], text), "tx_cancel is not tx_free");
+    }
+}
+
 static void test_ack_and_nak()
 {
     porta_decoder_t d;
@@ -461,6 +506,7 @@ int main()
     test_unset_clock_round_trips();
     test_decode_event();
     test_action_set_clock();
+    test_action_tx_free_and_cancel();
     test_ack_and_nak();
 
     if (g_fail) {
