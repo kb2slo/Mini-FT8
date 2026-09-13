@@ -14,7 +14,10 @@
 
   An unset host clock renders as --:--:-- rather than as a 1970 timestamp or a
   blank. FT8 will not decode without a synced clock, so "the host does not
-  know what time it is" is diagnostic information, not an absence.
+  know what time it is" is diagnostic information, not an absence. A fresh
+  event with t=0 after we had already synced means the ADV rebooted and lost
+  time — clear the synced flag so the next poll offers the browser clock again
+  without a page reload.
 
   Pairing is shared: /pairing.js polls for a button press and stores the token.
   Setting the clock is a write, so it waits on that; watching does not.
@@ -68,10 +71,14 @@ function row(e) {
 }
 
 var synced = false;
+var syncInFlight = false;
+var nextSyncAfter = 0;
+
 async function sync() {
-  if (synced) return;
+  if (synced || syncInFlight) return;
   if (!MiniFT8Pairing.getToken()) return;
-  synced = true;
+  if (Date.now() < nextSyncAfter) return;
+  syncInFlight = true;
   // Round-trip halving, the same reasoning NTP uses: the host should be set to
   // the time at the midpoint of the exchange, not the time we started it. Over
   // WiFi this is tens of milliseconds against FT8's one-second tolerance, so
@@ -88,28 +95,52 @@ async function sync() {
       return
     }
     var j = await r.json();
-    if (!j.ok) s.textContent = 'clock not set: ' + j.why;
-    else stat();
-  } catch (e) { synced = false }
+    if (!j.ok) {
+      // Host still coming up after a reboot, or PORTA not ready — retry with
+      // a short backoff rather than locking synced and waiting for a refresh.
+      synced = false;
+      nextSyncAfter = Date.now() + 3000;
+      s.textContent = 'clock not set: ' + j.why;
+    } else {
+      synced = true;
+      nextSyncAfter = 0;
+      stat();
+    }
+  } catch (e) {
+    synced = false;
+    nextSyncAfter = Date.now() + 3000;
+  } finally {
+    syncInFlight = false;
+  }
 }
 
 MiniFT8Pairing.boot({
   status: s,
-  onPaired: function () { synced = false; sync() }
+  onPaired: function () { synced = false; nextSyncAfter = 0; sync() }
 });
 
 async function tick() {
   try {
     var r = await fetch('/api/events?since=' + q), j = await r.json();
+    var sawUnset = false;
     if (j.events.length) {
       var was = atBottom();
-      for (var i = 0; i < j.events.length; i++) o.appendChild(row(j.events[i]));
+      for (var i = 0; i < j.events.length; i++) {
+        if (!j.events[i].t) sawUnset = true;
+        o.appendChild(row(j.events[i]));
+      }
       if (was) { o.scrollTop = o.scrollHeight; follow = true }
       if (follow) { while (o.childNodes.length > 300) o.removeChild(o.firstChild) }
     }
     q = j.seq;
-    // Do not overwrite a pairing prompt with "live".
-    if (MiniFT8Pairing.getToken() && s.textContent.indexOf('Press the sidekick') < 0) {
+    // A new event with no timestamp means the host clock is unset — typically
+    // an ADV reboot. Drop the one-shot sync latch so we offer time again.
+    // Leave nextSyncAfter alone: after a failed offer (host still booting) the
+    // backoff must stand, or a stream of t=0 events would POST every second.
+    if (sawUnset) synced = false;
+    // Do not overwrite a pairing prompt or a clock-error line with "live".
+    if (MiniFT8Pairing.getToken() && s.textContent.indexOf('Press the sidekick') < 0 &&
+        s.textContent.indexOf('clock not set') < 0) {
       stat();
     }
     sync()
