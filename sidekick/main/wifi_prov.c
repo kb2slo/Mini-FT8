@@ -19,6 +19,7 @@
 #include "dns_server.h"
 #include "host_link.h"
 #include "mdns.h"
+#include "pairing_http.h"
 
 static const char *TAG = "wifi_prov";
 
@@ -598,9 +599,15 @@ static void httpd_start_provisioning(void)
     static const httpd_uri_t rescan = {
         .uri = "/rescan", .method = HTTP_GET, .handler = get_rescan,
     };
-    httpd_register_uri_handler(s_httpd, &form);
-    httpd_register_uri_handler(s_httpd, &rescan);
-    httpd_register_uri_handler(s_httpd, &provision);
+    // All three are open, and provisioning is the one place that has no
+    // choice: this is where the token is minted, so requiring one would be the
+    // chicken-and-egg. What stands in for authorization is that the AP only
+    // exists while the device has no working network, and reaching it means
+    // being in radio range.
+    pairing_http_register(s_httpd, &form, PAIRING_OPEN);
+    pairing_http_register(s_httpd, &rescan, PAIRING_OPEN);
+    pairing_http_register(s_httpd, &provision, PAIRING_OPEN);
+    pairing_http_register_disclosure(s_httpd);
     httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, redirect_to_form);
 }
 
@@ -639,7 +646,7 @@ static esp_err_t get_status(httpd_req_t *req)
     }
     const esp_app_desc_t *desc = esp_app_get_description();
 
-    char page[1024];
+    char page[2048];
     snprintf(page, sizeof(page),
         "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
         "<title>Mini-FT8 sidekick</title>"
@@ -654,9 +661,25 @@ static esp_err_t get_status(httpd_req_t *req)
         "<dt>Uptime</dt><dd>%lld s</dd>"
         "</dl>"
         "<p><a href=\"/log\">Host log and decodes &rarr;</a></p>"
-        "<form method=POST action=/forget "
-        "onsubmit=\"return confirm('Forget this network and restart into setup?')\">"
-        "<button>Forget WiFi</button></form>",
+        // Forget is a guarded write, so it cannot stay a plain form: a form
+        // cannot set the token header, and checking a `token=` body field
+        // would mean reading the body before the handler does (see
+        // pairing_token.h). A prompt() is a placeholder for the real app's
+        // pairing screen (I28d) -- crude, but it keeps this page usable
+        // without a second UI to maintain.
+        "<button id=f>Forget WiFi</button><p id=m></p>"
+        "<script>var K='minift8_token';"
+        "function tok(){var t=localStorage.getItem(K);"
+        "if(!t){t=prompt('Pairing token. Press the sidekick button, then open /api/pairing-token');"
+        "if(t){localStorage.setItem(K,t.trim())}}return t?t.trim():''}"
+        "document.getElementById('f').onclick=async function(){"
+        "if(!confirm('Forget this network and restart into setup?'))return;"
+        "var r=await fetch('/forget',{method:'POST',headers:{'X-MiniFT8-Token':tok()}});"
+        "if(r.status==401){localStorage.removeItem(K);"
+        "document.getElementById('m').textContent='Pairing required, or that token was wrong.'}"
+        "else{document.body.innerHTML='<h2>Forgotten</h2>"
+        "<p>Restarting into setup. Look for the <b>MiniFT8-SK-&hellip;</b> network.</p>'}}"
+        "</script>",
         s_ssid[0] ? s_ssid : "(unknown)", IP2STR(&ip.ip),
         desc ? desc->version : "?",
         (long long)(esp_timer_get_time() / 1000000));
@@ -667,12 +690,10 @@ static esp_err_t get_status(httpd_req_t *req)
 
 static esp_err_t post_forget(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, HTML_UTF8);
-    httpd_resp_sendstr(req,
-        "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>Forgotten</title><body style='font-family:system-ui;margin:2rem'>"
-        "<h2>Forgotten</h2><p>Restarting into setup. Look for the "
-        "<b>MiniFT8-SK-…</b> network.</p>");
+    // Called by fetch() now rather than a form submit, so the page draws its
+    // own confirmation and this only has to answer before the restart.
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"ok\":true}");
     vTaskDelay(pdMS_TO_TICKS(500));
     wifi_prov_forget_and_restart();
     return ESP_OK;  // not reached
@@ -692,8 +713,12 @@ static void httpd_start_status(void)
     static const httpd_uri_t forget = {
         .uri = "/forget", .method = HTTP_POST, .handler = post_forget,
     };
-    httpd_register_uri_handler(s_httpd, &status);
-    httpd_register_uri_handler(s_httpd, &forget);
+    // The status page is a read of radio state, open on principle. Forget
+    // erases the credentials and strands the device, so it is the clearest
+    // case of a write the licensee should have to authorize.
+    pairing_http_register(s_httpd, &status, PAIRING_OPEN);
+    pairing_http_register(s_httpd, &forget, PAIRING_REQUIRED);
+    pairing_http_register_disclosure(s_httpd);
     // Only in station mode: the viewer is for watching a working radio, and the
     // provisioning AP exists precisely because there is not one yet.
     host_link_register_uris(s_httpd);
@@ -798,6 +823,14 @@ void wifi_prov_start(void)
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
+
+    // After NVS and before any route is registered: the token is read from
+    // NVS, and pairing_http_register() is what installs the guard. Not
+    // ESP_ERROR_CHECK'd -- a sidekick that cannot mint a token should still
+    // come up serving decodes, which are open anyway, and refuse writes.
+    if (pairing_http_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Pairing unavailable — every guarded route will refuse");
+    }
 
     s_events = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());

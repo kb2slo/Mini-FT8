@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "pairing_http.h"
 #include "porta_proto.h"
 
 #define PORTA_UART UART_NUM_1
@@ -190,8 +191,14 @@ static const char kViewerPage[] =
     // Over WiFi this is tens of milliseconds against FT8's one-second
     // tolerance, so it is belt and braces rather than necessity.
     "var t0=Date.now();"
+    // Setting the clock is a write, so it carries the pairing token while
+    // watching does not. An unpaired browser sees everything and changes
+    // nothing, which is the whole of RFC 0004 §7 in one request.
     "try{var r=await fetch('/api/time',{method:'POST',"
+    "headers:{'X-MiniFT8-Token':localStorage.getItem('minift8_token')||''},"
     "body:String(t0+Math.round((Date.now()-t0)/2))});"
+    "if(r.status==401){s.textContent="
+    "'clock not set \xE2\x80\x94 unpaired (button, then /api/pairing-token)';return}"
     "var j=await r.json();"
     "if(!j.ok)s.textContent='clock not set: '+j.why;}"
     "catch(e){synced=false}}"
@@ -348,7 +355,10 @@ void host_link_register_uris(httpd_handle_t server)
     static const httpd_uri_t settime = {
         .uri = "/api/time", .method = HTTP_POST, .handler = post_time,
     };
-    httpd_register_uri_handler(server, &viewer);
-    httpd_register_uri_handler(server, &events);
-    httpd_register_uri_handler(server, &settime);
+    // The viewer and the event feed are reads of radio data: open on
+    // principle, since anyone may listen to what is on the air. Setting the
+    // host clock changes the device, so it needs the token.
+    pairing_http_register(server, &viewer, PAIRING_OPEN);
+    pairing_http_register(server, &events, PAIRING_OPEN);
+    pairing_http_register(server, &settime, PAIRING_REQUIRED);
 }

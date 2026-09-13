@@ -10,7 +10,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "esp_timer.h"
+
 #include "host_link.h"
+#include "pairing_http.h"
 #include "porta_proto.h"
 #include "wifi_prov.h"
 
@@ -126,6 +129,55 @@ static void mark_valid_once_beaconing(uint32_t beacons_sent)
     }
 }
 
+// The AtomS3 Lite's user button -- the one that is not reset. GPIO41, read
+// active low against the board's own pull-up: taken from the M5Unified this
+// repo vendors, which configures it as plain input (not input_pullup) for
+// board_M5AtomS3Lite and reads it inverted, rather than guessed from a
+// pinout drawing.
+#define BUTTON_PIN         GPIO_NUM_41
+#define BUTTON_DEBOUNCE_US 250000
+
+static volatile bool s_button_pressed;
+
+// The edge is caught in an ISR and consumed by the loop below, because that
+// loop ticks once a second and would miss most presses. The work itself is
+// deferred rather than done here: pairing_http_open_disclosure() arms an
+// esp_timer, and esp_timer_start_once() is not safe to call from an ISR.
+static void button_isr(void *arg)
+{
+    (void)arg;
+    static int64_t last_us;
+    const int64_t  now_us = esp_timer_get_time();
+    if (now_us - last_us < BUTTON_DEBOUNCE_US) {
+        return;
+    }
+    last_us          = now_us;
+    s_button_pressed = true;
+}
+
+static void button_init(void)
+{
+    const gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << BUTTON_PIN,
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_NEGEDGE,
+    };
+    if (gpio_config(&cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "Button config failed — pairing token cannot be read");
+        return;
+    }
+    const esp_err_t err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Button ISR service failed — pairing token cannot be read");
+        return;
+    }
+    if (gpio_isr_handler_add(BUTTON_PIN, button_isr, NULL) != ESP_OK) {
+        ESP_LOGE(TAG, "Button ISR attach failed — pairing token cannot be read");
+    }
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Mini-FT8 sidekick booting (IDF %s)", esp_get_idf_version());
@@ -136,6 +188,9 @@ void app_main(void)
     porta_beacon_init();
     host_link_start();
     wifi_prov_start();
+    // After wifi_prov_start(), which is what initialises NVS and mints the
+    // token; a press before there is a token to disclose would do nothing.
+    button_init();
 
     if (wifi_prov_is_online()) {
         ESP_LOGI(TAG, "WiFi: online on '%s'", wifi_prov_ssid());
@@ -149,6 +204,10 @@ void app_main(void)
             porta_beacon_send();
         }
         mark_valid_once_beaconing(heartbeat);
+        if (s_button_pressed) {
+            s_button_pressed = false;
+            pairing_http_open_disclosure();
+        }
         if (heartbeat % 5 == 0) {
             ESP_LOGI(TAG, "alive: %" PRIu32 " wifi=%s", heartbeat / 5,
                      wifi_prov_is_online() ? "up" : (wifi_prov_ap_active() ? "ap" : "down"));

@@ -19,7 +19,7 @@ surfaced in CI. The commands below are the full local set.
 
 | Harness | Command | Covers |
 | --- | --- | --- |
-| `host_mock` (20 binaries) | `make -C host_mock && host_mock/host_test*` | See table below. CI globs the binaries rather than listing them, so a new test runs as soon as the Makefile builds it |
+| `host_mock` (22 binaries) | `make -C host_mock && host_mock/host_test*` | See table below. CI globs the binaries rather than listing them, so a new test runs as soon as the Makefile builds it |
 | `tests/tx_e2e` | `cmake -S tests/tx_e2e -B tests/tx_e2e/build && cmake --build tests/tx_e2e/build -j4 && (cd tests/tx_e2e/build && ctest --output-on-failure)` | L1 encoder, TX state machine, poll timing, timer isolation, golden WAV RX decode, telemetry decode overflow, TA format — 7 tests |
 | Firmware build | `idf.py build` | `main/` under `-Werror`; merged image; must be **warning-free** |
 | Sidekick build | CI job **Sidekick (ESP32-S3)** | Companion firmware compiles and stages |
@@ -49,6 +49,7 @@ surfaced in CI. The commands below are the full local set.
 | `host_test_datetime_field` | STATUS date/time editor: cursor movement over separators, digit overwrite, and strict range validation. Carries regression cases for the dates `mktime` used to silently roll over, plus an exhaustive sweep of every day in a leap and non-leap year |
 | `host_test_screen_model` | Screen navigation: key to screen, R never toggling, the seven plain toggles, M/N/O sharing MENU across three pages, P cycling stats to log to RX, and `C` staying inert after B23 |
 | `host_test_porta_proto` | Sidekick/main frame codec (I28a): encode/decode round-trip, zero-length and 255-byte payloads, and a sync byte appearing *inside* a payload — which it will, since payloads are binary. Sweeps **every single-bit flip** in every framed byte and requires the CRC to reject all of them, which a sum-of-bytes checksum (what the old beacon used) does not. Pins recovery after truncation and after leading garbage, and pins the one deliberate limitation: a corrupt frame is dropped without rescanning the bytes it consumed, so a stray sync byte in noise costs exactly one real frame. Counters survive the decoder's own resync but not an explicit init — a distinction that started as a bug, since preserving them meant reading uninitialised memory on first use |
+| `host_test_pairing_token` | Sidekick API authorization (I28b, RFC 0004 §7) — the module that decides who may key a transmitter, so the cases pinned are the ones that would fail *open*. The sharpest is that a guarded route with **no token minted denies**: NVS returns either `NULL` or `""` for a missing key, and both are checked, because "not yet configured" meaning "open to everyone" is the worst failure available here. An unminted token also refuses a real one, and a malformed stored token cannot be matched even by itself. Open routes are checked to ignore pairing state entirely — including with no token minted and with a wrong one presented — since reads are open on principle rather than as a function of pairing. Token comparison does not short-circuit and rejects a token differing only in its last character. Hex is high-nibble-first, checked against a known byte pattern, since an inverted pair would still round-trip through the comparison and only show up against an externally captured value. Two deliberate limitations are pinned as decisions rather than left to be rediscovered: uppercase hex is rejected rather than folded, and the header accepts one shape only (no `Bearer` prefix). There is deliberately **no route-table test** — which routes are open is a required argument where each route is registered, so that property is a build error rather than a default a test would have to police. The rest of the module needs hardware and is covered by S2e: NVS minting and persistence, the 401 path, and the disclosure window |
 | `host_test_menu_model` | MENU layout arithmetic (page/key round-trip for all 18 rows), row identity and order, inline-edit character classes and filter, and the long-edit rules (per-kind case handling and the ignore-list cap). Carries regression cases for both defects B32 fixed |
 
 ### What automation cannot see
@@ -364,7 +365,7 @@ rule that out before suspecting the firmware — S2d.5 is the control.
 | S2d.6 | `dns-sd -B _http._tcp` on macOS, or any network browser | `minift8` appears as an HTTP service. Hostname resolution alone would not list it; this is the `_http._tcp` advertisement |
 | S2d.7 | **Before** joining, while on the provisioning AP, browse `http://minift8.local/` | The provisioning **form**, not the status page. mDNS is advertised in both modes |
 | S2d.7a | Immediately after the join, if `minift8.local` hangs from the phone or laptop you used on the AP | **Expected, and not a firmware fault.** The same hostname pointed at `192.168.4.1` while the AP was up, and mDNS records carry a 120 s TTL — a client that resolved it on the AP keeps that answer until it expires. Try the station IP directly to confirm, then wait ~2 min, toggle WiFi, or on macOS `sudo killall -HUP mDNSResponder` |
-| S2d.8 | Press **Forget WiFi** and accept the confirm dialog | A "Forgotten" page; the monitor logs `Credentials forgotten — restarting into provisioning`; the `MiniFT8-SK-XXXX` AP is back within ~10 s |
+| S2d.8 | Press **Forget WiFi**, accept the confirm dialog, and paste the token when prompted | A "Forgotten" message; the monitor logs `Credentials forgotten — restarting into provisioning`; the `MiniFT8-SK-XXXX` AP is back within ~10 s. **Changed by I28b — Forget is now a guarded write**, so it prompts for the pairing token the first time and remembers it after. Get the token from S2e.2 first |
 | S2d.9 | Power-cycle after the forget | Still provisioning. Nothing rejoined — this is the first operator-reachable control that depends on I3g's single credential store, and the erase test in S2c.6a is the same guarantee reached a harder way |
 | S2d.10 | Repeat S2d.8 but **cancel** the dialog | Nothing happens; still online. The confirm is the only thing standing between a stray tap and a re-provision |
 | S2d.11 | Check the ADV beacon (`P` then `.`) at the end | Still arriving |
@@ -372,6 +373,43 @@ rule that out before suspecting the firmware — S2d.5 is the control.
 Not testable with one device, so it is a known limitation rather than a row: the hostname is fixed, so a
 second sidekick on the same network loses the name and mDNS silently renames it `minift8-2.local`. Folded
 into I19 when there is a reason to care.
+
+### S2e. Pairing token: an unpaired browser can watch and cannot transmit
+
+This is I28b's Done-when, and RFC 0004 §7 is now the whole security design — §4 rejected image signing on the
+grounds that the browser's own TLS already authenticates the source, leaving authorization on the LAN as the
+only real gap. So what these rows prove is a *policy*, not a feature: reads are open because anyone may
+listen to amateur transmissions on licensed spectrum, and writes need the token because the licensee answers
+for them.
+
+The half that can be host-tested already is (`host_test_pairing_token`). What cannot is everything touching
+NVS, the HTTP server and the button, which is all of the below.
+
+**Preconditions:** joined and reachable (S2d.3 passed), and a browser whose site data for the sidekick you
+are willing to clear. Use a private window for the "unpaired" rows — clearing `localStorage` is the only way
+back to unpaired once you have pasted a token.
+
+| # | Do | Expect |
+|---|---|---|
+| S2e.1 | First boot after flashing, watch the monitor | `Pairing token minted; press the button to read it`. On every later boot, `Pairing token loaded` — the token is in NVS and survives a reboot. **The token itself must never appear in the log**: the sidekick's USB-C carries the ADV's log stream, so anything printed there is visible to whoever is watching it |
+| S2e.2 | Press the **user button** (the side one, not reset), then browse `http://minift8.local/api/pairing-token` | The token as JSON, and `Disclosure window open for 120 s` on the monitor. Up to 1 s of lag between press and window is expected — the loop ticks once a second and the ISR only sets a flag |
+| S2e.3 | Wait out the 120 s and reload | **404**, and `Disclosure window closed` on the monitor. 404 rather than 403 on purpose: a shut window should look like a route that does not exist, so scanning the device does not advertise that there is a token to hunt for |
+| S2e.4 | Browse the same URL **before** any press, from a fresh boot | 404. A press is the only thing that opens it |
+| S2e.5 | Tap the button several times quickly | One window, not several. The ISR debounces at 250 ms, and re-arming extends rather than stacks |
+| S2e.6 | **Unpaired** (private window): browse `/log` | Decodes and log lines stream normally. This is the principle — watching needs no credential |
+| S2e.7 | Unpaired, watch the viewer's status line | `clock not set — unpaired (button, then /api/pairing-token)`. The clock sync is a write and it 401s, while everything around it keeps working |
+| S2e.8 | Unpaired: `curl -i -X POST http://minift8.local/api/time -d 1` | `401 Unauthorized` and `{"error":"pairing required"}`. The monitor logs `Refused /api/time (no valid token)` |
+| S2e.9 | Unpaired: `curl -i -X POST http://minift8.local/forget` | 401, and **still online afterwards** — the write did not happen, it was not merely unreported |
+| S2e.10 | With a token that is right except for its last character | 401. The comparison is constant-time and full-length; a near miss must not pass |
+| S2e.11 | With a well-formed token in the header: `curl -i -X POST http://minift8.local/api/time -H 'X-MiniFT8-Token: <token>' -d $(date +%s)000` | `{"ok":true}`, and the viewer's timestamps become correct |
+| S2e.12 | Paste the token into the viewer (S2e.2's value) and reload `/log` | The clock syncs on its own and the status line stops complaining. The token is in `localStorage`, so it survives a reload but not a site-data clear — which is the case S2e.2 exists to recover |
+| S2e.13 | `curl -i http://minift8.local/api/events` and `http://minift8.local/` with **no** token | Both 200. Reads stay open, and a guarded-by-default mistake would show up here as a 401 |
+| S2e.14 | Reboot the sidekick and reuse the same token | Still accepted. Minting happens once, not per boot — the opposite would silently unpair every device on every power cycle |
+| S2e.15 | Check the ADV beacon (`P` then `.`) at the end | Still arriving. The button shares no pins with Grove (GPIO41 against G1/G2) |
+
+Known limit, from RFC 0004 §7 and not a defect: the token crosses the LAN in clear over plain HTTP, so
+anyone who can read the traffic can replay it. WPA2/WPA3 per-station encryption makes that materially
+harder and an open network does not. This is scoped as a nuisance control, not a targeted-attacker one.
 
 ### S3. Field-flash from the ADV, and the identity guard
 
@@ -441,6 +479,9 @@ a change touches a field-only path, naming the change and the exact check.
 | From | Check | Status |
 | --- | --- | --- |
 | B53 (decode instrumentation) | On a **busy band at a busy hour**, run FT8 and then FT4, and read the per-slot line on `P` then `.`. Healthy reads `lost`≈0, `g`≈14 (FT8), `dec` well under 2360 ms. Sick reads `lost` non-zero and roughly tracking `dec`, with `g` collapsing toward 0 on slots where `cand` is high. Record `cand=` and `msg=` separately — whether a real band ever approaches the 50-candidate or 32-decode caps decides two I26 levers on its own. FT4 is the sharper test: near-identical guard band (2.46 s against 2.36 s) but 105 symbols to decode instead of 79. Ignore slots we transmitted in; those deliberately skip decode | **not built yet** — written before the code deliberately, so the pass/fail condition is fixed in advance rather than fitted to whatever the first run happens to show. Becomes owed when B53 lands |
+| I28b (pairing token) | S2e, all rows | **owed.** Never run — the token, the 401 path, NVS minting and persistence, and the button-gated disclosure window all landed 2026-09-12 and none of it has been on hardware. Two rows deserve attention beyond a tick: S2e.1, because the token must **not** appear in the monitor output (the sidekick's USB-C is where the ADV's log stream lands, so a leak there is a leak to whoever is watching it), and S2e.9, which has to confirm the write did not happen rather than merely that it was not reported. GPIO41 is read out of the vendored `M5Unified` rather than a pinout drawing, but it has never been read on this board, so S2e.2 is also the first proof the pin is right |
+| I28b (pairing token) | S2d.8, S2d.10 | **owed, re-run.** Both passed before and both changed: **Forget WiFi** is now a guarded write, so it prompts for the token and the plain HTML form became a `fetch` that sets the header. S2d.8 needs S2e.2's token in hand first |
+| I28a (browser clock sync) | S2e.7, S2e.11, S2e.12 | **owed, re-run.** Clock sync passed on 2026-09-11 and the flow has changed underneath it: `POST /api/time` is a write and is now guarded, so an unpaired viewer reports rather than syncs. The behaviour is intended — an unpaired browser watches and changes nothing — but the earlier pass no longer describes what the code does |
 | I3a (sidekick retarget) | S0–S2 | **passed 2026-09-09** — `X R: 181cbe0-dirty L: c0e52ec` on the ADV: a validated beacon frame, so the Grove pins, UART1 on S3, the framing and the version compare all work. The mismatch was expected (different builds) |
 | I3d–I3h (WiFi provisioning) | S2c, all rows | **owed.** Partially exercised on 2026-09-09 but not against current firmware: the AP came up, the scan found networks, and a join succeeded — but the join that crashed (I3f), the credential erase that failed to stick (I3g) and the stale scan list (I3h) were all fixed *after* that session, and the captive portal has never been seen working |
 | mDNS + station-mode server | S2d, all rows | **owed** — no part of it has run on hardware |
