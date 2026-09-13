@@ -1,6 +1,6 @@
 # RFC 0004: Headless Mini-FT8 — the phone is the UI, the sidekick is a peripheral
 
-* **Status:** Draft. Design agreed in chat 2026-09-10; nothing here is built. Supersedes nothing; extends [RFC 0001](0001-ble-companion.md) §5.0/§5.2d, which established WiFi-plus-browser as the phone path and moved sidekick updates from a PORTA push to an HTTPS pull.
+* **Status:** Draft. Design agreed in chat 2026-09-10; I28a protocol and I28b pairing are in tree (field proof still owed). **Storage model amended 2026-09-13** (§3/§4): the web root is a LittleFS partition, hydrated from firmware embed, not an empty blob filled only by POST. Supersedes nothing; extends [RFC 0001](0001-ble-companion.md) §5.0/§5.2d, which established WiFi-plus-browser as the phone path and moved sidekick updates from a PORTA push to an HTTPS pull.
 * **Author / Lead:** Jeff Kalikstein, KB2SLO
 * **Covers:** where the web application lives, how it is delivered and trusted, how the browser reaches the radio, and what crosses the sidekick-to-main link.
 * **Does not cover:** the ESP32-P4 port itself ([I27](../ROADMAP.md), gated on B26), the decode pipeline, or anything about the ADV's existing screen and keyboard — which this design must not depend on and does not remove.
@@ -55,7 +55,8 @@ flowchart TB
     end
     subgraph sk["Sidekick — no TLS, no CA bundle"]
         http["HTTP server<br/>control API"]
-        part["App partition"]
+        part["Web FS · LittleFS<br/>sole served origin"]
+        embed["Firmware embed<br/>hydrate seed only"]
         sig["Pairing token check<br/>no signature, no key"]
     end
     subgraph main["Main MCU — ADV today, P4 north star"]
@@ -68,6 +69,7 @@ flowchart TB
     maps -. "enrichment, when online" .-> app
     app -- "control · works offline" --> http
     app -- "POST bundle, once" --> sig
+    embed -. "hydrate when empty / forced / digest mismatch" .-> part
     sig --> part
     part --> http
     http -- "framed protocol over Port A" --> radio
@@ -96,24 +98,43 @@ Web Serial/Bluetooth. `localStorage` and `fetch` to HTTPS survive. Losing geoloc
 — auto-grid from the phone would have been nice — and it is the price of not owning a certificate for a name
 that only resolves on one LAN.
 
-**Not bundled into firmware**, because the app should ship on its own cadence and because firmware flash is
-the wrong place for a UI that will change weekly. It lives in its own partition at the 1.9 MB free tail of
-the 8 MB part, above `ota_1`, leaving both OTA slots and `nvs` untouched. Assets are stored pre-compressed
-and served with `Content-Encoding: gzip`; a disciplined app is 100–300 KB gzipped, so the budget is
-comfortable but not unlimited. **No bundled map tiles. No heavyweight framework.**
+**Not the weekly UI inside the OTA image**, because that app should ship on its own cadence and firmware
+flash is the wrong vehicle for it. The **served web root** is a LittleFS data partition (`web`) at the
+1.9 MB free tail of the 8 MB part, above `ota_1`, leaving both OTA slots and `nvs` untouched. That
+filesystem is the **sole HTTP origin** for HTML/JS/CSS once the device is running: what you can list on
+the FS is what the device serves — one place to debug.
 
-The consequence, accepted deliberately: **a sidekick that has never had internet has no application.** It can
-provision WiFi and accept a bundle, and that is all. Constraint 2 is what makes this acceptable.
+**Firmware still carries the bootstrap pages** under `sidekick/main/web/` via `EMBED_TXTFILES`, but as a
+**hydrate seed**, not as a live second backend. On boot (and on an explicit recovery gesture), if the FS
+is empty, unmountable after format, or its seed digest does not match the embed, firmware copies those
+bytes onto the FS. After that, HTTP reads the FS only. A phone-relayed **bundle may upgrade the whole
+tree**, including pages that began as seed — one mutable web root, not a permanent quarantine under
+`/app/` that leaves provision frozen in firmware forever.
+
+Bundle install is **stage → verify manifest digests → atomic promote**, never “erase the partition and
+hope.” Present-but-broken files after a bad POST do not look “missing,” so hydrate-on-empty alone will
+not heal them: recovery is force re-hydrate from embed (or USB-C reflash). Random NOR bit-rot is not the
+concern; sharing a write path with the only UI is, and staging plus force re-hydrate bound it.
+
+Assets in the downloaded app are stored pre-compressed and served with `Content-Encoding: gzip`; a
+disciplined app is 100–300 KB gzipped, so the budget is comfortable but not unlimited. **No bundled map
+tiles. No heavyweight framework.**
+
+The consequence, accepted deliberately: **a sidekick that has never had internet has no rich application**
+— only the hydrated seed (provision, status, pairing, bootstrap fetch page). It can join WiFi and accept
+a bundle, and that is all. Constraint 2 is what makes this acceptable.
 
 ## 4. How the application and firmware are delivered
 
 **The phone relays, and the browser's own TLS connection is what proves the source.**
 
-1. Phone opens `http://minift8.local/` — the sidekick serves a small bootstrap page out of firmware.
+1. Phone opens `http://minift8.local/` — after hydrate, the sidekick serves the bootstrap page **from the
+   web FS** (seeded from firmware embed on first boot or recovery).
 2. That page fetches the bundle from the bundle host over HTTPS (HTTP page, HTTPS fetch: allowed, and the
    host must send `Access-Control-Allow-Origin` — see the host requirements below).
-3. The page **POSTs the bundle to the sidekick**, which checks §7's pairing token, then the manifest's
-   per-asset digests as it writes to the app partition.
+3. The page **POSTs the bundle to the sidekick**, which checks §7's pairing token, stages the tree, checks
+   the manifest's per-asset digests, then atomically promotes onto the web FS (and may replace former seed
+   pages).
 4. Firmware travels the same path to an OTA endpoint.
 
 This is the conclusion of §2 and it deletes an entire class of work: **no TLS stack on the device, no CA
@@ -145,7 +166,7 @@ purpose:
   every device, which §10 already admitted. Paying it for a duplicate of TLS is a bad trade.
 
 **What the device actually needs is authorization, not authenticity**, and it is a different problem than the
-one signing was aimed at: nothing must be able to write the app partition or key the transmitter merely by
+one signing was aimed at: nothing must be able to write the web FS or key the transmitter merely by
 being on the LAN. §7's pairing token is that control, and it is cheap — no key custody, no revocation, no CI
 signing step. It is therefore built **before** the POST endpoint exists rather than two slices later.
 
@@ -409,7 +430,7 @@ Roadmap rows, sequenced. The protocol gates everything else.
 | Protocol | Framed, bidirectional, transport-agnostic messages across Port A (§6). **First.** |
 | Transport trial | [B47](../ROADMAP.md) — bench-prove ESP32-S3 as an I2C slave, and bus recovery after a live cable yank. Parallel; must not block. |
 | Control API + pairing | The API surface and the token (§6, §7). **Before the partition row**, because the token is what keeps the bundle POST from being an open write into a partition the device then serves code from. §4's signing chain used to hold this slot and is now rejected outright. |
-| App partition + bootstrap | Partition at the 1.9 MB tail, token-guarded phone-relayed POST, per-asset digests, NVS bundle-host URL, version pairing (§3, §4). |
+| Web FS + bootstrap | LittleFS at the 1.9 MB tail; hydrate from firmware embed; FS is the sole served origin; token-guarded phone-relayed POST with stage/verify/promote; force re-hydrate recovery; per-asset digests; NVS bundle-host URL; version pairing (§3, §4). |
 | The application | The web app, plus a PSKReporter Worker that filters rather than relays. QRZ is called directly from the browser (§8). |
 
 ## 10. Risks
@@ -419,7 +440,8 @@ Roadmap rows, sequenced. The protocol gates everything else.
 | The protocol is underestimated | It is treated as the critical path here, ahead of the visible work. If it slips, the application slips with it, and that is the correct order. |
 | Non-secure context bites harder than expected | Geolocation and service workers are known losses (§3). A surprise beyond those would reopen the certificate question, which is why §3 records why it was declined rather than merely that it was. |
 | App outgrows the partition | 1.9 MB against 100–300 KB gzipped is roughly 6x headroom, and the discipline is stated: no bundled tiles, no heavy framework. If it is ever breached, the fix is a partition change, which costs a USB-C reflash of every device in existence. |
-| A LAN device writes the app partition or keys the transmitter | §7's token, built before the POST endpoint exists. The residual is a replay by someone who can read plain-HTTP traffic on the same network, which §7 records as a known limit rather than a defect — it is scoped to nuisance, not to a targeted attacker. |
+| Bad bundle leaves present-but-broken pages | Staging + manifest verify before promote. Force re-hydrate from firmware embed restores the seed tree without a desk computer; USB-C remains the hard floor. |
+| A LAN device writes the web FS or keys the transmitter | §7's token, built before the POST endpoint exists. The residual is a replay by someone who can read plain-HTTP traffic on the same network, which §7 records as a known limit rather than a defect — it is scoped to nuisance, not to a targeted attacker. |
 | No independent proof of source | Accepted deliberately (§4). Authenticity rests entirely on the browser's TLS session to the bundle host, so a compromised operator browser, or a compromised host account, can deliver a hostile app. Signing was examined and rejected because a CI-held key shares the host's trust domain and re-proves what TLS proved. The trigger to reopen is content reaching a device by any path that is not the owner's own browser. |
 | The bundle host drops its CORS header | Would break the relay outright and silently (§4). Observed behaviour, not policy, same as QRZ in §8. Bounded by host-independence: the base URL lives in NVS, so moving to a provider that cooperates is a config change. |
 | QRZ stops sending its CORS header | Measured open on 2026-09-10, but that is observation, not policy (§8). The application treats a refused QRZ lookup as a missing optional service, and the PSKReporter Worker is the fallback path if it has to carry QRZ too. |
