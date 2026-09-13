@@ -18,7 +18,14 @@ arrive in a browser, and the transport that carries it has to be designed rather
 Three constraints were settled before any of this was drawn, and they decide most of what follows:
 
 1. **Offline field operation is a requirement.** POTA sites and summits routinely have no cell service. A
-   radio whose UI lives on the internet is a radio with no UI on a summit.
+   radio whose UI lives on the internet is a radio with no UI on a summit. **Followed to its conclusion
+   2026-09-12, which this RFC had not done: a summit has no router either.** The only path from phone to
+   sidekick there is the sidekick's own access point, so this constraint does not merely require surviving
+   without internet — it requires **the whole application to run over AP mode**. §5 and
+   [I19](../ROADMAP.md) each call that "the AP-mode fallback", which is backwards: station mode is the
+   convenience case, and AP mode is the one this first constraint names. Nothing in this design may assume AP
+   mode is a transient setup state. [B55](../ROADMAP.md) carries the investigation and the list of ways that
+   assumption could get baked in before anyone notices.
 2. **Internet may be required for initial station setup.** Not for operating. This is what makes the design
    affordable — the firmware does not need to carry a full UI as a fallback.
 3. **No dependency on the ADV's keyboard or screen.** A build that works on P4 must also work on ADV, so the
@@ -296,11 +303,50 @@ and what is actually missing is authorization on the LAN.
 **Decided: a pairing token, minted during provisioning and held by the browser.** Every control request
 carries it; requests without it are refused. This is the cheap version and it is proportionate — the threat is
 an accident or a nuisance on a home LAN, not a targeted attacker, and the operator can re-provision to rotate
-it. Read-only status may remain unauthenticated so a second device can watch without being able to transmit.
+it.
 
-**What it guards, stated as a list, because §4 no longer guards anything:** the bundle POST, the firmware
-OTA POST, the bundle-host base URL and every other config write, and transmit control. Status, decodes and
-the log viewer stay open.
+**Reads are open on principle, decided 2026-09-12, not as a concession to convenience.** Anyone may listen to
+amateur transmissions on licensed spectrum, and Part 97 forbids obscuring the meaning of a transmission in the
+first place — so there is nothing in a decode to protect, and a design that hid one would be at odds with the
+service it serves. That principle carries onto the LAN: decodes, status and the log are open to anyone who can
+reach the device. What needs authorization is *changing* the device, because that is what the licensee answers
+for.
+
+This replaces an earlier and weaker justification — that reads stay open "so a second device can watch without
+being able to transmit." Same behaviour, but the reason matters, because the weak version invites a future
+change to trade it away for tidiness. It also retires the idea of a second read-scoped token: a watch-only
+guest needs no credential at all.
+
+**The line, and the one place the principle does not reach.** Guarded: transmit control, the bundle POST, the
+firmware OTA POST, the bundle-host base URL and every other config write, and anything else that changes
+device state — including the browser clock sync, which is a write even though an idempotent and self-correcting
+one. Open: decodes, status, the log viewer, and the bootstrap pages that provisioning needs before a token
+exists. **The carve-out is that a credential is not radio data** — a read that would hand back the WiFi
+password or this token stays guarded.
+
+That carve-out is why policy is a required argument at each route's registration rather than a rule derived
+from the HTTP method. "GET is open" would be right for every route that exists today and silently wrong for
+the first one that returns a secret, and a method rule offers nowhere to say so. Requiring the argument makes
+an undeclared route a build error instead of an omission.
+
+**Retrieval, decided 2026-09-12, and it is not the same problem as recovery.** The token lives in the
+browser's `localStorage`, and the cases where the operator needs it again are ordinary rather than
+catastrophic: a second device, a new phone, cleared browsing data, or Safari's ITP evicting script-writable
+storage for a site untouched for seven days — which means a sidekick used monthly can lose it with no user
+action at all. So the requirement is that the token be **readable on demand**, not merely resettable.
+
+**The mechanism is the AtomS3 Lite's user button opening a short disclosure window** — press it and a route
+serves the token for a couple of minutes, then stops answering. GPIO41, plain input with the board's own
+pull-up, active low, read straight out of the `M5Unified` this repo already vendors, so no pin is being
+guessed. One gesture is enough for everything: with the token in hand the operator can call the guarded
+`/forget` to change networks, which removes any need for a button long-press, a boot-count trigger or an NVS
+reset path.
+
+**Gating disclosure on the button rather than on AP mode is the point, not an implementation detail.**
+Gating it on AP mode was the obvious design and §1 rules it out: if the application runs over AP mode, then
+"disclosed only in AP mode" means disclosed during normal operation, which is no gate at all. A button press
+is physical in both modes and stays correct whichever one turns out to be primary. It is also less
+disruptive — the operator never has to leave their network to pair a second device.
 
 **Its honest limit, recorded so it is not mistaken for a defect later.** The token travels in clear over
 plain HTTP, so it can be captured and replayed by anyone who can read the traffic. On a WPA2/WPA3 network
