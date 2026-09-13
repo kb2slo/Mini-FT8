@@ -15,6 +15,7 @@ extern "C" {
 #include "board_power.h"
 #include "build_identity.h"
 #include "ui.h"
+#include "tx_hud_banner.h"
 #include <vector>
 #include <string>
 #include "freertos/FreeRTOS.h"
@@ -1207,12 +1208,13 @@ static void draw_tx_hud(bool force) {
   ui_draw_tx_hud(tx_text, mv, ps.valid ? ps.percent : -1, ps.warn, ps.writes_blocked,
                  power_w, swr, force, aborted, now_ms);
 
-  // Mirror the HUD to the log, on transitions only. This function runs twice a
-  // second while transmitting, so logging per call would bury everything else;
-  // and power and SWR do not exist at the start of a transmission, since they
-  // are polled from the radio during it. So: the message when TX begins, and
-  // what the radio actually did when it ends.
+  // Mirror the HUD to the log. Start and end are transitions; the mid-cycle
+  // line is the status face (power / SWR / battery) once, ~3 s in -- that is
+  // when the radio's readings exist, and logging every 500 ms poll would bury
+  // everything else.
   static bool s_was_tx = false;
+  static bool s_mid_hud_logged = false;
+  static int64_t s_tx_began_ms = 0;
   static float s_last_power = -1.f;
   static float s_last_swr = -1.f;
   if (power_w >= 0.f) s_last_power = power_w;
@@ -1224,6 +1226,25 @@ static void draw_tx_hud(bool force) {
     debug_log_line(line);
     s_last_power = -1.f;
     s_last_swr = -1.f;
+    s_mid_hud_logged = false;
+    s_tx_began_ms = now_ms;
+  } else if (g_tx_active && s_was_tx && !s_mid_hud_logged &&
+             (now_ms - s_tx_began_ms) >= 3000) {
+    char msg[24];
+    char status[24];
+    TxHudBannerInput in;
+    in.tx_text = tx_text;
+    in.voltage_mv = mv;
+    in.percent = ps.valid ? ps.percent : -1;
+    in.writes_blocked = ps.writes_blocked;
+    in.power_w = power_w;
+    in.swr = swr;
+    in.tx_aborted = false;
+    tx_hud_banner_format(in, msg, status, (int)sizeof(status));
+    char line[40];
+    snprintf(line, sizeof(line), "TX HUD %s", status);
+    debug_log_line(line);
+    s_mid_hud_logged = true;
   } else if (!g_tx_active && s_was_tx) {
     char line[64];
     if (aborted) {
@@ -1246,6 +1267,7 @@ static void draw_tx_hud(bool force) {
       }
     }
     debug_log_line(line);
+    s_mid_hud_logged = false;
   }
   s_was_tx = g_tx_active;
 }
@@ -2882,6 +2904,12 @@ static void keep_rx_list_stale(bool update_ui) {
 }
 
 void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool update_ui) {
+  // One operator-log line per slot (B53 shape, slim). ESP_LOGD above is compiled
+  // out at CONFIG_LOG_MAXIMUM_LEVEL=3; debug_log_line reaches P-then-. and the
+  // browser. Cheap: two timestamps and counts already in hand — no extra decode work.
+  const int64_t decode_t0_ms = rtc_now_ms();
+  const int max_cand = 50;
+
   // ---- heap instrumentation ----
   size_t heap_entry = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   size_t heap_entry_largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
@@ -2894,7 +2922,6 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
   s_dec_count = 0;
 
   const int64_t now_ms = rtc_now_ms();
-  const int max_cand = 50;
   static ftx_candidate_t candidates[max_cand];
   int num_candidates = ftx_find_candidates(&mon->wf, max_cand, candidates, 5);
   ESP_LOGD(TAG, "Candidates found: %d", num_candidates);
@@ -2954,6 +2981,10 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
     g_decode_in_progress = false;
     if (!g_was_txing) {
       arm_from_autoseq_or_beacon();
+      char buf[56];
+      snprintf(buf, sizeof(buf), "SLOT cand=0/%d msg=0 dec=%lldms",
+               max_cand, (long long)(rtc_now_ms() - decode_t0_ms));
+      debug_log_line(buf);
     }
     return;
   }
@@ -3175,6 +3206,14 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
              (unsigned)stack_hw_exit,
              (int)heap_exit - (int)heap_entry);
+  }
+
+  if (!g_was_txing) {
+    char buf[56];
+    snprintf(buf, sizeof(buf), "SLOT cand=%d/%d msg=%d dec=%lldms",
+             num_candidates, max_cand, s_dec_count,
+             (long long)(rtc_now_ms() - decode_t0_ms));
+    debug_log_line(buf);
   }
 
   // Mark this slot's decode as fully applied BEFORE clearing the in-progress
@@ -4463,6 +4502,11 @@ void save_station_data() {
 
 static void enter_mode(UIMode new_mode) {
   // No special handling needed when leaving TX mode - autoseq manages queue internally
+  if (new_mode != ui_mode) {
+    char line[24];
+    snprintf(line, sizeof(line), "UI %s", screen_name(new_mode));
+    debug_log_line(line);
+  }
   if (ui_mode == UIMode::BAND && new_mode != UIMode::BAND) {
     s_band_config_menu = false;
   }
@@ -5133,6 +5177,11 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
         case ScreenAction::SetMenuPage:
           cancel_status_edit();
           menu_page = nav.page;
+          {
+            char line[24];
+            snprintf(line, sizeof(line), "UI MENU p%d", menu_page);
+            debug_log_line(line);
+          }
           draw_menu_view();
           switched = true;
           break;
@@ -5141,6 +5190,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
           cancel_status_edit();
           perf_page = 1;
           debug_page = g_debug_lines.empty() ? 0 : (int)((g_debug_lines.size() - 1) / 6);
+          debug_log_line("UI log");
           ui_draw_list(g_debug_lines, debug_page, -1);
           switched = true;
           break;
@@ -5316,6 +5366,11 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
             } else {
               g_status_beacon_temp = (BeaconMode)(((int)g_status_beacon_temp + 1) % 3);
             }
+            {
+              char line[24];
+              snprintf(line, sizeof(line), "Beacon %s", beacon_name(g_status_beacon_temp));
+              debug_log_line(line);
+            }
             draw_status_view();
           }
           else if (c == '2') {
@@ -5325,7 +5380,11 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
             advance_active_band(1);
             save_station_data();
             draw_status_view();
-            debug_log_line("Band changed");
+            {
+              char line[32];
+              snprintf(line, sizeof(line), "Band %s", g_bands[g_band_sel].name);
+              debug_log_line(line);
+            }
             // In-memory only. CAT push is deferred to:
             //   - STATUS exit (enter_mode), or
             //   - QMX initial-connect (consume_cdc_initial_sync reads
