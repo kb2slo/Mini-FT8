@@ -141,9 +141,6 @@ static esp_err_t get_events(httpd_req_t *req)
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
-// viewer.html, embedded by EMBED_TXTFILES (see main/CMakeLists.txt).
-extern const char viewer_html_start[] asm("_binary_viewer_html_start");
-
 // Last reply the host sent to an action, so the browser learns whether its
 // clock actually landed. One outstanding action at a time is all the polled
 // design allows, so a single slot is enough and a verb is enough to match it.
@@ -255,9 +252,9 @@ static esp_err_t post_tx_cancel(httpd_req_t *req)
 static esp_err_t get_viewer(httpd_req_t *req)
 {
     // No substitutions -- the viewer fetches everything it shows from
-    // /api/events. Sent through web_page_send() anyway so a placeholder added
+    // /api/events. Sent through web_page_send_file() so a placeholder added
     // to the file later is expanded rather than rendered as literal braces.
-    return web_page_send(req, viewer_html_start, NULL, 0);
+    return web_page_send_file(req, "viewer.html", NULL, 0);
 }
 
 // Its own task rather than a poll in the beacon loop: events arrive
@@ -284,7 +281,8 @@ static void porta_rx_task(void *arg)
             entry_t e = {0};
             if (porta_proto_parse_log(&frame, &e.epoch_secs, text)) {
                 strncpy(e.text, text, sizeof(e.text) - 1);
-                ESP_LOGI(TAG, "t=%" PRIu32 " %s", e.epoch_secs, e.text);
+                // Tag "adv" so USB-C logs are not mistaken for sidekick ESP_LOG.
+                ESP_LOGI("adv", "%s", e.text);
                 ring_push(&e);
             } else if (porta_proto_parse_decode(&frame, &ev)) {
                 e.is_decode = true;
@@ -295,7 +293,7 @@ static void porta_rx_task(void *arg)
                 e.dt_centis = ev.dt_centis;
                 e.is_cq = ev.is_cq;
                 e.is_to_me = ev.is_to_me;
-                ESP_LOGI(TAG, "decode %+d dB %4u Hz %+.2f s %s%s%s",
+                ESP_LOGI("adv", "decode %+d dB %4u Hz %+.2f s %s%s%s",
                          e.snr, e.offset_hz, e.dt_centis / 100.0,
                          e.is_to_me ? "[me] " : "", e.is_cq ? "[cq] " : "", e.text);
                 ring_push(&e);
@@ -305,7 +303,7 @@ static void porta_rx_task(void *arg)
             } else if (porta_proto_parse_nak(&frame, (uint8_t *)&s_last_reply_verb,
                                              s_last_reply_reason)) {
                 s_last_reply_ok = false;
-                ESP_LOGW(TAG, "host refused action 0x%02x: %s",
+                ESP_LOGW("adv", "refused action 0x%02x: %s",
                          s_last_reply_verb, s_last_reply_reason);
             } else {
                 ESP_LOGW(TAG, "frame type 0x%02x len %u (no handler yet)",

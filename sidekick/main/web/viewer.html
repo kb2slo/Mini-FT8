@@ -1,10 +1,11 @@
 <!doctype html>
 <meta charset=utf-8>
 <meta name=viewport content='width=device-width,initial-scale=1'>
-<title>Mini-FT8 host log</title>
+<title>Mini-FT8 ADV log</title>
 
 <!--
-  The host log and decode stream, served at /log.
+  ADV log and decode stream (Port A), served at /log. Everything in the list
+  is from the main radio; sidekick-local ESP_LOG stays on USB-C only.
 
   Two details that matter and are easy to miss. `overflow-anchor: none` stops
   the browser's own scroll anchoring from fighting the same job and producing
@@ -12,8 +13,8 @@
   following: removing from the top while someone is reading history shifts
   everything under their eyes.
 
-  An unset host clock renders as --:--:-- rather than as a 1970 timestamp or a
-  blank. FT8 will not decode without a synced clock, so "the host does not
+  An unset ADV clock renders as --:--:-- rather than as a 1970 timestamp or a
+  blank. FT8 will not decode without a synced clock, so "the ADV does not
   know what time it is" is diagnostic information, not an absence. A fresh
   event with t=0 after we had already synced means the ADV rebooted and lost
   time — clear the synced flag so the next poll offers the browser clock again
@@ -36,6 +37,7 @@ body{display:flex;flex-direction:column;font-family:ui-monospace,monospace;backg
 #tx button:disabled{opacity:.4}
 div.r{padding:.1rem 0;white-space:pre-wrap;word-break:break-word}
 .ts{color:#555}
+.src{color:#666}
 .cq{color:#7fd}
 .me{color:#fd7}
 .lg{color:#999}
@@ -59,8 +61,8 @@ var cancelBtn = document.getElementById('cancel');
 function atBottom() { return o.scrollHeight - o.scrollTop - o.clientHeight < 40 }
 
 function stat() {
-  s.textContent = follow ? ('live · ' + q + ' events')
-                         : ('paused · scroll to the bottom to follow · ' + q + ' events')
+  s.textContent = follow ? ('ADV · live · ' + q + ' events')
+                         : ('ADV · paused · scroll to the bottom to follow · ' + q + ' events')
 }
 o.addEventListener('scroll', function () { follow = atBottom(); stat() });
 
@@ -72,6 +74,7 @@ function hhmmss(t) {
 function row(e) {
   var d = document.createElement('div'); d.className = 'r';
   var a = document.createElement('span'); a.className = 'ts'; a.textContent = hhmmss(e.t) + ' ';
+  var src = document.createElement('span'); src.className = 'src'; src.textContent = 'ADV ';
   var b = document.createElement('span');
   if (e.d) {
     b.textContent = ((e.snr > 0 ? '+' : '') + e.snr).padStart(3) + ' '
@@ -81,7 +84,7 @@ function row(e) {
   } else {
     b.textContent = '· ' + e.x; b.className = 'lg'
   }
-  d.appendChild(a); d.appendChild(b); return d
+  d.appendChild(a); d.appendChild(src); d.appendChild(b); return d
 }
 
 var synced = false;
