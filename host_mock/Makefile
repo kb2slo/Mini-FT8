@@ -47,6 +47,7 @@ PORTA_PROTO_TARGET = host_test_porta_proto
 PAIRING_TOKEN_TARGET = host_test_pairing_token
 WEB_PAGE_TARGET = host_test_web_page
 WEB_MANIFEST_TARGET = host_test_web_manifest
+BUNDLE_HOST_TARGET = host_test_bundle_host
 
 all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET) \
      $(DECODE_SORT_TARGET) $(POWER_TARGET) $(QSO_BROWSE_TARGET) $(COPY_BLOCK_TARGET) \
@@ -54,7 +55,7 @@ all: $(TARGET) $(UNIQUE_TARGET) $(CANCEL_TARGET) $(ADIF_TARGET) $(STATION_TARGET
      $(RX_LIST_STALE_TARGET) $(CTS_TIME_TARGET) $(BAND_CONFIG_TARGET) \
      $(USB_C_PRESENCE_TARGET) $(MENU_MODEL_TARGET) $(SCREEN_MODEL_TARGET) \
      $(DATETIME_FIELD_TARGET) $(PORTA_PROTO_TARGET) $(PAIRING_TOKEN_TARGET) \
-     $(WEB_PAGE_TARGET) $(WEB_MANIFEST_TARGET)
+     $(WEB_PAGE_TARGET) $(WEB_MANIFEST_TARGET) $(BUNDLE_HOST_TARGET)
 
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
@@ -151,6 +152,14 @@ test_web_manifest.o: test_web_manifest.cpp
 $(WEB_MANIFEST_TARGET): $(WEB_MANIFEST_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
+BUNDLE_HOST_OBJ = bundle_host.o test_bundle_host.o
+bundle_host.o: ../sidekick/main/bundle_host.c
+	$(CC) $(CFLAGS) -I../sidekick/main -c $< -o $@
+test_bundle_host.o: test_bundle_host.cpp
+	$(CXX) $(CXXFLAGS) -I../sidekick/main -c $< -o $@
+$(BUNDLE_HOST_TARGET): $(BUNDLE_HOST_OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
 DATETIME_FIELD_OBJ = datetime_field.o test_datetime_field.o
 datetime_field.o: ../main/datetime_field.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
@@ -214,6 +223,7 @@ clean:
 	      $(DATETIME_FIELD_OBJ) $(DATETIME_FIELD_TARGET) \
 	      $(PAIRING_TOKEN_OBJ) $(PAIRING_TOKEN_TARGET) \
 	      $(WEB_PAGE_OBJ) $(WEB_PAGE_TARGET) \
-	      $(WEB_MANIFEST_OBJ) $(WEB_MANIFEST_TARGET)
+	      $(WEB_MANIFEST_OBJ) $(WEB_MANIFEST_TARGET) \
+	      $(BUNDLE_HOST_OBJ) $(BUNDLE_HOST_TARGET)
 
 .PHONY: all clean

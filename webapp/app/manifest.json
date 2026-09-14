@@ -1,0 +1,10 @@
+{
+  "api_min": 1,
+  "assets": [
+    {
+      "path": "installed.html",
+      "sha256": "38d9ad04f15e169c02baeb912b3fecc40728143b48bf97eb34634185323d8a39",
+      "size": 481
+    }
+  ]
+}

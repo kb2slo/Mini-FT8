@@ -286,8 +286,20 @@ live tree:
    wipe staging. Partial promote failure leaves staging for retry and may leave a mixed live tree —
    force re-hydrate recovers seed pages.
 
-All three are `PAIRING_REQUIRED` (§7). The phone bootstrap page (later) drives this sequence after the
-HTTPS fetch from the bundle host.
+All three are `PAIRING_REQUIRED` (§7). Seed page `/update` drives this sequence after the HTTPS fetch
+from the bundle host.
+
+**Hosted site layout (same repo, `webapp/`).** GitHub Pages publishes the `webapp/` tree:
+
+| URL | Audience |
+| --- | --- |
+| `https://kb2slo.github.io/Mini-FT8/` | Humans — landing / about |
+| `https://kb2slo.github.io/Mini-FT8/app/` | Machines — `manifest.json` + assets |
+
+NVS (and the compile-time default) stores the **app** base with no trailing slash:
+`https://kb2slo.github.io/Mini-FT8/app`. Soft identity: a product rename changes that default string (and
+optionally one NVS write), not the install protocol. Device day-to-day UI remains `http://minift8.local/`.
+Seed page `/update` fetches `{base}/manifest.json` and drives the wire protocol above.
 
 ## 5. Provisioning and first run
 

@@ -20,6 +20,7 @@
 #include "host_link.h"
 #include "mdns.h"
 #include "pairing_http.h"
+#include "bundle_host.h"
 #include "web_bundle.h"
 #include "web_page.h"
 #include "web_fs.h"
@@ -602,6 +603,14 @@ static esp_err_t get_status(httpd_req_t *req)
     return web_page_send_file(req, "status.html", subs, 4);
 }
 
+static esp_err_t get_update(httpd_req_t *req)
+{
+    const web_sub_t subs[] = {
+        {.key = "bundle_host", .value = bundle_host_get()},
+    };
+    return web_page_send_file(req, "update.html", subs, 1);
+}
+
 static esp_err_t post_forget(httpd_req_t *req)
 {
     // Called by fetch() now rather than a form submit, so the page draws its
@@ -617,12 +626,13 @@ static void httpd_start_status(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
-    // Station mode registers status, forget, pairing disclosure, host-link
-    // viewer/events/time/tx/cancel, bundle begin/file/commit, and GET /* for
-    // web/ files. The IDF default is eight, so cancel was silently dropped
-    // (I28a field check). Bundle handlers also need headroom above the IDF
-    // default 4 KB stack (manifest + mbedtls + VFS blew it on begin/commit).
-    cfg.max_uri_handlers = 20;
+    // Station mode registers status, update, forget, pairing disclosure,
+    // host-link viewer/events/time/tx/cancel, bundle begin/file/commit,
+    // bundle-host get/put, and GET /* for web/ files. The IDF default is
+    // eight, so cancel was silently dropped (I28a field check). Bundle
+    // handlers also need headroom above the IDF default 4 KB stack (manifest
+    // + mbedtls + VFS blew it on begin/commit).
+    cfg.max_uri_handlers = 24;
     cfg.stack_size = 8192;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
@@ -632,6 +642,9 @@ static void httpd_start_status(void)
     static const httpd_uri_t status = {
         .uri = "/", .method = HTTP_GET, .handler = get_status,
     };
+    static const httpd_uri_t update = {
+        .uri = "/update", .method = HTTP_GET, .handler = get_update,
+    };
     static const httpd_uri_t forget = {
         .uri = "/forget", .method = HTTP_POST, .handler = post_forget,
     };
@@ -639,12 +652,14 @@ static void httpd_start_status(void)
     // erases the credentials and strands the device, so it is the clearest
     // case of a write the licensee should have to authorize.
     pairing_http_register(s_httpd, &status, PAIRING_OPEN);
+    pairing_http_register(s_httpd, &update, PAIRING_OPEN);
     pairing_http_register(s_httpd, &forget, PAIRING_REQUIRED);
     pairing_http_register_disclosure(s_httpd);
     // Only in station mode: the viewer is for watching a working radio, and the
     // provisioning AP exists precisely because there is not one yet.
     host_link_register_uris(s_httpd);
     web_bundle_register(s_httpd);
+    bundle_host_register(s_httpd);
     // Static GET /* last so exact /api/... routes win.
     web_fs_register_static(s_httpd);
 }
@@ -755,6 +770,9 @@ void wifi_prov_start(void)
     // come up serving decodes, which are open anyway, and refuse writes.
     if (pairing_http_init() != ESP_OK) {
         ESP_LOGE(TAG, "Pairing unavailable — every guarded route will refuse");
+    }
+    if (bundle_host_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Bundle host URL unavailable — using compile default if possible");
     }
 
     // Before any HTTP handler: mount the web FS and hydrate seed pages from

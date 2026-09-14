@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini-FT8 (kb2slo)</title>
+<style>
+  :root {
+    --ink: #1a1f1c;
+    --muted: #5a6560;
+    --paper: #f3efe6;
+    --band: #2f5d50;
+    --line: #d4cdc0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(1200px 600px at 10% -10%, #dfece6 0%, transparent 55%),
+      linear-gradient(180deg, #ebe4d6 0%, var(--paper) 40%, #e7e1d4 100%);
+    min-height: 100vh;
+  }
+  main {
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: 4.5rem 1.25rem 3rem;
+  }
+  h1 {
+    font-family: "IBM Plex Serif", Georgia, serif;
+    font-weight: 600;
+    font-size: clamp(2.2rem, 6vw, 3.2rem);
+    letter-spacing: -0.02em;
+    margin: 0 0 0.6rem;
+    line-height: 1.1;
+  }
+  .lead {
+    font-size: 1.15rem;
+    color: var(--muted);
+    margin: 0 0 2rem;
+    max-width: 32rem;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1rem;
+    margin-bottom: 2.5rem;
+  }
+  a.btn {
+    display: inline-block;
+    background: var(--band);
+    color: #f7faf8;
+    text-decoration: none;
+    padding: 0.7rem 1.1rem;
+    border-radius: 2px;
+    font-weight: 600;
+  }
+  a.btn.secondary {
+    background: transparent;
+    color: var(--band);
+    box-shadow: inset 0 0 0 1.5px var(--band);
+  }
+  section {
+    border-top: 1px solid var(--line);
+    padding-top: 1.4rem;
+    margin-top: 0.5rem;
+  }
+  h2 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 0.6rem;
+  }
+  p, li { line-height: 1.5; }
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.92em;
+  }
+  ul { padding-left: 1.1rem; margin: 0.4rem 0 0; }
+  footer {
+    margin-top: 3rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+</style>
+<main>
+  <h1>Mini-FT8</h1>
+  <p class="lead">KB2SLO’s fork: Cardputer ADV on the radio, AtomS3 Lite sidekick on Port&nbsp;A, phone as the operator UI over the LAN.</p>
+  <div class="actions">
+    <a class="btn" href="https://github.com/kb2slo/Mini-FT8/releases/tag/continuous">Download firmware</a>
+    <a class="btn secondary" href="https://github.com/kb2slo/Mini-FT8">Source</a>
+  </div>
+  <section>
+    <h2>After Wi‑Fi</h2>
+    <p>Open <code>http://minift8.local/</code> on the same network as the sidekick. Pair with the sidekick’s user button. Install or refresh the browser app from <code>/update</code> on the device — that page pulls the bundle from <code>/app/</code> on this site.</p>
+  </section>
+  <section>
+    <h2>This site</h2>
+    <ul>
+      <li>This page — human-facing overview</li>
+      <li><a href="app/manifest.json"><code>app/</code></a> — machine-facing bundle (manifest + assets)</li>
+    </ul>
+  </section>
+  <footer>Bundle base for devices: <code>…/Mini-FT8/app</code> (no trailing slash). Product rename later changes that NVS default, not the install protocol.</footer>
+</main>

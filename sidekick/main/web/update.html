@@ -1,0 +1,123 @@
+<!doctype html>
+<meta name=viewport content='width=device-width,initial-scale=1'>
+<title>Install app</title>
+
+<!--
+  Phone-relayed bundle install (RFC 0004 §4). Fetches the manifest from the
+  configured HTTPS bundle host (simple GET, no custom headers), then POSTs
+  through /api/bundle/* with the pairing token. Digests are checked on the
+  device; this page does not need crypto.subtle (unavailable on plain HTTP).
+-->
+
+<style>
+body{font-family:system-ui;margin:2rem auto;max-width:24rem;padding:0 1rem;line-height:1.4}
+button{width:100%;padding:.7rem;font-size:1rem;margin-top:1rem}
+#m{color:#666;font-size:.85rem;min-height:1.2em;white-space:pre-wrap}
+code{font-size:.85rem;word-break:break-all}
+a{color:#06c}
+</style>
+
+<h2>Install app</h2>
+<p>Fetches from the bundle host over HTTPS, then writes the web filesystem on this device.</p>
+<p>Host: <code id=host>{{bundle_host}}</code></p>
+<button id=go type=button disabled>Install</button>
+<p id=m></p>
+<p><a href="/">Status</a> · <a href="/log">ADV log</a></p>
+
+<script src=/pairing.js></script>
+<script>
+var host = document.getElementById('host').textContent.trim();
+var m = document.getElementById('m');
+var go = document.getElementById('go');
+
+function setMsg(t) { m.textContent = t; }
+
+function joinUrl(base, rel) {
+  if (base.slice(-1) === '/') base = base.slice(0, -1);
+  if (rel.charAt(0) === '/') rel = rel.slice(1);
+  return base + '/' + rel;
+}
+
+async function install() {
+  if (!MiniFT8Pairing.getToken()) {
+    setMsg('Press the sidekick button to pair first.');
+    MiniFT8Pairing.needsReauth();
+    return;
+  }
+  go.disabled = true;
+  try {
+    var manUrl = joinUrl(host, 'manifest.json');
+    setMsg('Fetching ' + manUrl);
+    var mr = await fetch(manUrl);
+    if (!mr.ok) throw new Error('manifest HTTP ' + mr.status);
+    var manifestText = await mr.text();
+    var manifest = JSON.parse(manifestText);
+    if (!manifest.assets || !manifest.assets.length) {
+      throw new Error('manifest has no assets');
+    }
+
+    setMsg('Begin install…');
+    var br = await MiniFT8Pairing.authFetch('/api/bundle/begin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: manifestText
+    });
+    if (br.status == 401) {
+      MiniFT8Pairing.needsReauth();
+      throw new Error('pairing required');
+    }
+    if (!br.ok) throw new Error('begin: ' + (await br.text()));
+
+    for (var i = 0; i < manifest.assets.length; i++) {
+      var a = manifest.assets[i];
+      var assetUrl = new URL(a.path, manUrl).href;
+      setMsg('Fetching ' + a.path + ' (' + (i + 1) + '/' + manifest.assets.length + ')');
+      var ar = await fetch(assetUrl);
+      if (!ar.ok) throw new Error(a.path + ' HTTP ' + ar.status);
+      var buf = await ar.arrayBuffer();
+      if (buf.byteLength !== a.size) {
+        throw new Error(a.path + ' size ' + buf.byteLength + ' != ' + a.size);
+      }
+      setMsg('Uploading ' + a.path);
+      var ur = await MiniFT8Pairing.authFetch(
+        '/api/bundle/file?path=' + encodeURIComponent(a.path),
+        { method: 'PUT', body: buf }
+      );
+      if (ur.status == 401) {
+        MiniFT8Pairing.needsReauth();
+        throw new Error('pairing required');
+      }
+      if (!ur.ok) throw new Error('put ' + a.path + ': ' + (await ur.text()));
+    }
+
+    setMsg('Commit…');
+    var cr = await MiniFT8Pairing.authFetch('/api/bundle/commit', { method: 'POST' });
+    if (cr.status == 401) {
+      MiniFT8Pairing.needsReauth();
+      throw new Error('pairing required');
+    }
+    if (!cr.ok) throw new Error('commit: ' + (await cr.text()));
+
+    setMsg('Installed. Opening /installed.html …');
+    location.href = '/installed.html';
+  } catch (e) {
+    setMsg(String(e && e.message ? e.message : e));
+    go.disabled = false;
+  }
+}
+
+MiniFT8Pairing.boot({
+  status: m,
+  onPaired: function () {
+    setMsg('Paired — ready to install');
+    go.disabled = false;
+  }
+});
+if (MiniFT8Pairing.getToken()) {
+  setMsg('Paired — ready to install');
+  go.disabled = false;
+} else {
+  setMsg('Press the sidekick button to pair');
+}
+go.onclick = install;
+</script>

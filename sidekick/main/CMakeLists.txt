@@ -44,7 +44,7 @@ endif()
 
 set(WEB_SEED_GEN "${CMAKE_CURRENT_BINARY_DIR}/web_seed_table.c")
 set(WEB_SEED_SRCS "main.c" "wifi_prov.c" "host_link.c" "pairing_token.c" "pairing_http.c"
-                  "web_page.c" "web_fs.c" "web_manifest.c" "web_bundle.c")
+                  "web_page.c" "web_fs.c" "web_manifest.c" "web_bundle.c" "bundle_host.c")
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     file(WRITE "${WEB_SEED_GEN}" "\
 /* Generated from main/web/ — do not edit. */\n\
