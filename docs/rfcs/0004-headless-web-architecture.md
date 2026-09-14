@@ -257,6 +257,38 @@ each bundle declares the minimum sidekick API version it needs — and the sidek
 cannot serve**, saying so plainly rather than accepting it and failing later. Cheap to design in, nasty to
 discover in a field.
 
+**Manifest JSON (concrete).** Constrained shape, no unknown fields, no string escapes. Digests are exactly
+64 lowercase hex digits. Paths are relative under the web root (no leading `/`, no `..`, no dotfiles).
+Device constant `WEB_API_VERSION` starts at `1`.
+
+```json
+{
+  "api_min": 1,
+  "assets": [
+    {
+      "path": "app/index.html",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    }
+  ]
+}
+```
+
+**Install wire protocol (concrete).** One logical “POST the bundle” is three token-guarded steps so a
+truncated upload cannot promote, and so begin can refuse an incompatible `api_min` before any bytes hit the
+live tree:
+
+1. `POST /api/bundle/begin` — body = manifest JSON above. Parses, checks `api_min <= WEB_API_VERSION`,
+   wipes `/web/.staging`, remembers the manifest.
+2. `PUT /api/bundle/file?path=<relpath>` — raw body; `Content-Length` must equal the manifest `size`;
+   SHA-256 of the body must equal the manifest digest. Path must be listed in the open begin.
+3. `POST /api/bundle/commit` — every asset must be staged; re-hash from disk; rename each onto `/web/`;
+   wipe staging. Partial promote failure leaves staging for retry and may leave a mixed live tree —
+   force re-hydrate recovers seed pages.
+
+All three are `PAIRING_REQUIRED` (§7). The phone bootstrap page (later) drives this sequence after the
+HTTPS fetch from the bundle host.
+
 ## 5. Provisioning and first run
 
 ```mermaid

@@ -20,6 +20,7 @@
 #include "host_link.h"
 #include "mdns.h"
 #include "pairing_http.h"
+#include "web_bundle.h"
 #include "web_page.h"
 #include "web_fs.h"
 
@@ -617,9 +618,12 @@ static void httpd_start_status(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
     // Station mode registers status, forget, pairing disclosure, host-link
-    // viewer/events/time/tx/cancel, and GET /* for web/ files. The IDF default
-    // is eight, so cancel was silently dropped (I28a field check).
-    cfg.max_uri_handlers = 16;
+    // viewer/events/time/tx/cancel, bundle begin/file/commit, and GET /* for
+    // web/ files. The IDF default is eight, so cancel was silently dropped
+    // (I28a field check). Bundle handlers also need headroom above the IDF
+    // default 4 KB stack (manifest + mbedtls + VFS blew it on begin/commit).
+    cfg.max_uri_handlers = 20;
+    cfg.stack_size = 8192;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed");
@@ -640,6 +644,8 @@ static void httpd_start_status(void)
     // Only in station mode: the viewer is for watching a working radio, and the
     // provisioning AP exists precisely because there is not one yet.
     host_link_register_uris(s_httpd);
+    web_bundle_register(s_httpd);
+    // Static GET /* last so exact /api/... routes win.
     web_fs_register_static(s_httpd);
 }
 
