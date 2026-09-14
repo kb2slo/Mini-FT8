@@ -21,15 +21,9 @@
 #include "mdns.h"
 #include "pairing_http.h"
 #include "web_page.h"
+#include "web_fs.h"
 
 static const char *TAG = "wifi_prov";
-
-// Embedded by EMBED_TXTFILES (see main/CMakeLists.txt) so the pages stay real
-// .html files rather than C string literals.
-extern const char provision_html_start[] asm("_binary_provision_html_start");
-extern const char status_html_start[] asm("_binary_status_html_start");
-extern const char saved_html_start[] asm("_binary_saved_html_start");
-extern const char error_html_start[] asm("_binary_error_html_start");
 
 #define NVS_NAMESPACE "sidekick"
 #define NVS_KEY_SSID  "wifi_ssid"
@@ -317,7 +311,7 @@ static esp_err_t send_error(httpd_req_t *req, const char *status, const char *ms
 {
     httpd_resp_set_status(req, status);
     const web_sub_t subs[] = {{.key = "message", .value = msg}};
-    web_page_send(req, error_html_start, subs, 1);
+    web_page_send_file(req, "error.html", subs, 1);
     return ESP_FAIL;
 }
 
@@ -413,7 +407,7 @@ static esp_err_t get_form(httpd_req_t *req)
         {.key = "failure",  .value = failure,  .already_html = true},
         {.key = "networks", .value = networks, .already_html = true},
     };
-    return web_page_send(req, provision_html_start, subs, 2);
+    return web_page_send_file(req, "provision.html", subs, 2);
 }
 
 static esp_err_t post_provision(httpd_req_t *req)
@@ -470,7 +464,7 @@ static esp_err_t post_provision(httpd_req_t *req)
     // Answer before rebooting: the phone is on our AP, and the AP goes away
     // the moment we switch to station mode. Telling the operator what will
     // happen is the difference between "it worked" and "it hung".
-    web_page_send(req, saved_html_start, NULL, 0);
+    web_page_send_file(req, "saved.html", NULL, 0);
 
     // Restart rather than switching mode in place: a clean boot re-runs the
     // stored-credentials path, so there is one join path to get right instead
@@ -526,6 +520,8 @@ static void httpd_start_provisioning(void)
     // Default is 8; provisioning is under that, but keep the same headroom as
     // station mode so a new page here does not need a second bump.
     cfg.max_uri_handlers = 16;
+    // Exact routes registered below, then GET /* for files under web/.
+    cfg.uri_match_fn = httpd_uri_match_wildcard;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed");
         return;
@@ -549,6 +545,7 @@ static void httpd_start_provisioning(void)
     pairing_http_register(s_httpd, &provision, PAIRING_OPEN);
     pairing_http_register_disclosure(s_httpd);
     httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, redirect_to_form);
+    web_fs_register_static(s_httpd);
 }
 
 // Advertised in both modes. On the provisioning AP it is a convenience next to
@@ -601,7 +598,7 @@ static esp_err_t get_status(httpd_req_t *req)
         {.key = "version", .value = desc ? desc->version : "?"},
         {.key = "uptime",  .value = uptime},
     };
-    return web_page_send(req, status_html_start, subs, 4);
+    return web_page_send_file(req, "status.html", subs, 4);
 }
 
 static esp_err_t post_forget(httpd_req_t *req)
@@ -619,10 +616,11 @@ static void httpd_start_status(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
-    // Station mode registers status, forget, pairing disclosure + script, and
-    // the host-link viewer/events/time/tx/cancel set — nine handlers. The IDF
-    // default is eight, so cancel was silently dropped (I28a field check).
+    // Station mode registers status, forget, pairing disclosure, host-link
+    // viewer/events/time/tx/cancel, and GET /* for web/ files. The IDF default
+    // is eight, so cancel was silently dropped (I28a field check).
     cfg.max_uri_handlers = 16;
+    cfg.uri_match_fn = httpd_uri_match_wildcard;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed");
         return;
@@ -642,6 +640,7 @@ static void httpd_start_status(void)
     // Only in station mode: the viewer is for watching a working radio, and the
     // provisioning AP exists precisely because there is not one yet.
     host_link_register_uris(s_httpd);
+    web_fs_register_static(s_httpd);
 }
 
 // ---------------------------------------------------------------------------
@@ -750,6 +749,13 @@ void wifi_prov_start(void)
     // come up serving decodes, which are open anyway, and refuse writes.
     if (pairing_http_init() != ESP_OK) {
         ESP_LOGE(TAG, "Pairing unavailable — every guarded route will refuse");
+    }
+
+    // Before any HTTP handler: mount the web FS and hydrate seed pages from
+    // the firmware embed (RFC 0004 §3). Not ESP_ERROR_CHECK'd — a sidekick
+    // that cannot mount still beacons; pages will 500 until flash is fixed.
+    if (web_fs_init() != ESP_OK) {
+        ESP_LOGE(TAG, "Web FS unavailable — bootstrap pages will fail");
     }
 
     s_events = xEventGroupCreate();

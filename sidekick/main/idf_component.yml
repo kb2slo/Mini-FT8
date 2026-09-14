@@ -4,3 +4,5 @@ dependencies:
   # its managed components: a floating version means a fresh resolve on another
   # machine can silently change what ships.
   espressif/mdns: "1.8.2"
+  # Web root FS (I28c / RFC 0004 §3). Pinned exact for the same reason as mdns.
+  joltwallet/littlefs: "1.22.3"

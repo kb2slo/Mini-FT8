@@ -126,6 +126,10 @@ bool web_page_expand(const char *page, const web_sub_t *subs, size_t n_subs,
 }
 
 #ifndef HOST_MOCK
+#include <stdlib.h>
+
+#include "web_fs.h"
+
 static bool emit_to_response(void *ctx, const char *data, size_t len)
 {
     return httpd_resp_send_chunk((httpd_req_t *)ctx, data, len) == ESP_OK;
@@ -141,5 +145,17 @@ esp_err_t web_page_send(httpd_req_t *req, const char *page, const web_sub_t *sub
         return ESP_FAIL;
     }
     return httpd_resp_send_chunk(req, NULL, 0);
+}
+
+esp_err_t web_page_send_file(httpd_req_t *req, const char *relpath, const web_sub_t *subs,
+                             size_t n_subs)
+{
+    char *page = web_fs_load(relpath, NULL);
+    if (!page) {
+        return ESP_FAIL;
+    }
+    const esp_err_t err = web_page_send(req, page, subs, n_subs);
+    free(page);
+    return err;
 }
 #endif

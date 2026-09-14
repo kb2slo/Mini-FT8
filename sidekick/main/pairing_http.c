@@ -246,35 +246,16 @@ static esp_err_t get_pairing_token(httpd_req_t *req)
     return httpd_resp_send(req, body, n);
 }
 
-// pairing.js, embedded next to the HTML pages. OPEN: it carries no secret, and
-// every page loads it so re-auth is one shared path rather than a per-page
-// prompt() that only some screens remembered to offer.
-extern const char pairing_js_start[] asm("_binary_pairing_js_start");
-
-static esp_err_t get_pairing_js(httpd_req_t *req)
-{
-    httpd_resp_set_type(req, "application/javascript; charset=utf-8");
-    // Firmware-bound: a reflash can change the script, so do not let a browser
-    // keep an older copy across updates.
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
-    return httpd_resp_send(req, pairing_js_start, HTTPD_RESP_USE_STRLEN);
-}
-
 esp_err_t pairing_http_register_disclosure(httpd_handle_t server)
 {
     static const httpd_uri_t disclosure = {
         .uri = "/api/pairing-token", .method = HTTP_GET, .handler = get_pairing_token,
     };
-    static const httpd_uri_t script = {
-        .uri = "/pairing.js", .method = HTTP_GET, .handler = get_pairing_js,
-    };
     // PAIRING_OPEN, and this is the one route where that needs explaining:
     // requiring the token to read the token is the chicken-and-egg. What gates
     // it is the physical button, checked inside the handler, plus the window
     // closing itself after one successful retrieval (or on timeout).
-    esp_err_t err = pairing_http_register(server, &disclosure, PAIRING_OPEN);
-    if (err != ESP_OK) {
-        return err;
-    }
-    return pairing_http_register(server, &script, PAIRING_OPEN);
+    // /pairing.js is not registered here: it is a plain file under web/ and is
+    // served by web_fs_register_static()'s GET /*.
+    return pairing_http_register(server, &disclosure, PAIRING_OPEN);
 }
