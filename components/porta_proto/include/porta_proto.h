@@ -251,6 +251,28 @@ bool porta_proto_parse_ack(const porta_frame_t *f, uint8_t *verb_out);
 // `reason_out` must hold PORTA_EVENT_TEXT_MAX + 1 bytes.
 bool porta_proto_parse_nak(const porta_frame_t *f, uint8_t *verb_out, char *reason_out);
 
+// --- CONFIG payloads -----------------------------------------------------
+// CONFIG_* share one shape: key_len (1) + key[key_len] + value_bytes…
+// CONFIG_GET with key_len == 0 means "all keys" (Station.txt surface).
+// CONFIG_SET / CONFIG_VALUE require a non-empty key. Values are the same
+// text Station.txt would store. ACK/NAK for SET (and end-of-GET-all) reuse
+// PORTA_MSG_ACK/NAK with verb = the CONFIG message type (0x06 / 0x07).
+
+#define PORTA_CONFIG_KEY_MAX 32u
+#define PORTA_CONFIG_VALUE_MAX 200u
+
+size_t porta_proto_encode_config_get(const char *key, uint8_t *out, size_t out_cap);
+size_t porta_proto_encode_config_set(const char *key, const char *value,
+                                     uint8_t *out, size_t out_cap);
+size_t porta_proto_encode_config_value(const char *key, const char *value,
+                                       uint8_t *out, size_t out_cap);
+
+// `key_out` / `value_out` must hold KEY_MAX+1 / VALUE_MAX+1. Empty key on
+// GET means get-all. SET/VALUE parsers require a non-empty key.
+bool porta_proto_parse_config_get(const porta_frame_t *f, char *key_out);
+bool porta_proto_parse_config_set(const porta_frame_t *f, char *key_out, char *value_out);
+bool porta_proto_parse_config_value(const porta_frame_t *f, char *key_out, char *value_out);
+
 #ifdef __cplusplus
 }
 #endif

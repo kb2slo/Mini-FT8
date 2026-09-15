@@ -19,6 +19,11 @@ uint32_t rtc_epoch_secs_or_zero();
 const char* porta_host_set_clock(uint32_t epoch_secs, uint16_t millis);
 const char* porta_host_tx_free(const char* text);
 void porta_host_tx_cancel(void);
+// Snapshot Station.txt-shaped lines into out (NUL-terminated). Returns bytes
+// written excluding NUL, or 0 on failure. Used for CONFIG_GET all / one.
+size_t porta_host_config_snapshot(char* out, size_t out_cap);
+// Apply one Station.txt key and persist. nullptr on success, else a short reason.
+const char* porta_host_config_set(const char* key, const char* value);
 #include "porta_proto.h"
 #include "sidekick_flasher.h"
 
@@ -214,10 +219,84 @@ void handle_action(const porta_frame_t& f) {
   }
 }
 
+void handle_config_get(const porta_frame_t& f) {
+  char key[PORTA_CONFIG_KEY_MAX + 1] = {};
+  if (!porta_proto_parse_config_get(&f, key)) {
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+    enqueue(buf, porta_proto_encode_nak(PORTA_MSG_CONFIG_GET, "malformed", buf, sizeof(buf)));
+    return;
+  }
+
+  char snap[2048];
+  const size_t n = porta_host_config_snapshot(snap, sizeof(snap));
+  if (n == 0) {
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+    enqueue(buf, porta_proto_encode_nak(PORTA_MSG_CONFIG_GET, "empty config", buf, sizeof(buf)));
+    return;
+  }
+
+  const bool want_all = (key[0] == '\0');
+  bool found = false;
+  size_t start = 0;
+  while (start < n) {
+    size_t end = start;
+    while (end < n && snap[end] != '\n') {
+      end++;
+    }
+    std::string line(snap + start, end - start);
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    const size_t eq = line.find('=');
+    if (eq != std::string::npos && eq > 0 && eq < PORTA_CONFIG_KEY_MAX) {
+      const std::string k = line.substr(0, eq);
+      const std::string v = line.substr(eq + 1);
+      if (want_all || k == key) {
+        uint8_t buf[PORTA_PROTO_MAX_FRAME];
+        const size_t wn =
+            porta_proto_encode_config_value(k.c_str(), v.c_str(), buf, sizeof(buf));
+        if (wn > 0) {
+          enqueue(buf, wn);
+          found = true;
+        }
+        if (!want_all) {
+          break;
+        }
+      }
+    }
+    start = (end < n) ? end + 1 : n;
+  }
+
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  if (!want_all && !found) {
+    enqueue(buf, porta_proto_encode_nak(PORTA_MSG_CONFIG_GET, "unknown key", buf, sizeof(buf)));
+    return;
+  }
+  enqueue(buf, porta_proto_encode_ack(PORTA_MSG_CONFIG_GET, buf, sizeof(buf)));
+}
+
+void handle_config_set(const porta_frame_t& f) {
+  char key[PORTA_CONFIG_KEY_MAX + 1] = {};
+  char value[PORTA_CONFIG_VALUE_MAX + 1] = {};
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  if (!porta_proto_parse_config_set(&f, key, value)) {
+    enqueue(buf, porta_proto_encode_nak(PORTA_MSG_CONFIG_SET, "malformed", buf, sizeof(buf)));
+    return;
+  }
+  const char* why = porta_host_config_set(key, value);
+  if (why) {
+    enqueue(buf, porta_proto_encode_nak(PORTA_MSG_CONFIG_SET, why, buf, sizeof(buf)));
+  } else {
+    enqueue(buf, porta_proto_encode_ack(PORTA_MSG_CONFIG_SET, buf, sizeof(buf)));
+  }
+}
+
 void handle_frame(const porta_frame_t& f) {
   switch (f.type) {
-  case PORTA_MSG_HELLO:  handle_hello(f);  break;
-  case PORTA_MSG_ACTION: handle_action(f); break;
+  case PORTA_MSG_HELLO:       handle_hello(f);       break;
+  case PORTA_MSG_ACTION:      handle_action(f);      break;
+  case PORTA_MSG_CONFIG_GET:  handle_config_get(f);  break;
+  case PORTA_MSG_CONFIG_SET:  handle_config_set(f);  break;
   default:
     ESP_LOGD(kTag, "Unhandled frame type 0x%02x len %u", f.type, f.len);
     break;

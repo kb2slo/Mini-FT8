@@ -41,3 +41,7 @@ void station_parse(const std::string& text, StationSettings* io);
 
 // Writes the same keys save_station_data() does. No beacon= line.
 std::string station_serialize(const StationSettings& in);
+
+// True for Station.txt keys CONFIG may set (call, grid, band0…, …). Beacon and
+// clock lines are not included — those are live controls / not persisted here.
+bool station_key_known(const char* name);

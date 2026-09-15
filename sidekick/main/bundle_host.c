@@ -43,6 +43,7 @@ bool bundle_host_url_ok(const char *url)
 #include "nvs.h"
 
 #include "pairing_http.h"
+#include "pairing_http_cap.h"
 
 static const char *TAG = "bundle_host";
 
@@ -164,11 +165,22 @@ esp_err_t bundle_host_register(httpd_handle_t server)
         .method = HTTP_PUT,
         .handler = put_bundle_host,
     };
-    esp_err_t err = pairing_http_register(server, &get_uri, PAIRING_OPEN);
-    if (err != ESP_OK) {
-        return err;
+    const struct {
+        const httpd_uri_t *uri;
+        pairing_policy_t policy;
+    } routes[] = {
+        { &get_uri, PAIRING_OPEN },
+        { &put_uri, PAIRING_REQUIRED },
+    };
+    _Static_assert(sizeof(routes) / sizeof(routes[0]) == PAIRING_ROUTES_BUNDLE_HOST,
+                   "bundle_host route count");
+    for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); ++i) {
+        const esp_err_t err = pairing_http_register(server, routes[i].uri, routes[i].policy);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
-    return pairing_http_register(server, &put_uri, PAIRING_REQUIRED);
+    return ESP_OK;
 }
 
 #endif  // HOST_MOCK

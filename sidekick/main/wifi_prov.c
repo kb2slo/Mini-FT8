@@ -20,6 +20,7 @@
 #include "host_link.h"
 #include "mdns.h"
 #include "pairing_http.h"
+#include "pairing_http_cap.h"
 #include "bundle_host.h"
 #include "web_bundle.h"
 #include "web_page.h"
@@ -482,10 +483,28 @@ static esp_err_t post_provision(httpd_req_t *req)
 // this network is captive and pops the sign-in sheet.
 static esp_err_t redirect_to_form(httpd_req_t *req, httpd_err_code_t err)
 {
+    (void)err;
+    ESP_LOGI(TAG, "%s %s -> 302 captive",
+             req->method == HTTP_GET ? "GET" :
+             req->method == HTTP_POST ? "POST" : "?",
+             req->uri ? req->uri : "");
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
+}
+
+// Station mode: log misses. Without this, a wrong path is silent on USB.
+static esp_err_t log_not_found(httpd_req_t *req, httpd_err_code_t err)
+{
+    (void)err;
+    ESP_LOGI(TAG, "%s %s -> 404",
+             req->method == HTTP_GET ? "GET" :
+             req->method == HTTP_POST ? "POST" :
+             req->method == HTTP_PUT ? "PUT" : "?",
+             req->uri ? req->uri : "");
+    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
+    return ESP_FAIL;
 }
 
 // RFC 8910 DHCP option 114. Modern iOS and Android read the portal URI straight
@@ -519,10 +538,8 @@ static void httpd_start_provisioning(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
-    // Default is 8; provisioning is under that, but keep the same headroom as
-    // station mode so a new page here does not need a second bump.
-    cfg.max_uri_handlers = 16;
-    // Exact routes registered below, then GET /* for files under web/.
+    // Match the compile-time pairing slot table (pairing_http_cap.h).
+    cfg.max_uri_handlers = PAIRING_HTTP_MAX_ROUTES_AP;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed");
@@ -542,9 +559,19 @@ static void httpd_start_provisioning(void)
     // chicken-and-egg. What stands in for authorization is that the AP only
     // exists while the device has no working network, and reaching it means
     // being in radio range.
-    pairing_http_register(s_httpd, &form, PAIRING_OPEN);
-    pairing_http_register(s_httpd, &rescan, PAIRING_OPEN);
-    pairing_http_register(s_httpd, &provision, PAIRING_OPEN);
+    const struct {
+        const httpd_uri_t *uri;
+        pairing_policy_t policy;
+    } core[] = {
+        { &form, PAIRING_OPEN },
+        { &rescan, PAIRING_OPEN },
+        { &provision, PAIRING_OPEN },
+    };
+    _Static_assert(sizeof(core) / sizeof(core[0]) == PAIRING_ROUTES_WIFI_PROV_AP_CORE,
+                   "AP core route count");
+    for (size_t i = 0; i < sizeof(core) / sizeof(core[0]); ++i) {
+        pairing_http_register(s_httpd, core[i].uri, core[i].policy);
+    }
     pairing_http_register_disclosure(s_httpd);
     httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, redirect_to_form);
     web_fs_register_static(s_httpd);
@@ -626,13 +653,10 @@ static void httpd_start_status(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
-    // Station mode registers status, update, forget, pairing disclosure,
-    // host-link viewer/events/time/tx/cancel, bundle begin/file/commit,
-    // bundle-host get/put, and GET /* for web/ files. The IDF default is
-    // eight, so cancel was silently dropped (I28a field check). Bundle
-    // handlers also need headroom above the IDF default 4 KB stack (manifest
-    // + mbedtls + VFS blew it on begin/commit).
-    cfg.max_uri_handlers = 24;
+    // Capacity tracks pairing_http_cap.h (station sum). Bundle handlers also
+    // need headroom above the IDF default 4 KB stack (manifest + mbedtls +
+    // VFS blew it on begin/commit).
+    cfg.max_uri_handlers = PAIRING_HTTP_MAX_ROUTES_STATION;
     cfg.stack_size = 8192;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
@@ -651,9 +675,19 @@ static void httpd_start_status(void)
     // The status page is a read of radio state, open on principle. Forget
     // erases the credentials and strands the device, so it is the clearest
     // case of a write the licensee should have to authorize.
-    pairing_http_register(s_httpd, &status, PAIRING_OPEN);
-    pairing_http_register(s_httpd, &update, PAIRING_OPEN);
-    pairing_http_register(s_httpd, &forget, PAIRING_REQUIRED);
+    const struct {
+        const httpd_uri_t *uri;
+        pairing_policy_t policy;
+    } core[] = {
+        { &status, PAIRING_OPEN },
+        { &update, PAIRING_OPEN },
+        { &forget, PAIRING_REQUIRED },
+    };
+    _Static_assert(sizeof(core) / sizeof(core[0]) == PAIRING_ROUTES_WIFI_PROV_STATION_CORE,
+                   "station core route count");
+    for (size_t i = 0; i < sizeof(core) / sizeof(core[0]); ++i) {
+        pairing_http_register(s_httpd, core[i].uri, core[i].policy);
+    }
     pairing_http_register_disclosure(s_httpd);
     // Only in station mode: the viewer is for watching a working radio, and the
     // provisioning AP exists precisely because there is not one yet.
@@ -663,6 +697,7 @@ static void httpd_start_status(void)
     web_fs_register_rehydrate(s_httpd);
     // Static GET /* last so exact /api/... routes win.
     web_fs_register_static(s_httpd);
+    httpd_register_err_handler(s_httpd, HTTPD_404_NOT_FOUND, log_not_found);
 }
 
 // ---------------------------------------------------------------------------

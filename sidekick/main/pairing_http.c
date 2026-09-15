@@ -11,6 +11,7 @@
 #include "nvs_flash.h"
 
 #include "pairing_http.h"
+#include "pairing_http_cap.h"
 
 static const char *TAG = "pairing";
 
@@ -24,19 +25,14 @@ static const char *TAG = "pairing";
 // phone; short enough that a window left open by accident closes itself.
 #define DISCLOSURE_WINDOW_US (120 * 1000 * 1000)
 
-// One slot per registered route. Sized with headroom over the eight routes
-// that exist across both modes; registration fails loudly rather than
-// silently dropping a route, because a dropped route is a missing endpoint and
-// a dropped *guard* would be worse.
-#define MAX_ROUTES 16
-
+// Slot table sized from pairing_http_cap.h (sum of per-module route counts).
 typedef struct {
     esp_err_t (*handler)(httpd_req_t *req);
     void             *user_ctx;
     pairing_policy_t  policy;
 } route_t;
 
-static route_t s_routes[MAX_ROUTES];
+static route_t s_routes[PAIRING_HTTP_MAX_ROUTES];
 static size_t  s_route_count;
 
 static char s_token[PAIRING_TOKEN_BUF];
@@ -173,12 +169,29 @@ static bool request_allowed(httpd_req_t *req, pairing_policy_t policy)
     return pairing_allows(policy, s_token, token);
 }
 
+static const char *http_method_name(httpd_method_t m)
+{
+    switch (m) {
+    case HTTP_GET:     return "GET";
+    case HTTP_POST:    return "POST";
+    case HTTP_PUT:     return "PUT";
+    case HTTP_DELETE:  return "DELETE";
+    case HTTP_HEAD:    return "HEAD";
+    case HTTP_OPTIONS: return "OPTIONS";
+    case HTTP_PATCH:   return "PATCH";
+    default:           return "?";
+    }
+}
+
 static esp_err_t dispatch(httpd_req_t *req)
 {
     route_t *route = (route_t *)req->user_ctx;
     if (!route || !route->handler) {
         return ESP_FAIL;
     }
+    // Every request that hit a registered route — including ones we are about
+    // to 401 — so the sidekick USB log is a usable access log for field debug.
+    ESP_LOGI(TAG, "%s %s", http_method_name(req->method), req->uri ? req->uri : "");
     if (!request_allowed(req, route->policy)) {
         ESP_LOGW(TAG, "Refused %s (no valid token)", req->uri);
         httpd_resp_set_status(req, "401 Unauthorized");
@@ -195,8 +208,9 @@ esp_err_t pairing_http_register(httpd_handle_t server, const httpd_uri_t *uri, p
     if (!server || !uri || !uri->handler) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_route_count >= MAX_ROUTES) {
-        ESP_LOGE(TAG, "route table full, refusing %s", uri->uri);
+    if (s_route_count >= PAIRING_HTTP_MAX_ROUTES) {
+        ESP_LOGE(TAG, "route table full (%u), refusing %s",
+                 (unsigned)PAIRING_HTTP_MAX_ROUTES, uri->uri);
         return ESP_ERR_NO_MEM;
     }
     route_t *route = &s_routes[s_route_count];
@@ -257,5 +271,6 @@ esp_err_t pairing_http_register_disclosure(httpd_handle_t server)
     // closing itself after one successful retrieval (or on timeout).
     // /pairing.js is not registered here: it is a plain file under web/ and is
     // served by web_fs_register_static()'s GET /*.
+    _Static_assert(PAIRING_ROUTES_DISCLOSURE == 1, "disclosure is one route");
     return pairing_http_register(server, &disclosure, PAIRING_OPEN);
 }

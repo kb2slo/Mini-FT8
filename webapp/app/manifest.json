@@ -2,9 +2,14 @@
   "api_min": 1,
   "assets": [
     {
+      "path": "app.html",
+      "sha256": "3a1b074cc46145b49e37c23388244af0538eb89cd4092fff30cc640d9848525d",
+      "size": 6149
+    },
+    {
       "path": "installed.html",
-      "sha256": "38d9ad04f15e169c02baeb912b3fecc40728143b48bf97eb34634185323d8a39",
-      "size": 481
+      "sha256": "1adaaf5cb2ae0bfd5d33abd1ebdfbc6b419b61241bed9bc0980c4e6dbff3c154",
+      "size": 196
     }
   ]
 }

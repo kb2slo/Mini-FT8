@@ -11,12 +11,51 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "pairing_http.h"
+#include "pairing_http_cap.h"
 #include "porta_proto.h"
 #include "web_page.h"
 
 #define PORTA_UART UART_NUM_1
 
 static const char *TAG = "host";
+
+// Copy a frame onto the Port A UART without blocking the httpd task forever.
+// If the ADV is unplugged or not draining RX, uart_write_bytes() can stall
+// indefinitely once the TX ring fills — that hung GET /api/config with no body.
+static bool porta_send(const uint8_t *frame, size_t n)
+{
+    if (!frame || n == 0) {
+        return false;
+    }
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(300);
+    size_t sent = 0;
+    while (sent < n) {
+        size_t free_sz = 0;
+        if (uart_get_tx_buffer_free_size(PORTA_UART, &free_sz) != ESP_OK) {
+            ESP_LOGW(TAG, "porta TX: free-size query failed");
+            return false;
+        }
+        if (free_sz == 0) {
+            if (xTaskGetTickCount() >= deadline) {
+                ESP_LOGW(TAG, "porta TX: ring full (host not draining?)");
+                return false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
+        size_t chunk = n - sent;
+        if (chunk > free_sz) {
+            chunk = free_sz;
+        }
+        const int w = uart_write_bytes(PORTA_UART, (const char *)(frame + sent), chunk);
+        if (w <= 0) {
+            ESP_LOGW(TAG, "porta TX: write failed");
+            return false;
+        }
+        sent += (size_t)w;
+    }
+    return true;
+}
 
 // Ring of recent events. 64 is a couple of FT8 slots' worth of decodes plus
 // their log lines -- enough that a browser polling once a second never misses
@@ -144,24 +183,83 @@ static esp_err_t get_events(httpd_req_t *req)
 // Last reply the host sent to an action, so the browser learns whether its
 // clock actually landed. One outstanding action at a time is all the polled
 // design allows, so a single slot is enough and a verb is enough to match it.
+// CONFIG_GET/SET reuse the same slot with verb = PORTA_MSG_CONFIG_*.
 static volatile uint8_t s_last_reply_verb;
 static volatile bool s_last_reply_ok;
 static char s_last_reply_reason[PORTA_EVENT_TEXT_MAX + 1];
+
+// CONFIG_GET all: VALUE frames arrive before the ACK; gather into JSON here.
+#define CONFIG_JSON_MAX 3072
+static char s_config_json[CONFIG_JSON_MAX];
+static size_t s_config_json_len;
+static bool s_config_json_first;
+static volatile bool s_config_gathering;
+
+static void config_json_begin(void)
+{
+    s_config_gathering = true;
+    s_config_json_first = true;
+    s_config_json[0] = '{';
+    s_config_json[1] = '\0';
+    s_config_json_len = 1;
+}
+
+static void config_json_add(const char *key, const char *value)
+{
+    if (!s_config_gathering || !key || !value) {
+        return;
+    }
+    // Static scratch: this runs on the porta_rx task (4 KB stack). Escaping
+    // both key and value on the stack overflowed when the host replied.
+    static char esc_k[PORTA_CONFIG_KEY_MAX * 6 + 1];
+    static char esc_v[PORTA_CONFIG_VALUE_MAX * 6 + 1];
+    static char piece[sizeof(esc_k) + sizeof(esc_v) + 8];
+    json_escape(key, esc_k, sizeof(esc_k));
+    json_escape(value, esc_v, sizeof(esc_v));
+    const int n = snprintf(piece, sizeof(piece), "%s\"%s\":\"%s\"",
+                           s_config_json_first ? "" : ",", esc_k, esc_v);
+    if (n <= 0 || s_config_json_len + (size_t)n + 2 >= CONFIG_JSON_MAX) {
+        return;
+    }
+    memcpy(s_config_json + s_config_json_len, piece, (size_t)n + 1);
+    s_config_json_len += (size_t)n;
+    s_config_json_first = false;
+}
+
+static void config_json_end(void)
+{
+    if (!s_config_gathering) {
+        return;
+    }
+    if (s_config_json_len + 2 < CONFIG_JSON_MAX) {
+        s_config_json[s_config_json_len++] = '}';
+        s_config_json[s_config_json_len] = '\0';
+    }
+    s_config_gathering = false;
+}
 
 // Wait briefly for the host's ACK/NAK. One frame over a 115200 link answered
 // from the main loop, so this is milliseconds -- but the browser should be
 // told what happened rather than assuming success.
 static esp_err_t wait_action_reply(httpd_req_t *req, uint8_t verb)
 {
-    for (int i = 0; i < 40 && s_last_reply_verb != verb; ++i) {
+    // CONFIG_GET-all can enqueue many VALUE frames (one per tick on the host),
+    // so allow longer than a single ACTION.
+    const int tries = (verb == PORTA_MSG_CONFIG_GET) ? 200 : 40;
+    for (int i = 0; i < tries && s_last_reply_verb != verb; ++i) {
         vTaskDelay(pdMS_TO_TICKS(25));
     }
 
     httpd_resp_set_type(req, "application/json");
     if (s_last_reply_verb != verb) {
+        s_config_gathering = false;
+        ESP_LOGW(TAG, "no ACK for verb 0x%02x", verb);
         return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"no reply from host\"}");
     }
     if (s_last_reply_ok) {
+        if (verb == PORTA_MSG_CONFIG_GET) {
+            return httpd_resp_send(req, s_config_json, s_config_json_len);
+        }
         return httpd_resp_sendstr(req, "{\"ok\":true}");
     }
     char out[PORTA_EVENT_TEXT_MAX + 32];
@@ -196,7 +294,9 @@ static esp_err_t post_time(httpd_req_t *req)
                                                   (uint16_t)(epoch_ms % 1000),
                                                   frame, sizeof(frame));
     s_last_reply_verb = 0;
-    uart_write_bytes(PORTA_UART, (const char *)frame, n);
+    if (!porta_send(frame, n)) {
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
     return wait_action_reply(req, PORTA_ACT_SET_CLOCK);
 }
 
@@ -229,7 +329,9 @@ static esp_err_t post_tx(httpd_req_t *req)
         return ESP_FAIL;
     }
     s_last_reply_verb = 0;
-    uart_write_bytes(PORTA_UART, (const char *)frame, n);
+    if (!porta_send(frame, n)) {
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
     return wait_action_reply(req, PORTA_ACT_TX_FREE);
 }
 
@@ -245,8 +347,94 @@ static esp_err_t post_tx_cancel(httpd_req_t *req)
     uint8_t frame[PORTA_PROTO_MAX_FRAME];
     const size_t n = porta_proto_encode_tx_cancel(frame, sizeof(frame));
     s_last_reply_verb = 0;
-    uart_write_bytes(PORTA_UART, (const char *)frame, n);
+    if (!porta_send(frame, n)) {
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
     return wait_action_reply(req, PORTA_ACT_TX_CANCEL);
+}
+
+// GET /api/config — Station.txt surface as JSON. Open read: call/grid are on
+// the air; WiFi secrets are not in this object.
+static esp_err_t get_config(httpd_req_t *req)
+{
+    config_json_begin();
+    s_last_reply_verb = 0;
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_config_get("", frame, sizeof(frame));
+    if (!porta_send(frame, n)) {
+        s_config_gathering = false;
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
+    return wait_action_reply(req, PORTA_MSG_CONFIG_GET);
+}
+
+// PUT /api/config  body: one or more Station.txt lines (key=value\n).
+// Token required: this changes the station.
+static esp_err_t put_config(httpd_req_t *req)
+{
+    char body[1024];
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+
+    int applied = 0;
+    char *line = body;
+    while (line && *line) {
+        char *nl = strchr(line, '\n');
+        if (nl) {
+            *nl = '\0';
+        }
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\r' || line[len - 1] == ' ')) {
+            line[--len] = '\0';
+        }
+        if (len > 0) {
+            char *eq = strchr(line, '=');
+            if (!eq || eq == line) {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad line");
+                return ESP_FAIL;
+            }
+            *eq = '\0';
+            const char *key = line;
+            const char *value = eq + 1;
+            uint8_t frame[PORTA_PROTO_MAX_FRAME];
+            const size_t n = porta_proto_encode_config_set(key, value, frame, sizeof(frame));
+            if (n == 0) {
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad key/value");
+                return ESP_FAIL;
+            }
+            s_last_reply_verb = 0;
+            if (!porta_send(frame, n)) {
+                httpd_resp_set_type(req, "application/json");
+                return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+            }
+            for (int i = 0; i < 40 && s_last_reply_verb != PORTA_MSG_CONFIG_SET; ++i) {
+                vTaskDelay(pdMS_TO_TICKS(25));
+            }
+            if (s_last_reply_verb != PORTA_MSG_CONFIG_SET) {
+                httpd_resp_set_type(req, "application/json");
+                return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"no reply from host\"}");
+            }
+            if (!s_last_reply_ok) {
+                char out[PORTA_EVENT_TEXT_MAX + 32];
+                snprintf(out, sizeof(out), "{\"ok\":false,\"why\":\"%s\"}", s_last_reply_reason);
+                httpd_resp_set_type(req, "application/json");
+                return httpd_resp_sendstr(req, out);
+            }
+            ++applied;
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    if (applied == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
 static esp_err_t get_viewer(httpd_req_t *req)
@@ -297,17 +485,27 @@ static void porta_rx_task(void *arg)
                          e.snr, e.offset_hz, e.dt_centis / 100.0,
                          e.is_to_me ? "[me] " : "", e.is_cq ? "[cq] " : "", e.text);
                 ring_push(&e);
-            } else if (porta_proto_parse_ack(&frame, (uint8_t *)&s_last_reply_verb)) {
-                s_last_reply_ok = true;
-                s_last_reply_reason[0] = '\0';
-            } else if (porta_proto_parse_nak(&frame, (uint8_t *)&s_last_reply_verb,
-                                             s_last_reply_reason)) {
-                s_last_reply_ok = false;
-                ESP_LOGW("adv", "refused action 0x%02x: %s",
-                         s_last_reply_verb, s_last_reply_reason);
             } else {
-                ESP_LOGW(TAG, "frame type 0x%02x len %u (no handler yet)",
-                         frame.type, frame.len);
+                char cfg_key[PORTA_CONFIG_KEY_MAX + 1];
+                char cfg_val[PORTA_CONFIG_VALUE_MAX + 1];
+                if (porta_proto_parse_config_value(&frame, cfg_key, cfg_val)) {
+                    config_json_add(cfg_key, cfg_val);
+                } else if (porta_proto_parse_ack(&frame, (uint8_t *)&s_last_reply_verb)) {
+                    if (s_last_reply_verb == PORTA_MSG_CONFIG_GET) {
+                        config_json_end();
+                    }
+                    s_last_reply_ok = true;
+                    s_last_reply_reason[0] = '\0';
+                } else if (porta_proto_parse_nak(&frame, (uint8_t *)&s_last_reply_verb,
+                                                 s_last_reply_reason)) {
+                    s_config_gathering = false;
+                    s_last_reply_ok = false;
+                    ESP_LOGW("adv", "refused action 0x%02x: %s",
+                             s_last_reply_verb, s_last_reply_reason);
+                } else {
+                    ESP_LOGW(TAG, "frame type 0x%02x len %u (no handler yet)",
+                             frame.type, frame.len);
+                }
             }
         }
         if (dec.crc_errors != reported_crc) {
@@ -346,10 +544,17 @@ void host_link_register_uris(httpd_handle_t server)
     static const httpd_uri_t tx_cancel = {
         .uri = "/api/tx/cancel", .method = HTTP_POST, .handler = post_tx_cancel,
     };
+    static const httpd_uri_t config_get = {
+        .uri = "/api/config", .method = HTTP_GET, .handler = get_config,
+    };
+    static const httpd_uri_t config_put = {
+        .uri = "/api/config", .method = HTTP_PUT, .handler = put_config,
+    };
     // The viewer and the event feed are reads of radio data: open on
     // principle, since anyone may listen to what is on the air. Setting the
     // host clock or keying the transmitter changes the device, so those need
-    // the token.
+    // the token. Station config read is open (call/grid are on the air);
+    // writes are guarded.
     const struct {
         const httpd_uri_t *uri;
         pairing_policy_t policy;
@@ -359,7 +564,11 @@ void host_link_register_uris(httpd_handle_t server)
         { &settime, PAIRING_REQUIRED },
         { &tx, PAIRING_REQUIRED },
         { &tx_cancel, PAIRING_REQUIRED },
+        { &config_get, PAIRING_OPEN },
+        { &config_put, PAIRING_REQUIRED },
     };
+    _Static_assert(sizeof(routes) / sizeof(routes[0]) == PAIRING_ROUTES_HOST_LINK,
+                   "host_link route count");
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); ++i) {
         const esp_err_t err = pairing_http_register(server, routes[i].uri, routes[i].policy);
         if (err != ESP_OK) {

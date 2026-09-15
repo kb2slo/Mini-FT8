@@ -4525,6 +4525,43 @@ void save_station_data() {
   station_save_worker_submit(station_serialize(s));
 }
 
+size_t porta_host_config_snapshot(char* out, size_t out_cap) {
+  if (!out || out_cap < 2) {
+    return 0;
+  }
+  StationSettings s;
+  station_fill_from_globals(&s);
+  const std::string text = station_serialize(s);
+  if (text.size() + 1 > out_cap) {
+    return 0;
+  }
+  memcpy(out, text.c_str(), text.size() + 1);
+  return text.size();
+}
+
+const char* porta_host_config_set(const char* key, const char* value) {
+  if (!key || key[0] == '\0' || !value) {
+    return "malformed";
+  }
+  if (!station_key_known(key)) {
+    return "unknown key";
+  }
+  if (strlen(key) > 32 || strlen(value) > 200) {
+    return "too long";
+  }
+  StationSettings s;
+  station_fill_from_globals(&s);
+  std::string line = std::string(key) + "=" + value + "\n";
+  station_parse(line, &s);
+  station_apply_to_globals(s);
+  // protocol_mode matches MENU: pending until reboot.
+  g_protocol_pending_ft4 = s.protocol_ft4;
+  rebuild_active_bands();
+  rebuild_ignore_prefixes();
+  save_station_data();
+  return nullptr;
+}
+
 static void enter_mode(UIMode new_mode) {
   // No special handling needed when leaving TX mode - autoseq manages queue internally
   if (new_mode != ui_mode) {
