@@ -697,7 +697,7 @@ document.getElementById('beaconBtn').onclick = function () {
 // with a final active:false event the instant the banner would come down --
 // no timeout to guess at on this side.
 
-var txHud = null; // last TX_HUD event: {active, aborted, wrblk, pw, swr, batt, x}
+var txHud = null; // last TX_HUD event: {active, aborted, wrblk, pw, swr, batt, reason, x}
 
 function renderTxHud() {
   var el = document.getElementById('opTxHud');
@@ -717,8 +717,13 @@ function renderTxHud() {
     if (txHud.swr > -1) parts.push('SWR ' + (txHud.swr / 100).toFixed(2));
   }
   if (txHud.batt > -1) parts.push(txHud.batt + '% ' + (txHud.batt <= 20 ? '🪫' : '🔋'));
+  // The reason string comes from the firmware's actual abort site
+  // (porta_emit_tx_hud()'s `reason` field), not a guess here -- so a future
+  // second abort cause shows up as itself instead of always reading
+  // "low battery". Falls back to a generic label only if the firmware ever
+  // sends aborted:true with no reason at all (should not happen).
   document.getElementById('opTxHudMeta').textContent = txHud.aborted
-    ? 'TX ABORTED (low battery)'
+    ? ('TX ABORTED: ' + (txHud.reason || 'unknown reason'))
     : (parts.length ? parts.join(' · ') : '—');
 }
 
@@ -830,7 +835,7 @@ function applyEvent(e) {
     slotState = { sp: e.sp, bm: e.bm, hz: e.hz };
   } else if (e.d === 4) {
     txHud = { active: !!e.active, aborted: !!e.aborted, wrblk: !!e.wrblk,
-             pw: e.pw, swr: e.swr, batt: e.batt, x: e.x };
+             pw: e.pw, swr: e.swr, batt: e.batt, reason: e.reason || '', x: e.x };
   }
 }
 

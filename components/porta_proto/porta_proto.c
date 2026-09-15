@@ -361,15 +361,22 @@ bool porta_proto_parse_slot_state(const porta_frame_t *f, porta_slot_state_event
     return true;
 }
 
-// subtype | epoch(4) | flags | power_dw(2) | swr_c(2) | battery_pct(1) | text...
-#define TX_HUD_BODY_OFFSET (EVENT_HEADER_LEN + 1u + 2u + 2u + 1u)
+// subtype | epoch(4) | flags | power_dw(2) | swr_c(2) | battery_pct(1) |
+// reason_len(1) | reason... | text...
+// reason is length-prefixed (short, and text still needs to be the trailing
+// free-running field); text runs to the end of the frame same as elsewhere.
+#define TX_HUD_FIXED_LEN (EVENT_HEADER_LEN + 1u + 2u + 2u + 1u + 1u)
 
 size_t porta_proto_encode_tx_hud(const porta_tx_hud_event_t *h, uint8_t *out, size_t out_cap)
 {
     if (!h) {
         return 0;
     }
-    uint8_t payload[TX_HUD_BODY_OFFSET + PORTA_TX_HUD_TEXT_MAX];
+    const size_t reason_n = strnlen(h->reason, PORTA_TX_HUD_REASON_MAX + 1);
+    if (reason_n > PORTA_TX_HUD_REASON_MAX) {
+        return 0;
+    }
+    uint8_t payload[TX_HUD_FIXED_LEN + PORTA_TX_HUD_REASON_MAX + PORTA_TX_HUD_TEXT_MAX];
     payload[0] = PORTA_EVT_TX_HUD;
     put_u32(&payload[1], h->epoch_secs);
     payload[5] = (uint8_t)((h->active ? 0x01u : 0u) |
@@ -378,18 +385,24 @@ size_t porta_proto_encode_tx_hud(const porta_tx_hud_event_t *h, uint8_t *out, si
     put_u16(&payload[6], (uint16_t)h->power_dw);
     put_u16(&payload[8], (uint16_t)h->swr_c);
     payload[10] = (uint8_t)h->battery_pct;
-
-    size_t n = strnlen(h->text, PORTA_TX_HUD_TEXT_MAX);
-    if (n > 0) {
-        memcpy(&payload[TX_HUD_BODY_OFFSET], h->text, n);
+    payload[11] = (uint8_t)reason_n;
+    size_t p = TX_HUD_FIXED_LEN;
+    if (reason_n > 0) {
+        memcpy(&payload[p], h->reason, reason_n);
     }
-    return porta_proto_encode(PORTA_MSG_EVENT, payload,
-                              (uint8_t)(TX_HUD_BODY_OFFSET + n), out, out_cap);
+    p += reason_n;
+
+    const size_t text_n = strnlen(h->text, PORTA_TX_HUD_TEXT_MAX);
+    if (text_n > 0) {
+        memcpy(&payload[p], h->text, text_n);
+    }
+    p += text_n;
+    return porta_proto_encode(PORTA_MSG_EVENT, payload, (uint8_t)p, out, out_cap);
 }
 
 bool porta_proto_parse_tx_hud(const porta_frame_t *f, porta_tx_hud_event_t *out)
 {
-    if (!f || !out || f->type != PORTA_MSG_EVENT || f->len < TX_HUD_BODY_OFFSET ||
+    if (!f || !out || f->type != PORTA_MSG_EVENT || f->len < TX_HUD_FIXED_LEN ||
         f->payload[0] != PORTA_EVT_TX_HUD) {
         return false;
     }
@@ -401,7 +414,15 @@ bool porta_proto_parse_tx_hud(const porta_frame_t *f, porta_tx_hud_event_t *out)
     out->power_dw        = (int16_t)get_u16(&f->payload[6]);
     out->swr_c           = (int16_t)get_u16(&f->payload[8]);
     out->battery_pct     = (int8_t)f->payload[10];
-    event_text_out(f, TX_HUD_BODY_OFFSET, out->text, sizeof(out->text));
+
+    const uint8_t reason_n = f->payload[11];
+    if (reason_n > PORTA_TX_HUD_REASON_MAX || TX_HUD_FIXED_LEN + reason_n > f->len) {
+        return false;
+    }
+    memcpy(out->reason, &f->payload[TX_HUD_FIXED_LEN], reason_n);
+    out->reason[reason_n] = '\0';
+
+    event_text_out(f, TX_HUD_FIXED_LEN + reason_n, out->text, sizeof(out->text));
     return true;
 }
 

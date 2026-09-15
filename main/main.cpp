@@ -1356,6 +1356,7 @@ static void redraw_tx_view() {
 static bool g_tx_abort_hud = false;
 static int64_t g_tx_abort_hud_until_ms = 0;
 static char g_tx_abort_text[48] = {0};
+static char g_tx_abort_reason[PORTA_TX_HUD_REASON_MAX + 1] = {0};
 
 static bool tx_hud_visible() {
   return ui_mode == UIMode::RX && (g_tx_active || g_tx_abort_hud);
@@ -1480,7 +1481,7 @@ static void porta_tx_hud_tick() {
     // Falling edge: tell the browser to hide its panel, exactly once, rather
     // than making it guess from a timeout.
     s_last_active = false;
-    porta_emit_tx_hud(false, false, false, "", -1.f, -1.f, -1);
+    porta_emit_tx_hud(false, false, false, "", -1.f, -1.f, -1, "");
     return;
   }
   s_last_ms = now_ms;
@@ -1503,7 +1504,7 @@ static void porta_tx_hud_tick() {
   }
 
   porta_emit_tx_hud(true, aborted, ps.writes_blocked, tx_text, power_w, swr,
-                    ps.valid ? ps.percent : -1);
+                    ps.valid ? ps.percent : -1, aborted ? g_tx_abort_reason : "");
 }
 
 static void draw_rx_screen(int flash_index = -1) {
@@ -1524,11 +1525,16 @@ static void restore_rx_after_tx() {
   ui_draw_rx();
 }
 
-static void begin_low_batt_tx_abort_hud() {
+// `reason` names why this abort happened, for the phone's TX HUD (relayed
+// verbatim, not guessed client-side -- see porta_emit_tx_hud()). Every call
+// site today is a low-battery halt; the parameter exists so a future second
+// abort reason is a call-site change here, not a wire-protocol one.
+static void begin_low_batt_tx_abort_hud(const char* reason = "low battery") {
   if (g_tx_active) return;
   if (g_pending_tx_valid && !g_pending_tx.text.empty()) {
     snprintf(g_tx_abort_text, sizeof(g_tx_abort_text), "%s", g_pending_tx.text.c_str());
   }
+  snprintf(g_tx_abort_reason, sizeof(g_tx_abort_reason), "%s", reason ? reason : "");
   g_tx_abort_hud = true;
   const int slot_ms = (g_protocol && g_protocol->slot_time_ms > 0) ? g_protocol->slot_time_ms : 15000;
   g_tx_abort_hud_until_ms = rtc_now_ms() + slot_ms;
@@ -1540,6 +1546,7 @@ static void tx_abort_hud_tick() {
   if (rtc_now_ms() < g_tx_abort_hud_until_ms) return;
   g_tx_abort_hud = false;
   g_tx_abort_text[0] = '\0';
+  g_tx_abort_reason[0] = '\0';
   restore_rx_after_tx();
 }
 
@@ -1547,6 +1554,7 @@ static void end_low_batt_tx_abort_hud() {
   if (!g_tx_abort_hud) return;
   g_tx_abort_hud = false;
   g_tx_abort_text[0] = '\0';
+  g_tx_abort_reason[0] = '\0';
   restore_rx_after_tx();
 }
 

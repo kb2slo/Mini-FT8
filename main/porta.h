@@ -74,9 +74,14 @@ void porta_emit_slot_state(uint8_t slot_parity, uint8_t beacon_mode,
 // (main.cpp's draw_tx_hud() already computes these each ~500 ms). `active`
 // false is the "hide the panel" signal -- one final call at that transition,
 // not a timeout the browser has to guess. power_w/swr are -1 for "not read
-// yet"; battery_pct is -1 if unavailable.
+// yet"; battery_pct is -1 if unavailable. `reason` is why `aborted` is true
+// (e.g. "low battery", from wherever the abort was actually triggered) --
+// empty when not aborted. Sourced from the real abort site rather than
+// assumed client-side, so a future second abort reason shows up as itself
+// instead of every abort reading the same hardcoded phrase.
 void porta_emit_tx_hud(bool active, bool aborted, bool writes_blocked,
-                       const char* text, float power_w, float swr, int battery_pct);
+                       const char* text, float power_w, float swr, int battery_pct,
+                       const char* reason);
 
 // What the companion looks like from here. Three failure states rather than
 // one, because they need different words: a sidekick that is merely behind can

@@ -95,6 +95,7 @@ typedef struct {
     int16_t  tx_power_dw;                     // TX_HUD, deciwatts
     int16_t  tx_swr_c;                        // TX_HUD, SWR * 100
     int8_t   tx_battery_pct;                  // TX_HUD
+    char     tx_reason[PORTA_TX_HUD_REASON_MAX + 1];  // TX_HUD, why tx_aborted
 } entry_t;
 
 static entry_t s_ring[RING_LEN];
@@ -202,15 +203,18 @@ static esp_err_t get_events(httpd_req_t *req)
                          first ? "" : ",", e.seq, e.epoch_secs, e.slot_parity, e.beacon_mode,
                          e.offset_hz);
             break;
-        case ENTRY_TX_HUD:
+        case ENTRY_TX_HUD: {
+            char esc_reason[PORTA_TX_HUD_REASON_MAX * 6 + 1];
+            json_escape(e.tx_reason, esc_reason, sizeof(esc_reason));
             n = snprintf(row, sizeof(row),
                          "%s{\"s\":%" PRIu32 ",\"t\":%" PRIu32 ",\"d\":4,"
                          "\"active\":%d,\"aborted\":%d,\"wrblk\":%d,"
-                         "\"pw\":%d,\"swr\":%d,\"batt\":%d,\"x\":\"%s\"}",
+                         "\"pw\":%d,\"swr\":%d,\"batt\":%d,\"reason\":\"%s\",\"x\":\"%s\"}",
                          first ? "" : ",", e.seq, e.epoch_secs,
                          e.tx_active ? 1 : 0, e.tx_aborted ? 1 : 0, e.tx_writes_blocked ? 1 : 0,
-                         e.tx_power_dw, e.tx_swr_c, e.tx_battery_pct, esc);
+                         e.tx_power_dw, e.tx_swr_c, e.tx_battery_pct, esc_reason, esc);
             break;
+        }
         case ENTRY_LOG:
         default:
             n = snprintf(row, sizeof(row),
@@ -940,6 +944,7 @@ static void porta_rx_task(void *arg)
                 e.tx_power_dw = hud.power_dw;
                 e.tx_swr_c = hud.swr_c;
                 e.tx_battery_pct = hud.battery_pct;
+                strncpy(e.tx_reason, hud.reason, sizeof(e.tx_reason) - 1);
                 strncpy(e.text, hud.text, sizeof(e.text) - 1);
                 ring_push(&e);
             } else if (porta_proto_parse_file_name_row(&frame, file_name)) {
