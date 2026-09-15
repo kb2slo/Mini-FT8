@@ -347,8 +347,13 @@ Requirements:
 * **Board-agnostic.** Specified against the application — decode, transmit, autoseq, config, log — never
   against board hardware, so an ADV build and a P4 build present the same surface.
 * **Versioned**, for the same reason §4 pairs app and API.
-* **Coexists with what is already on the bus.** `main/porta.cpp` currently arbitrates Port A between a GPS
-  and the companion via `PortaRole`, a mechanism that exists only because UART makes the port exclusive.
+* **Coexists with what is already on the bus.** ~~`main/porta.cpp` currently arbitrates Port A between a GPS
+  and the companion via `PortaRole`~~ — **corrected 2026-09-14, checked against code rather than assumed
+  while wiring I28d's dispatch layer:** `PortaRole` no longer exists. Grove GPS moved to the GNSS/LoRa cap's
+  own receiver, and `main/porta.h`'s own comment says the port now has exactly one occupant and needs "no
+  arbitration, no role, and no baud probe." This requirement is therefore already satisfied trivially — kept
+  as a bullet because [B11](../ROADMAP.md) (QMX+ AUX GPS into ADV Grove, Backlog, not built) would reopen it
+  if it ever lands; that row already marks itself exclusive with the companion UART for exactly this reason.
 
 Direction and latency are asymmetric in a way that shapes the design: commands are infrequent and want low
 latency; decodes are periodic on a 15-second boundary and tolerate hundreds of milliseconds. A full slot of
