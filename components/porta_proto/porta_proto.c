@@ -331,6 +331,36 @@ bool porta_proto_parse_tx_cancel(const porta_frame_t *f)
            f->payload[0] == PORTA_ACT_TX_CANCEL;
 }
 
+size_t porta_proto_encode_connect(uint8_t *out, size_t out_cap)
+{
+    const uint8_t verb = PORTA_ACT_CONNECT;
+    return porta_proto_encode(PORTA_MSG_ACTION, &verb, 1, out, out_cap);
+}
+
+bool porta_proto_parse_connect(const porta_frame_t *f)
+{
+    return f && f->type == PORTA_MSG_ACTION && f->len == 1 &&
+           f->payload[0] == PORTA_ACT_CONNECT;
+}
+
+size_t porta_proto_encode_tune(bool on, uint8_t *out, size_t out_cap)
+{
+    uint8_t payload[2] = {PORTA_ACT_TUNE, on ? 1u : 0u};
+    return porta_proto_encode(PORTA_MSG_ACTION, payload, 2, out, out_cap);
+}
+
+bool porta_proto_parse_tune(const porta_frame_t *f, bool *on_out)
+{
+    if (!f || f->type != PORTA_MSG_ACTION || f->len != 2 ||
+        f->payload[0] != PORTA_ACT_TUNE) {
+        return false;
+    }
+    if (on_out) {
+        *on_out = (f->payload[1] != 0);
+    }
+    return true;
+}
+
 size_t porta_proto_encode_ack(uint8_t verb, uint8_t *out, size_t out_cap)
 {
     return porta_proto_encode(PORTA_MSG_ACK, &verb, 1, out, out_cap);

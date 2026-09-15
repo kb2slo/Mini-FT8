@@ -244,8 +244,13 @@ static void config_json_end(void)
 static esp_err_t wait_action_reply(httpd_req_t *req, uint8_t verb)
 {
     // CONFIG_GET-all can enqueue many VALUE frames (one per tick on the host),
-    // so allow longer than a single ACTION.
-    const int tries = (verb == PORTA_MSG_CONFIG_GET) ? 200 : 40;
+    // so allow longer than a single ACTION. CONNECT may wait on USB enum.
+    int tries = 40;
+    if (verb == PORTA_MSG_CONFIG_GET) {
+        tries = 200;
+    } else if (verb == PORTA_ACT_CONNECT) {
+        tries = 120;
+    }
     for (int i = 0; i < tries && s_last_reply_verb != verb; ++i) {
         vTaskDelay(pdMS_TO_TICKS(25));
     }
@@ -351,6 +356,60 @@ static esp_err_t post_tx_cancel(httpd_req_t *req)
         return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
     }
     return wait_action_reply(req, PORTA_ACT_TX_CANCEL);
+}
+
+// POST /api/radio/connect — STATUS → 2 (start UAC + CAT sync). Token required.
+static esp_err_t post_radio_connect(httpd_req_t *req)
+{
+    char discard[64];
+    while (httpd_req_recv(req, discard, sizeof(discard)) > 0) {
+    }
+
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_connect(frame, sizeof(frame));
+    s_last_reply_verb = 0;
+    if (!porta_send(frame, n)) {
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
+    return wait_action_reply(req, PORTA_ACT_CONNECT);
+}
+
+// POST /api/radio/tune — body "1"/"0" or "on"/"off". Token required (keys TX).
+static esp_err_t post_radio_tune(httpd_req_t *req)
+{
+    char body[16] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    while (received > 0) {
+        const char c = body[received - 1];
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') {
+            break;
+        }
+        body[--received] = '\0';
+    }
+    bool on = false;
+    if (strcmp(body, "1") == 0 || strcmp(body, "on") == 0 || strcmp(body, "true") == 0) {
+        on = true;
+    } else if (strcmp(body, "0") == 0 || strcmp(body, "off") == 0 ||
+               strcmp(body, "false") == 0) {
+        on = false;
+    } else {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "want 0 or 1");
+        return ESP_FAIL;
+    }
+
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_tune(on, frame, sizeof(frame));
+    s_last_reply_verb = 0;
+    if (!porta_send(frame, n)) {
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
+    return wait_action_reply(req, PORTA_ACT_TUNE);
 }
 
 // GET /api/config — Station.txt surface as JSON. Open read: call/grid are on
@@ -550,11 +609,17 @@ void host_link_register_uris(httpd_handle_t server)
     static const httpd_uri_t config_put = {
         .uri = "/api/config", .method = HTTP_PUT, .handler = put_config,
     };
+    static const httpd_uri_t radio_connect = {
+        .uri = "/api/radio/connect", .method = HTTP_POST, .handler = post_radio_connect,
+    };
+    static const httpd_uri_t radio_tune = {
+        .uri = "/api/radio/tune", .method = HTTP_POST, .handler = post_radio_tune,
+    };
     // The viewer and the event feed are reads of radio data: open on
     // principle, since anyone may listen to what is on the air. Setting the
     // host clock or keying the transmitter changes the device, so those need
     // the token. Station config read is open (call/grid are on the air);
-    // writes are guarded.
+    // writes are guarded. Connect / tune are writes (UAC + CAT / TX tone).
     const struct {
         const httpd_uri_t *uri;
         pairing_policy_t policy;
@@ -566,6 +631,8 @@ void host_link_register_uris(httpd_handle_t server)
         { &tx_cancel, PAIRING_REQUIRED },
         { &config_get, PAIRING_OPEN },
         { &config_put, PAIRING_REQUIRED },
+        { &radio_connect, PAIRING_REQUIRED },
+        { &radio_tune, PAIRING_REQUIRED },
     };
     _Static_assert(sizeof(routes) / sizeof(routes[0]) == PAIRING_ROUTES_HOST_LINK,
                    "host_link route count");

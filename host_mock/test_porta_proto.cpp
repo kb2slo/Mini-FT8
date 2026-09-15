@@ -452,6 +452,43 @@ static void test_action_tx_free_and_cancel()
     }
 }
 
+static void test_action_connect_and_tune()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    size_t n = porta_proto_encode_connect(buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1 && got[0].len == 1, "connect is verb-only");
+    if (got.size() == 1) {
+        check(porta_proto_parse_connect(&got[0]), "connect parses");
+        check(!porta_proto_parse_tx_cancel(&got[0]), "connect is not cancel");
+        bool on = true;
+        check(!porta_proto_parse_tune(&got[0], &on), "connect is not tune");
+    }
+
+    porta_decoder_init(&d);
+    n = porta_proto_encode_tune(true, buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1 && got[0].len == 2, "tune is verb + on");
+    if (got.size() == 1) {
+        bool on = false;
+        check(porta_proto_parse_tune(&got[0], &on), "tune on parses");
+        check(on, "tune on is true");
+        check(!porta_proto_parse_connect(&got[0]), "tune is not connect");
+    }
+
+    porta_decoder_init(&d);
+    n = porta_proto_encode_tune(false, buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "tune off frames");
+    if (got.size() == 1) {
+        bool on = true;
+        check(porta_proto_parse_tune(&got[0], &on) && !on, "tune off is false");
+    }
+}
+
 static void test_ack_and_nak()
 {
     porta_decoder_t d;
@@ -551,6 +588,7 @@ int main()
     test_decode_event();
     test_action_set_clock();
     test_action_tx_free_and_cancel();
+    test_action_connect_and_tune();
     test_ack_and_nak();
     test_config_kv();
 
