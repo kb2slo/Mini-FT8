@@ -15,7 +15,7 @@ enum {
     PAIRING_ROUTES_WIFI_PROV_AP_CORE = 3,       // /  /rescan  /provision
     PAIRING_ROUTES_WIFI_PROV_STATION_CORE = 3,  // /  /update  /forget
 
-    PAIRING_ROUTES_HOST_LINK = 9,
+    PAIRING_ROUTES_HOST_LINK = 14,
     PAIRING_ROUTES_WEB_BUNDLE = 3,
     PAIRING_ROUTES_BUNDLE_HOST = 2,
     PAIRING_ROUTES_WEB_FS_AP = 1,       // GET /*

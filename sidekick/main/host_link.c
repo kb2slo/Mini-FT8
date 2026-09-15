@@ -62,16 +62,31 @@ static bool porta_send(const uint8_t *frame, size_t n)
 // anything, and small enough to sit in RAM without thought (~6 KB).
 #define RING_LEN 64
 
+typedef enum {
+    ENTRY_LOG = 0,
+    ENTRY_DECODE = 1,
+    ENTRY_QUEUE_ENTRY = 2,  // I28d, RFC 0004 §11
+    ENTRY_SLOT_STATE = 3,
+} entry_kind_t;
+
 typedef struct {
     uint32_t seq;
     uint32_t epoch_secs;   // host's clock at the moment of the event, 0 if unset
-    bool     is_decode;
-    char     text[PORTA_EVENT_TEXT_MAX + 1];
-    int8_t   snr;
-    uint16_t offset_hz;
-    int16_t  dt_centis;
-    bool     is_cq;
-    bool     is_to_me;
+    entry_kind_t kind;
+    char     text[PORTA_EVENT_TEXT_MAX + 1];  // LOG, DECODE
+    int8_t   snr;                             // DECODE
+    uint16_t offset_hz;                       // DECODE; SLOT_STATE's resolved_offset_hz
+    int16_t  dt_centis;                       // DECODE
+    bool     is_cq;                           // DECODE
+    bool     is_to_me;                        // DECODE
+    uint32_t decode_id;                       // DECODE -- names it for QUEUE_REPLY
+    uint16_t entry_id;                        // QUEUE_ENTRY
+    uint8_t  state;                           // QUEUE_ENTRY (AutoseqState wire value)
+    uint8_t  retry_count;                     // QUEUE_ENTRY
+    uint8_t  retry_limit;                     // QUEUE_ENTRY
+    char     dxcall[PORTA_CALLSIGN_MAX + 1];  // QUEUE_ENTRY
+    uint8_t  slot_parity;                     // SLOT_STATE
+    uint8_t  beacon_mode;                     // SLOT_STATE
 } entry_t;
 
 static entry_t s_ring[RING_LEN];
@@ -153,17 +168,37 @@ static esp_err_t get_events(httpd_req_t *req)
         xSemaphoreGive(s_lock);
 
         json_escape(e.text, esc, sizeof(esc));
+        char esc_call[sizeof(esc)];
         int n;
-        if (e.is_decode) {
+        switch (e.kind) {
+        case ENTRY_DECODE:
             n = snprintf(row, sizeof(row),
                          "%s{\"s\":%" PRIu32 ",\"t\":%" PRIu32 ",\"d\":1,\"x\":\"%s\","
-                         "\"snr\":%d,\"hz\":%u,\"dt\":%.2f,\"cq\":%d,\"me\":%d}",
-                         first ? "" : ",", e.seq, e.epoch_secs, esc, e.snr, e.offset_hz,
-                         e.dt_centis / 100.0, e.is_cq ? 1 : 0, e.is_to_me ? 1 : 0);
-        } else {
+                         "\"id\":%" PRIu32 ",\"snr\":%d,\"hz\":%u,\"dt\":%.2f,\"cq\":%d,\"me\":%d}",
+                         first ? "" : ",", e.seq, e.epoch_secs, esc, e.decode_id, e.snr,
+                         e.offset_hz, e.dt_centis / 100.0, e.is_cq ? 1 : 0, e.is_to_me ? 1 : 0);
+            break;
+        case ENTRY_QUEUE_ENTRY:
+            json_escape(e.dxcall, esc_call, sizeof(esc_call));
+            n = snprintf(row, sizeof(row),
+                         "%s{\"s\":%" PRIu32 ",\"t\":%" PRIu32 ",\"d\":2,\"eid\":%u,"
+                         "\"st\":%u,\"rc\":%u,\"rl\":%u,\"x\":\"%s\"}",
+                         first ? "" : ",", e.seq, e.epoch_secs, e.entry_id, e.state,
+                         e.retry_count, e.retry_limit, esc_call);
+            break;
+        case ENTRY_SLOT_STATE:
+            n = snprintf(row, sizeof(row),
+                         "%s{\"s\":%" PRIu32 ",\"t\":%" PRIu32 ",\"d\":3,"
+                         "\"sp\":%u,\"bm\":%u,\"hz\":%u}",
+                         first ? "" : ",", e.seq, e.epoch_secs, e.slot_parity, e.beacon_mode,
+                         e.offset_hz);
+            break;
+        case ENTRY_LOG:
+        default:
             n = snprintf(row, sizeof(row),
                          "%s{\"s\":%" PRIu32 ",\"t\":%" PRIu32 ",\"d\":0,\"x\":\"%s\"}",
                          first ? "" : ",", e.seq, e.epoch_secs, esc);
+            break;
         }
         if (n > 0) {
             httpd_resp_sendstr_chunk(req, row);
@@ -238,6 +273,109 @@ static void config_json_end(void)
     s_config_gathering = false;
 }
 
+// FILE_LIST / FILE_READ (I28d, RFC 0004 §11): the reply is a burst of
+// FILE_DATA rows followed by ACK, same shape as CONFIG_GET-all above --
+// gathered here into a complete JSON response body, so wait_action_reply()
+// can send it as-is once the ACK for PORTA_MSG_FILE_LIST/PORTA_MSG_FILE_READ
+// arrives. Each buffer starts as its own complete `{"ok":true,...` wrapper,
+// same trick config_json_begin() uses, so there is nothing to assemble later.
+#define FILE_LIST_JSON_MAX 2048
+static char s_file_list_json[FILE_LIST_JSON_MAX];
+static size_t s_file_list_json_len;
+static bool s_file_list_json_first;
+static volatile bool s_file_list_gathering;
+
+static void file_list_json_begin(void)
+{
+    s_file_list_gathering = true;
+    s_file_list_json_first = true;
+    strcpy(s_file_list_json, "{\"ok\":true,\"files\":[");
+    s_file_list_json_len = strlen(s_file_list_json);
+}
+
+static void file_list_json_add(const char *name)
+{
+    if (!s_file_list_gathering || !name) {
+        return;
+    }
+    char esc[PORTA_FILENAME_MAX * 6 + 1];
+    json_escape(name, esc, sizeof(esc));
+    char piece[sizeof(esc) + 8];
+    const int n = snprintf(piece, sizeof(piece), "%s\"%s\"",
+                           s_file_list_json_first ? "" : ",", esc);
+    if (n <= 0 || s_file_list_json_len + (size_t)n + 3 >= FILE_LIST_JSON_MAX) {
+        return;
+    }
+    memcpy(s_file_list_json + s_file_list_json_len, piece, (size_t)n + 1);
+    s_file_list_json_len += (size_t)n;
+    s_file_list_json_first = false;
+}
+
+static void file_list_json_end(void)
+{
+    if (!s_file_list_gathering) {
+        return;
+    }
+    if (s_file_list_json_len + 3 < FILE_LIST_JSON_MAX) {
+        s_file_list_json[s_file_list_json_len++] = ']';
+        s_file_list_json[s_file_list_json_len++] = '}';
+        s_file_list_json[s_file_list_json_len] = '\0';
+    }
+    s_file_list_gathering = false;
+}
+
+#define FILE_ENTRIES_JSON_MAX 4096
+static char s_file_entries_json[FILE_ENTRIES_JSON_MAX];
+static size_t s_file_entries_json_len;
+static bool s_file_entries_json_first;
+static volatile bool s_file_entries_gathering;
+
+static void file_entries_json_begin(void)
+{
+    s_file_entries_gathering = true;
+    s_file_entries_json_first = true;
+    strcpy(s_file_entries_json, "{\"ok\":true,\"entries\":[");
+    s_file_entries_json_len = strlen(s_file_entries_json);
+}
+
+// rst_sent/rst_rcvd pass through -99 (no report) as-is -- the same sentinel
+// the wire carries, decoded by the browser rather than reinterpreted here.
+static void file_entries_json_add(const porta_qso_entry_row_t *e)
+{
+    if (!s_file_entries_gathering || !e) {
+        return;
+    }
+    char esc_band[PORTA_BAND_MAX * 6 + 1];
+    char esc_call[PORTA_CALLSIGN_MAX * 6 + 1];
+    json_escape(e->band, esc_band, sizeof(esc_band));
+    json_escape(e->call, esc_call, sizeof(esc_call));
+    char piece[sizeof(esc_band) + sizeof(esc_call) + 96];
+    const int n = snprintf(piece, sizeof(piece),
+                           "%s{\"time\":\"%s\",\"band\":\"%s\",\"call\":\"%s\","
+                           "\"rst_sent\":%d,\"rst_rcvd\":%d}",
+                           s_file_entries_json_first ? "" : ",", e->time_on, esc_band,
+                           esc_call, e->rst_sent, e->rst_rcvd);
+    if (n <= 0 || s_file_entries_json_len + (size_t)n + 3 >= FILE_ENTRIES_JSON_MAX) {
+        return;
+    }
+    memcpy(s_file_entries_json + s_file_entries_json_len, piece, (size_t)n + 1);
+    s_file_entries_json_len += (size_t)n;
+    s_file_entries_json_first = false;
+}
+
+static void file_entries_json_end(void)
+{
+    if (!s_file_entries_gathering) {
+        return;
+    }
+    if (s_file_entries_json_len + 3 < FILE_ENTRIES_JSON_MAX) {
+        s_file_entries_json[s_file_entries_json_len++] = ']';
+        s_file_entries_json[s_file_entries_json_len++] = '}';
+        s_file_entries_json[s_file_entries_json_len] = '\0';
+    }
+    s_file_entries_gathering = false;
+}
+
 // Wait briefly for the host's ACK/NAK. One frame over a 115200 link answered
 // from the main loop, so this is milliseconds -- but the browser should be
 // told what happened rather than assuming success.
@@ -245,11 +383,22 @@ static esp_err_t wait_action_reply(httpd_req_t *req, uint8_t verb)
 {
     // CONFIG_GET-all can enqueue many VALUE frames (one per tick on the host),
     // so allow longer than a single ACTION. CONNECT may wait on USB enum.
+    // FILE_LIST/FILE_READ are genuinely async on the host (a background
+    // listing, or a file read paced across many main-loop ticks -- see
+    // porta_host_file_read_begin()'s comment in main.cpp), so they get the
+    // same generous budget as CONFIG_GET-all rather than a single ACTION's.
     int tries = 40;
-    if (verb == PORTA_MSG_CONFIG_GET) {
+    switch (verb) {
+    case PORTA_MSG_CONFIG_GET:
+    case PORTA_MSG_FILE_LIST:
+    case PORTA_MSG_FILE_READ:
         tries = 200;
-    } else if (verb == PORTA_ACT_CONNECT) {
+        break;
+    case PORTA_ACT_CONNECT:
         tries = 120;
+        break;
+    default:
+        break;
     }
     for (int i = 0; i < tries && s_last_reply_verb != verb; ++i) {
         vTaskDelay(pdMS_TO_TICKS(25));
@@ -258,12 +407,20 @@ static esp_err_t wait_action_reply(httpd_req_t *req, uint8_t verb)
     httpd_resp_set_type(req, "application/json");
     if (s_last_reply_verb != verb) {
         s_config_gathering = false;
+        s_file_list_gathering = false;
+        s_file_entries_gathering = false;
         ESP_LOGW(TAG, "no ACK for verb 0x%02x", verb);
         return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"no reply from host\"}");
     }
     if (s_last_reply_ok) {
         if (verb == PORTA_MSG_CONFIG_GET) {
             return httpd_resp_send(req, s_config_json, s_config_json_len);
+        }
+        if (verb == PORTA_MSG_FILE_LIST) {
+            return httpd_resp_send(req, s_file_list_json, s_file_list_json_len);
+        }
+        if (verb == PORTA_MSG_FILE_READ) {
+            return httpd_resp_send(req, s_file_entries_json, s_file_entries_json_len);
         }
         return httpd_resp_sendstr(req, "{\"ok\":true}");
     }
@@ -412,6 +569,182 @@ static esp_err_t post_radio_tune(httpd_req_t *req)
     return wait_action_reply(req, PORTA_ACT_TUNE);
 }
 
+// POST /api/beacon  body: "0"/"1"/"2" or "off"/"even"/"odd" (case-insensitive)
+// -- BeaconMode's own wire values, matching STATUS key 1's three-way cycle.
+// Token required: this starts/stops transmitting.
+static esp_err_t post_beacon(httpd_req_t *req)
+{
+    char body[16] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    while (received > 0) {
+        const char c = body[received - 1];
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') {
+            break;
+        }
+        body[--received] = '\0';
+    }
+    uint8_t mode;
+    if (strcmp(body, "0") == 0 || strcasecmp(body, "off") == 0) {
+        mode = 0;
+    } else if (strcmp(body, "1") == 0 || strcasecmp(body, "even") == 0) {
+        mode = 1;
+    } else if (strcmp(body, "2") == 0 || strcasecmp(body, "odd") == 0) {
+        mode = 2;
+    } else {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "want 0/1/2 or off/even/odd");
+        return ESP_FAIL;
+    }
+
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_beacon(mode, frame, sizeof(frame));
+    s_last_reply_verb = 0;
+    if (!porta_send(frame, n)) {
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
+    return wait_action_reply(req, PORTA_ACT_BEACON);
+}
+
+// POST /api/queue/cancel  body: entry_id (decimal). Not a queue position --
+// see porta_queue_entry_event_t in porta_proto.h for why. Token required.
+static esp_err_t post_queue_cancel(httpd_req_t *req)
+{
+    char body[16] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+    const unsigned long id = strtoul(body, NULL, 10);
+    if (id == 0 || id > 0xFFFFu) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad entry_id");
+        return ESP_FAIL;
+    }
+
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_queue_cancel((uint16_t)id, frame, sizeof(frame));
+    s_last_reply_verb = 0;
+    if (!porta_send(frame, n)) {
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
+    return wait_action_reply(req, PORTA_ACT_QUEUE_CANCEL);
+}
+
+// POST /api/queue/reply  body: decode_id (decimal), naming a decode the
+// browser was shown rather than re-sending its text. Token required: this
+// can key the transmitter.
+static esp_err_t post_queue_reply(httpd_req_t *req)
+{
+    char body[16] = {0};
+    int received = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (received <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    body[received] = '\0';
+    const unsigned long id = strtoul(body, NULL, 10);
+    if (id == 0 || id > 0xFFFFFFFFu) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad decode_id");
+        return ESP_FAIL;
+    }
+
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_queue_reply((uint32_t)id, frame, sizeof(frame));
+    s_last_reply_verb = 0;
+    if (!porta_send(frame, n)) {
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
+    return wait_action_reply(req, PORTA_ACT_QUEUE_REPLY);
+}
+
+static bool query_uint(httpd_req_t *req, const char *key, unsigned long dflt, unsigned long *out)
+{
+    *out = dflt;
+    char query[96];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
+        return false;
+    }
+    char val[16];
+    if (httpd_query_key_value(query, key, val, sizeof(val)) != ESP_OK) {
+        return false;
+    }
+    *out = strtoul(val, NULL, 10);
+    return true;
+}
+
+// GET /api/log/files?skip=&take=  -- day-file names, newest first, paged.
+// Open read: QSO log browsing is the same category §7 already opened up for
+// the viewer and the event feed.
+static esp_err_t get_log_files(httpd_req_t *req)
+{
+    unsigned long skip = 0, take = 30;
+    query_uint(req, "skip", 0, &skip);
+    query_uint(req, "take", 30, &take);
+    if (take == 0 || take > 255) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad take");
+        return ESP_FAIL;
+    }
+
+    file_list_json_begin();
+    s_last_reply_verb = 0;
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_file_list_req(PORTA_FILE_LIST_QSO_DAILY,
+                                                       (uint16_t)skip, (uint8_t)take,
+                                                       frame, sizeof(frame));
+    if (!porta_send(frame, n)) {
+        s_file_list_gathering = false;
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
+    return wait_action_reply(req, PORTA_MSG_FILE_LIST);
+}
+
+// GET /api/log/entries?file=&skip=&take=  -- parsed QSO rows from one day
+// file, paged the same way. Open read, same reasoning as get_log_files.
+static esp_err_t get_log_entries(httpd_req_t *req)
+{
+    char query[96];
+    char filename[PORTA_FILENAME_MAX + 1] = {0};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        httpd_query_key_value(query, "file", filename, sizeof(filename));
+    }
+    if (filename[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing file");
+        return ESP_FAIL;
+    }
+    unsigned long skip = 0, take = 6;
+    query_uint(req, "skip", 0, &skip);
+    query_uint(req, "take", 6, &take);
+    if (take == 0 || take > 255) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad take");
+        return ESP_FAIL;
+    }
+
+    file_entries_json_begin();
+    s_last_reply_verb = 0;
+    uint8_t frame[PORTA_PROTO_MAX_FRAME];
+    const size_t n = porta_proto_encode_file_read_req(filename, (uint16_t)skip, (uint8_t)take,
+                                                       frame, sizeof(frame));
+    if (n == 0) {
+        s_file_entries_gathering = false;
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad filename");
+        return ESP_FAIL;
+    }
+    if (!porta_send(frame, n)) {
+        s_file_entries_gathering = false;
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"why\":\"host link busy\"}");
+    }
+    return wait_action_reply(req, PORTA_MSG_FILE_READ);
+}
+
 // GET /api/config — Station.txt surface as JSON. Open read: call/grid are on
 // the air; WiFi secrets are not in this object.
 static esp_err_t get_config(httpd_req_t *req)
@@ -517,6 +850,10 @@ static void porta_rx_task(void *arg)
     porta_frame_t frame;
     char text[PORTA_EVENT_TEXT_MAX + 1];
     porta_decode_event_t ev;
+    porta_queue_entry_event_t qe;
+    porta_slot_state_event_t ss;
+    char file_name[PORTA_FILENAME_MAX + 1];
+    porta_qso_entry_row_t qrow;
     uint32_t reported_crc = 0;
 
     while (1) {
@@ -527,13 +864,15 @@ static void porta_rx_task(void *arg)
             }
             entry_t e = {0};
             if (porta_proto_parse_log(&frame, &e.epoch_secs, text)) {
+                e.kind = ENTRY_LOG;
                 strncpy(e.text, text, sizeof(e.text) - 1);
                 // Tag "adv" so USB-C logs are not mistaken for sidekick ESP_LOG.
                 ESP_LOGI("adv", "%s", e.text);
                 ring_push(&e);
             } else if (porta_proto_parse_decode(&frame, &ev)) {
-                e.is_decode = true;
+                e.kind = ENTRY_DECODE;
                 e.epoch_secs = ev.epoch_secs;
+                e.decode_id = ev.decode_id;
                 strncpy(e.text, ev.text, sizeof(e.text) - 1);
                 e.snr = ev.snr;
                 e.offset_hz = ev.offset_hz;
@@ -544,20 +883,52 @@ static void porta_rx_task(void *arg)
                          e.snr, e.offset_hz, e.dt_centis / 100.0,
                          e.is_to_me ? "[me] " : "", e.is_cq ? "[cq] " : "", e.text);
                 ring_push(&e);
+            } else if (porta_proto_parse_queue_entry(&frame, &qe)) {
+                e.kind = ENTRY_QUEUE_ENTRY;
+                e.epoch_secs = qe.epoch_secs;
+                e.entry_id = qe.entry_id;
+                e.state = qe.state;
+                e.retry_count = qe.retry_count;
+                e.retry_limit = qe.retry_limit;
+                strncpy(e.dxcall, qe.dxcall, sizeof(e.dxcall) - 1);
+                ring_push(&e);
+            } else if (porta_proto_parse_slot_state(&frame, &ss)) {
+                e.kind = ENTRY_SLOT_STATE;
+                e.epoch_secs = ss.epoch_secs;
+                e.slot_parity = ss.slot_parity;
+                e.beacon_mode = ss.beacon_mode;
+                e.offset_hz = ss.resolved_offset_hz;
+                ring_push(&e);
+            } else if (porta_proto_parse_file_name_row(&frame, file_name)) {
+                file_list_json_add(file_name);
+            } else if (porta_proto_parse_file_entry_row(&frame, &qrow)) {
+                file_entries_json_add(&qrow);
             } else {
                 char cfg_key[PORTA_CONFIG_KEY_MAX + 1];
                 char cfg_val[PORTA_CONFIG_VALUE_MAX + 1];
                 if (porta_proto_parse_config_value(&frame, cfg_key, cfg_val)) {
                     config_json_add(cfg_key, cfg_val);
                 } else if (porta_proto_parse_ack(&frame, (uint8_t *)&s_last_reply_verb)) {
-                    if (s_last_reply_verb == PORTA_MSG_CONFIG_GET) {
+                    switch (s_last_reply_verb) {
+                    case PORTA_MSG_CONFIG_GET:
                         config_json_end();
+                        break;
+                    case PORTA_MSG_FILE_LIST:
+                        file_list_json_end();
+                        break;
+                    case PORTA_MSG_FILE_READ:
+                        file_entries_json_end();
+                        break;
+                    default:
+                        break;
                     }
                     s_last_reply_ok = true;
                     s_last_reply_reason[0] = '\0';
                 } else if (porta_proto_parse_nak(&frame, (uint8_t *)&s_last_reply_verb,
                                                  s_last_reply_reason)) {
                     s_config_gathering = false;
+                    s_file_list_gathering = false;
+                    s_file_entries_gathering = false;
                     s_last_reply_ok = false;
                     ESP_LOGW("adv", "refused action 0x%02x: %s",
                              s_last_reply_verb, s_last_reply_reason);
@@ -615,11 +986,29 @@ void host_link_register_uris(httpd_handle_t server)
     static const httpd_uri_t radio_tune = {
         .uri = "/api/radio/tune", .method = HTTP_POST, .handler = post_radio_tune,
     };
+    static const httpd_uri_t beacon = {
+        .uri = "/api/beacon", .method = HTTP_POST, .handler = post_beacon,
+    };
+    static const httpd_uri_t queue_cancel = {
+        .uri = "/api/queue/cancel", .method = HTTP_POST, .handler = post_queue_cancel,
+    };
+    static const httpd_uri_t queue_reply = {
+        .uri = "/api/queue/reply", .method = HTTP_POST, .handler = post_queue_reply,
+    };
+    static const httpd_uri_t log_files = {
+        .uri = "/api/log/files", .method = HTTP_GET, .handler = get_log_files,
+    };
+    static const httpd_uri_t log_entries = {
+        .uri = "/api/log/entries", .method = HTTP_GET, .handler = get_log_entries,
+    };
     // The viewer and the event feed are reads of radio data: open on
     // principle, since anyone may listen to what is on the air. Setting the
     // host clock or keying the transmitter changes the device, so those need
     // the token. Station config read is open (call/grid are on the air);
     // writes are guarded. Connect / tune are writes (UAC + CAT / TX tone).
+    // Beacon / queue cancel / queue reply all change device state (RFC 0004
+    // §11) -- guarded like connect/tune. Log files/entries are QSO-log reads,
+    // the same category §7 already opened up for the viewer and event feed.
     const struct {
         const httpd_uri_t *uri;
         pairing_policy_t policy;
@@ -633,6 +1022,11 @@ void host_link_register_uris(httpd_handle_t server)
         { &config_put, PAIRING_REQUIRED },
         { &radio_connect, PAIRING_REQUIRED },
         { &radio_tune, PAIRING_REQUIRED },
+        { &beacon, PAIRING_REQUIRED },
+        { &queue_cancel, PAIRING_REQUIRED },
+        { &queue_reply, PAIRING_REQUIRED },
+        { &log_files, PAIRING_OPEN },
+        { &log_entries, PAIRING_OPEN },
     };
     _Static_assert(sizeof(routes) / sizeof(routes[0]) == PAIRING_ROUTES_HOST_LINK,
                    "host_link route count");
