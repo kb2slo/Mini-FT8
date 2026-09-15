@@ -964,15 +964,17 @@ var LOG_REFRESH_MS = 8000;   // how often to check today's file for new QSOs whi
                              // session's earlier finding about steady polling and WiFi
 
 function dayLabel(name) {
-  // name is "YYYYMMDD.adi" (qso_browse.cpp / file_list.cpp). Today gets a
-  // friendlier label; anything else renders YYYY-MM-DD, matching the ADV's
-  // own STATUS screen date field (main.cpp's "%04d-%02d-%02d") rather than
-  // inventing a second order for the same date.
+  // name is "YYYYMMDD.adi" (qso_browse.cpp / file_list.cpp). Always renders
+  // YYYY-MM-DD, matching the ADV's own STATUS screen date field (main.cpp's
+  // "%04d-%02d-%02d") -- "(Today)" is a suffix on that, not a replacement
+  // for it, so the date itself never disappears from the one row it'd be
+  // most useful to have handy (e.g. reading it off for a paper log).
   var y = name.slice(0, 4), mo = name.slice(4, 6), d = name.slice(6, 8);
   var today = new Date();
   var todayStr = today.getUTCFullYear() + String(today.getUTCMonth() + 1).padStart(2, '0') +
                 String(today.getUTCDate()).padStart(2, '0');
-  return (name.slice(0, 8) === todayStr) ? 'Today' : (y + '-' + mo + '-' + d);
+  var date = y + '-' + mo + '-' + d;
+  return (name.slice(0, 8) === todayStr) ? (date + ' (Today)') : date;
 }
 
 function fmtRst(v) {
