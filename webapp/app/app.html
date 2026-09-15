@@ -89,6 +89,7 @@ button:disabled{opacity:.45}
 .drow .txt.c-recent{color:#787878}
 .drow .txt.c-cq{color:#00c800}
 .drow .me{font-size:.65rem;font-weight:700;color:#1d4ed8;border:1px solid #93c5fd;border-radius:.3rem;padding:0 .3rem;margin-left:.3rem}
+.ddist{font-size:.7rem;color:GrayText;font-family:ui-monospace,monospace;margin-top:.1rem}
 .dslotdiv{border-top:2px dashed color-mix(in srgb, GrayText 45%, transparent);margin:.35rem 1rem}
 
 /* ---- log ---- */
@@ -1105,11 +1106,19 @@ function renderDecodes() {
       esc(slot.band || '') + (freqMHz ? ' · ' + freqMHz + ' MHz' : '') +
       '</span><span>' + fmtSlotDateTime(slot.ts) + '</span></div>';
     return divider + header + slot.map(function (d) {
+      // Looked up from the opportunistic callsign->grid cache, not this
+      // row's own message -- most decodes (signal reports, RRR/73) never
+      // carry a grid themselves. '' whenever the sender is unclear or was
+      // never seen sending a grid.
+      var senderCall = extractSenderCall(d.x);
+      var theirGrid = senderCall && callsignGridCache[senderCall];
+      var distBearing = theirGrid ? fmtDistBearing(lastCfg.grid, theirGrid, true) : '';
       return '<div class=drow data-id="' + d.id + '">' +
         '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
         (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
         '<div class="txt ' + decodeColorClass(d) + '">' + esc(d.x) +
         (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
+        (distBearing ? '<div class=ddist>' + esc(theirGrid) + ' · ' + esc(distBearing) + '</div>' : '') +
         '</div>';
     }).join('');
   }).join('');
@@ -1132,6 +1141,7 @@ function applyEvent(e) {
   if (e.d === 1) {
     pendingDecodes.push({ id: e.id, dt: e.dt, hz: e.hz, snr: e.snr, x: e.x,
                           me: !!e.me, cq: !!e.cq, rq: !!e.rq });
+    learnCallsignGrid(e.x); // opportunistic, regardless of who this was addressed to
   } else if (e.d === 2) {
     if (e.st === 6) {
       delete queue[e.eid]; // IDLE is the removal signal (RFC 0004 §11)
@@ -1271,14 +1281,89 @@ function greatCircle(a, b) {
   return { km: km, bearing: bearing };
 }
 // "1,234 km 047°", or '' if either grid is missing/malformed -- never a
-// half-computed badge.
-function fmtDistBearing(myGrid, theirGrid) {
+// half-computed badge. compact drops the miles conversion for Operate's
+// decode rows, which are already three fields wide on a phone screen.
+function fmtDistBearing(myGrid, theirGrid, compact) {
   var a = gridToLatLon(myGrid), b = gridToLatLon(theirGrid);
   if (!a || !b) return '';
   var gc = greatCircle(a, b);
+  var bearing = String(Math.round(gc.bearing)).padStart(3, '0') + '°';
+  if (compact) return Math.round(gc.km).toLocaleString() + ' km ' + bearing;
   var mi = gc.km * 0.621371;
-  return Math.round(gc.km).toLocaleString() + ' km (' + Math.round(mi).toLocaleString() + ' mi) ' +
-        String(Math.round(gc.bearing)).padStart(3, '0') + '°';
+  return Math.round(gc.km).toLocaleString() + ' km (' + Math.round(mi).toLocaleString() + ' mi) ' + bearing;
+}
+
+// ---- Opportunistic callsign -> grid cache (Operate decode rows) ----
+// FT8 carries a grid only on some messages (a CQ, or a first exchange
+// reply), never on every line -- so a decode row showing just a signal
+// report has nowhere to read the other station's grid from *that* row.
+// Instead: every decode that *does* carry a grid updates a persistent
+// callsign->grid map (localStorage, survives reload), and every row -- with
+// or without its own grid -- looks its sender up in that map. A later
+// decode for the same callsign with a *different* grid simply overwrites
+// the entry (portable/mobile operators, or an earlier bad read).
+//
+// Message parsing here is deliberately conservative, not a full FT8 grammar
+// parser: false negatives (missing a real mapping) are harmless, it just
+// tries again next decode; false positives (caching a WRONG grid) are what
+// actually misleads the operator, so anything ambiguous is skipped rather
+// than guessed at.
+var CALLSIGN_GRID_CACHE_KEY = 'minift8_callsign_grids_v1';
+var callsignGridCache = {};
+function loadCallsignGridCache() {
+  try {
+    var raw = localStorage.getItem(CALLSIGN_GRID_CACHE_KEY);
+    callsignGridCache = raw ? (JSON.parse(raw) || {}) : {};
+  } catch (e) { callsignGridCache = {}; }
+}
+function saveCallsignGridCache() {
+  try { localStorage.setItem(CALLSIGN_GRID_CACHE_KEY, JSON.stringify(callsignGridCache)); }
+  catch (e) { /* quota/private browsing -- just doesn't persist this tick */ }
+}
+
+var GRID_TOKEN_RE = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/;
+// Region/activity modifiers and control words that are never a callsign,
+// even though some (RR73) are coincidentally grid-shaped (R,R = valid field
+// letters, 7,3 = valid digits) and would otherwise false-positive as one.
+var NON_CALL_WORDS = { CQ: 1, DE: 1, RR73: 1, RRR: 1, 73: 1, QRZ: 1, POTA: 1,
+                       SOTA: 1, DX: 1, NA: 1, EU: 1, AS: 1, AF: 1, OC: 1,
+                       SA: 1, AM: 1, FD: 1, QRP: 1 };
+function looksLikeCallsign(tok) {
+  return !!tok && tok.length >= 3 && tok.length <= 10 &&
+        /^[A-Z0-9\/]+$/.test(tok) && /[0-9]/.test(tok) && /[A-Z]/.test(tok) &&
+        !NON_CALL_WORDS[tok] && !GRID_TOKEN_RE.test(tok);
+}
+
+// The sender's callsign, independent of whether this message carries a
+// grid -- same shape either way: "CQ [modifiers...] <SENDER> [GRID]", or
+// "<ADDRESSEE> <SENDER> [REPORT/GRID/RRR/73/...]". Hashed/compressed calls
+// (<W1ABC/QRP>) have their brackets stripped first.
+function extractSenderCall(text) {
+  if (!text) return '';
+  var tokens = text.trim().toUpperCase().split(/\s+/).map(function (t) {
+    return t.replace(/^<|>$/g, '');
+  });
+  if (tokens.length < 2) return '';
+  var sender;
+  if (tokens[0] === 'CQ') {
+    var last = tokens[tokens.length - 1];
+    sender = GRID_TOKEN_RE.test(last) ? tokens[tokens.length - 2] : tokens[tokens.length - 1];
+  } else {
+    sender = tokens[1];
+  }
+  return looksLikeCallsign(sender) ? sender : '';
+}
+
+function learnCallsignGrid(text) {
+  if (!text) return;
+  var tokens = text.trim().toUpperCase().split(/\s+/);
+  var last = tokens[tokens.length - 1].replace(/^<|>$/g, '');
+  if (!GRID_TOKEN_RE.test(last) || NON_CALL_WORDS[last]) return;
+  if (!gridToLatLon(last)) return; // second validation pass, cheap and already exists
+  var call = extractSenderCall(text);
+  if (!call || callsignGridCache[call] === last) return;
+  callsignGridCache[call] = last;
+  saveCallsignGridCache();
 }
 
 // Appends to `file`'s own persistent container rather than the end of
@@ -1659,6 +1744,7 @@ function loadStateCache() {
   } catch (e) { /* corrupt or unavailable -- boot normally, no seed */ }
 }
 loadStateCache();
+loadCallsignGridCache();
 if (Object.keys(lastCfg).length) {
   setForm(lastCfg);
   applyOperateLive(lastCfg);
