@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "porta_proto.h"
+
 // ============================================================================
 // porta.h — the sidekick link on Grove G1/G2 (UART1).
 //
@@ -71,3 +73,19 @@ PortaCompanion porta_companion_state();
 // Frames dropped because the queue was full — the number that matters when the
 // browser's view looks thinner than the screen's.
 uint32_t porta_dropped_events();
+
+// ---------------------------------------------------------------------------
+// FILE_LIST / FILE_READ row emitters (I28d, RFC 0004 §11). The request/reply
+// itself is asynchronous -- a directory listing runs on a background task
+// and a file read is paced across many main-loop ticks, so neither can
+// answer in the same call that received the request the way every other
+// ACTION does. main.cpp's async FS pump calls these as rows become ready,
+// then porta_emit_ack()/porta_emit_nak() (verb = PORTA_MSG_FILE_LIST or
+// PORTA_MSG_FILE_READ) once done -- the same "burst then ACK" shape
+// CONFIG_GET-all already uses, just spread across ticks instead of one call.
+// ---------------------------------------------------------------------------
+
+void porta_emit_file_name(const char* name);
+void porta_emit_file_entry(const porta_qso_entry_row_t& row);
+void porta_emit_ack(uint8_t verb);
+void porta_emit_nak(uint8_t verb, const char* reason);

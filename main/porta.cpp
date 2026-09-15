@@ -32,6 +32,13 @@ const char* porta_host_beacon(uint8_t mode);
 // Cancel/reply by the stable ids QUEUE_ENTRY and EVENT DECODE hand out.
 const char* porta_host_queue_cancel(uint16_t entry_id);
 const char* porta_host_queue_reply(uint32_t decode_id);
+// Both start an async FS operation and return immediately: nullptr means
+// "accepted, rows and the terminal ACK/NAK arrive later via
+// porta_emit_file_name()/porta_emit_file_entry()/porta_emit_ack()/
+// porta_emit_nak()", not "done". A non-null return is a synchronous refusal
+// (bad request, open failed) with no async reply to follow.
+const char* porta_host_file_list_begin(uint8_t kind, uint16_t skip, uint8_t take);
+const char* porta_host_file_read_begin(const char* filename, uint16_t skip, uint8_t take);
 #include "porta_proto.h"
 #include "sidekick_flasher.h"
 
@@ -368,12 +375,50 @@ void handle_config_set(const porta_frame_t& f) {
   }
 }
 
+// Unlike every handler above, success here does not enqueue a reply: the
+// operation just started (a background listing, or a multi-tick file read)
+// and main.cpp's async FS pump emits the rows and the terminal ACK/NAK once
+// it actually finishes -- see porta_host_file_list_begin()'s comment.
+void handle_file_list(const porta_frame_t& f) {
+  uint8_t kind = 0;
+  uint16_t skip = 0;
+  uint8_t take = 0;
+  if (!porta_proto_parse_file_list_req(&f, &kind, &skip, &take)) {
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+    enqueue(buf, porta_proto_encode_nak(PORTA_MSG_FILE_LIST, "malformed", buf, sizeof(buf)));
+    return;
+  }
+  const char* why = porta_host_file_list_begin(kind, skip, take);
+  if (why) {
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+    enqueue(buf, porta_proto_encode_nak(PORTA_MSG_FILE_LIST, why, buf, sizeof(buf)));
+  }
+}
+
+void handle_file_read(const porta_frame_t& f) {
+  char filename[PORTA_FILENAME_MAX + 1] = {};
+  uint16_t skip = 0;
+  uint8_t take = 0;
+  if (!porta_proto_parse_file_read_req(&f, filename, &skip, &take)) {
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+    enqueue(buf, porta_proto_encode_nak(PORTA_MSG_FILE_READ, "malformed", buf, sizeof(buf)));
+    return;
+  }
+  const char* why = porta_host_file_read_begin(filename, skip, take);
+  if (why) {
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+    enqueue(buf, porta_proto_encode_nak(PORTA_MSG_FILE_READ, why, buf, sizeof(buf)));
+  }
+}
+
 void handle_frame(const porta_frame_t& f) {
   switch (f.type) {
   case PORTA_MSG_HELLO:       handle_hello(f);       break;
   case PORTA_MSG_ACTION:      handle_action(f);      break;
   case PORTA_MSG_CONFIG_GET:  handle_config_get(f);  break;
   case PORTA_MSG_CONFIG_SET:  handle_config_set(f);  break;
+  case PORTA_MSG_FILE_LIST:   handle_file_list(f);   break;
+  case PORTA_MSG_FILE_READ:   handle_file_read(f);   break;
   default:
     ESP_LOGD(kTag, "Unhandled frame type 0x%02x len %u", f.type, f.len);
     break;
@@ -416,6 +461,32 @@ void porta_emit_decode(uint32_t decode_id, const char* text, int snr, int offset
   uint8_t buf[PORTA_PROTO_MAX_FRAME];
   const size_t n = porta_proto_encode_decode(&ev, buf, sizeof(buf));
   enqueue(buf, n);
+}
+
+void porta_emit_file_name(const char* name) {
+  if (!s_running || !name) return;
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  const size_t n = porta_proto_encode_file_name_row(name, buf, sizeof(buf));
+  enqueue(buf, n);
+}
+
+void porta_emit_file_entry(const porta_qso_entry_row_t& row) {
+  if (!s_running) return;
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  const size_t n = porta_proto_encode_file_entry_row(&row, buf, sizeof(buf));
+  enqueue(buf, n);
+}
+
+void porta_emit_ack(uint8_t verb) {
+  if (!s_running) return;
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+}
+
+void porta_emit_nak(uint8_t verb, const char* reason) {
+  if (!s_running) return;
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  enqueue(buf, porta_proto_encode_nak(verb, reason, buf, sizeof(buf)));
 }
 
 uint32_t porta_dropped_events() { return s_dropped; }

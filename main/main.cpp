@@ -662,6 +662,7 @@ static void qso_load_entries(const std::string& path);
 static void qso_load_entries_tick();
 static void file_list_tick();
 static void qso_draw_page();
+static void porta_file_read_tick();
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter = -1);
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd);
@@ -925,6 +926,85 @@ static void qso_load_entries_tick() {
   }
 }
 
+// Port A's own FILE_READ request (RFC 0004 §11), independent of
+// s_qso_load_stream/s_qso_load_pager above for the same reason as FILE_LIST:
+// Port A must work whether or not the on-device Q screen is open. A second,
+// independent stream handle is a supported pattern here, not a new risk --
+// storage_service_open_stream_count() exists specifically to track more
+// than one concurrent open. Paced the same as the on-device read
+// (kQsoBrowseLinesPerTick lines per main-loop tick) for the same reason:
+// a long file must not stall the slot loop that shares this loop.
+static StorageStream* s_porta_read_stream = nullptr;
+static QsoBrowsePager s_porta_read_pager;
+static std::vector<QsoBrowseBand> s_porta_read_bands;
+static bool s_porta_read_active = false;
+
+const char* porta_host_file_read_begin(const char* filename, uint16_t skip, uint8_t take) {
+  if (!filename || filename[0] == '\0' || take == 0) {
+    return "malformed";
+  }
+  if (s_porta_read_stream) {
+    // A new request while one is in flight replaces it, same policy as
+    // file_list_worker's own "last request wins" -- the polled ACTION design
+    // assumes one outstanding request at a time in the first place.
+    storage_stream_close(s_porta_read_stream);
+    s_porta_read_stream = nullptr;
+    s_porta_read_active = false;
+  }
+  s_porta_read_stream = storage_stream_open(filename, StorageOpenMode::READ);
+  if (!s_porta_read_stream) {
+    return "open failed";
+  }
+  qso_browse_pager_reset(&s_porta_read_pager, skip, take);
+  s_porta_read_bands.clear();
+  s_porta_read_bands.reserve(g_bands.size());
+  for (const auto& b : g_bands) {
+    s_porta_read_bands.push_back({b.name, b.freq});
+  }
+  s_porta_read_active = true;
+  return nullptr;
+}
+
+static void porta_file_read_tick() {
+  if (!s_porta_read_active || !s_porta_read_stream) {
+    return;
+  }
+  char line[512];
+  int n = 0;
+  bool more = true;
+  while (n < kQsoBrowseLinesPerTick) {
+    if (!storage_stream_read_line(s_porta_read_stream, line, sizeof(line))) {
+      more = false;
+      break;
+    }
+    ++n;
+    if (!qso_browse_pager_feed(&s_porta_read_pager, std::string(line),
+                               s_porta_read_bands.data(),
+                               static_cast<int>(s_porta_read_bands.size()))) {
+      more = false;
+      break;
+    }
+  }
+  if (more) {
+    return;
+  }
+
+  storage_stream_close(s_porta_read_stream);
+  s_porta_read_stream = nullptr;
+  s_porta_read_active = false;
+
+  for (const QsoLogEntry& e : s_porta_read_pager.entries) {
+    porta_qso_entry_row_t row = {};
+    std::snprintf(row.time_on, sizeof(row.time_on), "%s", e.time_on.c_str());
+    std::snprintf(row.band, sizeof(row.band), "%s", e.band.c_str());
+    std::snprintf(row.call, sizeof(row.call), "%s", e.call.c_str());
+    row.rst_sent = (int8_t)(e.has_rst_sent ? e.rst_sent : -99);
+    row.rst_rcvd = (int8_t)(e.has_rst_rcvd ? e.rst_rcvd : -99);
+    porta_emit_file_entry(row);
+  }
+  porta_emit_ack(PORTA_MSG_FILE_READ);
+}
+
 static void qso_draw_page() {
   if (g_q_show_entries) {
     // Entry view: render raw QSO lines without "1..6 " prefixes.
@@ -935,11 +1015,46 @@ static void qso_draw_page() {
   }
 }
 
+// Port A's own FILE_LIST request (RFC 0004 §11), independent of the
+// on-device Q/Delete screens' g_q_files/g_d_files -- Port A must work
+// whether or not either screen is open. 0 = none pending.
+//
+// This shares file_list_worker's single completion queue with the on-device
+// screens rather than draining it separately: file_list_worker_take() pops
+// one shared FIFO, and the existing QsoDaily case below already discards
+// whatever does not match its own expected gen. A second, independent
+// drain loop would race it -- each could silently eat the other's
+// completion, since neither knows the other's expected gen -- so Port A's
+// request is handled as one more branch inside the same drain loop below,
+// not a sibling tick function.
+static uint32_t s_porta_list_gen = 0;
+static uint16_t s_porta_list_skip = 0;
+static uint8_t  s_porta_list_take = 0;
+
+static void porta_finish_file_list(const FileListDone& done) {
+  s_porta_list_gen = 0;  // consumed -- one outstanding Port A request at a time
+  if (done.fail != FileListFail::None) {
+    porta_emit_nak(PORTA_MSG_FILE_LIST, file_list_fail_text(done.fail));
+    return;
+  }
+  std::vector<std::string> files, lines_unused;
+  file_list_apply(FileListKind::QsoDaily, done.fail, done.names, &files, &lines_unused);
+  for (size_t i = s_porta_list_skip;
+       i < files.size() && (i - s_porta_list_skip) < s_porta_list_take; ++i) {
+    porta_emit_file_name(files[i].c_str());
+  }
+  porta_emit_ack(PORTA_MSG_FILE_LIST);
+}
+
 static void file_list_tick() {
   FileListDone done;
   while (file_list_worker_take(&done)) {
     switch (done.kind) {
       case FileListKind::QsoDaily:
+        if (s_porta_list_gen != 0 && done.gen == s_porta_list_gen) {
+          porta_finish_file_list(done);
+          break;
+        }
         if (done.gen != s_q_list_gen) {
           break;
         }
@@ -963,6 +1078,19 @@ static void file_list_tick() {
         break;
     }
   }
+}
+
+const char* porta_host_file_list_begin(uint8_t kind, uint16_t skip, uint8_t take) {
+  if (kind != PORTA_FILE_LIST_QSO_DAILY) {
+    return "unknown kind";
+  }
+  if (take == 0) {
+    return "take must be > 0";
+  }
+  s_porta_list_skip = skip;
+  s_porta_list_take = take;
+  s_porta_list_gen  = file_list_worker_submit(FileListKind::QsoDaily);
+  return nullptr;
 }
 
 static AdifLoggerDedupe s_adif_logger_dedupe;
@@ -5205,6 +5333,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     tx_abort_hud_tick();
     qso_load_entries_tick();
     file_list_tick();
+    porta_file_read_tick();
     cts_ble_poll();
     if (g_tx_active) {
       cts_ble_abort();
