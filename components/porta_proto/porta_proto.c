@@ -792,7 +792,7 @@ bool porta_proto_parse_file_name_row(const porta_frame_t *f, char *name_out)
 
 // data_kind(1)=ENTRY | time_on(5, fixed "HH:MM") | band_len(1) | band... |
 // call_len(1) | call... | rst_sent(1) | rst_rcvd(1) | grid_len(1) | grid... |
-// freq_len(1) | freq...
+// freq_len(1) | freq... | my_grid_len(1) | my_grid... | comment_len(1) | comment...
 size_t porta_proto_encode_file_entry_row(const porta_qso_entry_row_t *e,
                                          uint8_t *out, size_t out_cap)
 {
@@ -807,12 +807,16 @@ size_t porta_proto_encode_file_entry_row(const porta_qso_entry_row_t *e,
     const size_t call_n = strnlen(e->call, PORTA_CALLSIGN_MAX + 1);
     const size_t grid_n = strnlen(e->grid, PORTA_GRID_MAX + 1);
     const size_t freq_n = strnlen(e->freq, PORTA_FREQ_MAX + 1);
+    const size_t my_grid_n = strnlen(e->my_grid, PORTA_GRID_MAX + 1);
+    const size_t comment_n = strnlen(e->comment, PORTA_COMMENT_MAX + 1);
     if (band_n > PORTA_BAND_MAX || call_n > PORTA_CALLSIGN_MAX ||
-        grid_n > PORTA_GRID_MAX || freq_n > PORTA_FREQ_MAX) {
+        grid_n > PORTA_GRID_MAX || freq_n > PORTA_FREQ_MAX ||
+        my_grid_n > PORTA_GRID_MAX || comment_n > PORTA_COMMENT_MAX) {
         return 0;
     }
     uint8_t payload[1 + 5 + 1 + PORTA_BAND_MAX + 1 + PORTA_CALLSIGN_MAX + 1 + 1 +
-                    1 + PORTA_GRID_MAX + 1 + PORTA_FREQ_MAX];
+                    1 + PORTA_GRID_MAX + 1 + PORTA_FREQ_MAX +
+                    1 + PORTA_GRID_MAX + 1 + PORTA_COMMENT_MAX];
     size_t p = 0;
     payload[p++] = PORTA_FILE_DATA_ENTRY;
     memcpy(&payload[p], e->time_on, 5);
@@ -831,12 +835,18 @@ size_t porta_proto_encode_file_entry_row(const porta_qso_entry_row_t *e,
     payload[p++] = (uint8_t)freq_n;
     memcpy(&payload[p], e->freq, freq_n);
     p += freq_n;
+    payload[p++] = (uint8_t)my_grid_n;
+    memcpy(&payload[p], e->my_grid, my_grid_n);
+    p += my_grid_n;
+    payload[p++] = (uint8_t)comment_n;
+    memcpy(&payload[p], e->comment, comment_n);
+    p += comment_n;
     return porta_proto_encode(PORTA_MSG_FILE_DATA, payload, (uint8_t)p, out, out_cap);
 }
 
 bool porta_proto_parse_file_entry_row(const porta_frame_t *f, porta_qso_entry_row_t *out)
 {
-    if (!f || !out || f->type != PORTA_MSG_FILE_DATA || f->len < 1 + 5 + 1 + 1 + 1 + 1 + 1 + 1 ||
+    if (!f || !out || f->type != PORTA_MSG_FILE_DATA || f->len < 1 + 5 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 ||
         f->payload[0] != PORTA_FILE_DATA_ENTRY) {
         return false;
     }
@@ -874,12 +884,28 @@ bool porta_proto_parse_file_entry_row(const porta_frame_t *f, porta_qso_entry_ro
     p += grid_n;
 
     const uint8_t freq_n = f->payload[p++];
-    if (freq_n > PORTA_FREQ_MAX || p + freq_n != f->len) {
+    if (freq_n > PORTA_FREQ_MAX || p + freq_n + 1 + 1 > f->len) {
         return false;
     }
     memcpy(out->freq, &f->payload[p], freq_n);
     out->freq[freq_n] = '\0';
     p += freq_n;
+
+    const uint8_t my_grid_n = f->payload[p++];
+    if (my_grid_n > PORTA_GRID_MAX || p + my_grid_n + 1 > f->len) {
+        return false;
+    }
+    memcpy(out->my_grid, &f->payload[p], my_grid_n);
+    out->my_grid[my_grid_n] = '\0';
+    p += my_grid_n;
+
+    const uint8_t comment_n = f->payload[p++];
+    if (comment_n > PORTA_COMMENT_MAX || p + comment_n != f->len) {
+        return false;
+    }
+    memcpy(out->comment, &f->payload[p], comment_n);
+    out->comment[comment_n] = '\0';
+    p += comment_n;
 
     return true;
 }

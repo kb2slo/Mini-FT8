@@ -835,6 +835,8 @@ static void test_file_data_rows()
     in.rst_rcvd = -11;
     std::snprintf(in.grid, sizeof(in.grid), "FN42");
     std::snprintf(in.freq, sizeof(in.freq), "14.074");
+    std::snprintf(in.my_grid, sizeof(in.my_grid), "FN30");
+    std::snprintf(in.comment, sizeof(in.comment), "nice sigs, tnx QSO");
 
     porta_decoder_init(&d);
     n = porta_proto_encode_file_entry_row(&in, buf, sizeof(buf));
@@ -849,21 +851,27 @@ static void test_file_data_rows()
         check(out.rst_sent == 3 && out.rst_rcvd == -11, "rst values round-trip, including negative");
         check(std::string(out.grid) == "FN42", "grid round-trips");
         check(std::string(out.freq) == "14.074", "freq round-trips");
+        check(std::string(out.my_grid) == "FN30", "my_grid round-trips");
+        check(std::string(out.comment) == "nice sigs, tnx QSO", "comment round-trips");
     }
 
-    // Empty grid/freq (not every QSO has a grid, and legacy .txt logs have
-    // no freq) must round-trip as empty, not crash or desync the frame.
+    // Empty grid/freq/my_grid/comment (not every QSO logs all of these, and
+    // legacy .txt logs have none) must round-trip as empty, not crash or
+    // desync the frame.
     porta_qso_entry_row_t no_grid = in;
     no_grid.grid[0] = '\0';
     no_grid.freq[0] = '\0';
+    no_grid.my_grid[0] = '\0';
+    no_grid.comment[0] = '\0';
     porta_decoder_init(&d);
     n = porta_proto_encode_file_entry_row(&no_grid, buf, sizeof(buf));
     got = run(&d, std::vector<uint8_t>(buf, buf + n));
     if (got.size() == 1) {
         porta_qso_entry_row_t out;
         check(porta_proto_parse_file_entry_row(&got[0], &out) &&
-              std::string(out.grid).empty() && std::string(out.freq).empty(),
-              "empty grid/freq round-trip");
+              std::string(out.grid).empty() && std::string(out.freq).empty() &&
+              std::string(out.my_grid).empty() && std::string(out.comment).empty(),
+              "empty grid/freq/my_grid/comment round-trip");
     }
 
     // No report uses -99, the same sentinel QsoContext::snr_tx/snr_rx already
