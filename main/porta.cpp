@@ -463,6 +463,36 @@ void porta_emit_decode(uint32_t decode_id, const char* text, int snr, int offset
   enqueue(buf, n);
 }
 
+void porta_emit_queue_entry(uint16_t entry_id, uint8_t state, uint8_t retry_count,
+                            uint8_t retry_limit, const char* dxcall) {
+  if (!s_running) return;
+  porta_queue_entry_event_t q = {};
+  q.epoch_secs = host_epoch_secs();
+  q.entry_id = entry_id;
+  q.state = state;
+  q.retry_count = retry_count;
+  q.retry_limit = retry_limit;
+  if (dxcall) {
+    strncpy(q.dxcall, dxcall, sizeof(q.dxcall) - 1);
+  }
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  const size_t n = porta_proto_encode_queue_entry(&q, buf, sizeof(buf));
+  enqueue(buf, n);
+}
+
+void porta_emit_slot_state(uint8_t slot_parity, uint8_t beacon_mode,
+                           uint16_t resolved_offset_hz) {
+  if (!s_running) return;
+  porta_slot_state_event_t s = {};
+  s.epoch_secs = host_epoch_secs();
+  s.slot_parity = slot_parity;
+  s.beacon_mode = beacon_mode;
+  s.resolved_offset_hz = resolved_offset_hz;
+  uint8_t buf[PORTA_PROTO_MAX_FRAME];
+  const size_t n = porta_proto_encode_slot_state(&s, buf, sizeof(buf));
+  enqueue(buf, n);
+}
+
 void porta_emit_file_name(const char* name) {
   if (!s_running || !name) return;
   uint8_t buf[PORTA_PROTO_MAX_FRAME];

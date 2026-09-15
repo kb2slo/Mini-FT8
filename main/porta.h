@@ -56,6 +56,19 @@ void porta_emit_log(const char* text);
 void porta_emit_decode(uint32_t decode_id, const char* text, int snr, int offset_hz,
                        float dt_s, bool is_cq, bool is_to_me, bool is_recent_qso);
 
+// One autoseq queue row (I28d, RFC 0004 §11). `state` is the AutoseqState
+// wire value; IDLE (6) is the removal signal, not a separate flag -- callers
+// use it to tell a browser an entry is gone, same as the host side does.
+void porta_emit_queue_entry(uint16_t entry_id, uint8_t state, uint8_t retry_count,
+                            uint8_t retry_limit, const char* dxcall);
+
+// Global slot scalars, not any one queue entry's -- see porta_slot_state_event_t
+// in porta_proto.h. Emitted periodically (main.cpp), not on change: one
+// mechanism serves both "keep the browser current" and "give a freshly
+// loaded browser today's state" without a separate getter or diff logic.
+void porta_emit_slot_state(uint8_t slot_parity, uint8_t beacon_mode,
+                           uint16_t resolved_offset_hz);
+
 // What the companion looks like from here. Three failure states rather than
 // one, because they need different words: a sidekick that is merely behind can
 // be updated, one speaking an older protocol *also* needs updating but cannot
