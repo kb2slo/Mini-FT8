@@ -1051,7 +1051,9 @@ function renderDecodes() {
   var rows = document.getElementById('opDecodeRows');
   rows.innerHTML = decodeSlots.map(function (slot, i) {
     var divider = i > 0 ? '<div class=dslotdiv></div>' : '';
-    var header = '<div class=day>' + fmtSlotTime(slot.ts) + '</div>';
+    var header = '<div class=day>' + fmtSlotTime(slot.ts) +
+      (slot.band ? ' · ' + esc(slot.band) : '') +
+      (slot.freqKhz ? ' · ' + esc(slot.freqKhz) + ' kHz' : '') + '</div>';
     return divider + header + slot.map(function (d) {
       return '<div class=drow data-id="' + d.id + '">' +
         '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
@@ -1106,6 +1108,12 @@ async function pollEvents() {
       if (pendingDecodes.length) {
         pendingDecodes.sort(decodeSortCmp);
         pendingDecodes.ts = Date.now();
+        // Captured per-slot, not read fresh at render time -- a band change
+        // mid-session must not relabel older slots with the new band. Both
+        // are plain CONFIG keys (main.cpp's porta_host_config_snapshot()),
+        // relayed through as JSON strings verbatim.
+        pendingDecodes.band = lastCfg.band_name || '';
+        pendingDecodes.freqKhz = lastCfg.freq_khz || '';
         decodeSlots.unshift(pendingDecodes);
         if (decodeSlots.length > DECODE_SLOTS_MAX) decodeSlots.length = DECODE_SLOTS_MAX;
       }
