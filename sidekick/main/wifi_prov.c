@@ -538,6 +538,13 @@ static void httpd_start_provisioning(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
+    // Default is 7 (4 usable client sockets after esp_http_server reserves 3)
+    // -- too tight for a phone browser, which opens several connections
+    // loading one page (doc + favicon + speculative preconnect). Raised
+    // alongside CONFIG_LWIP_MAX_SOCKETS (sdkconfig.defaults) with headroom
+    // left in that shared pool for mDNS/DHCP. Picked without an on-device
+    // heap reading -- TEST_PLAN.md Pending.
+    cfg.max_open_sockets = 10;
     // Match the compile-time pairing slot table (pairing_http_cap.h).
     cfg.max_uri_handlers = PAIRING_HTTP_MAX_ROUTES_AP;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
@@ -653,6 +660,10 @@ static void httpd_start_status(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
+    // See the matching comment in httpd_start_provisioning(): default 7
+    // (4 usable) is too tight for a real browser session. TEST_PLAN.md
+    // Pending -- no on-device heap reading behind this number yet.
+    cfg.max_open_sockets = 10;
     // Capacity tracks pairing_http_cap.h (station sum). Bundle handlers also
     // need headroom above the IDF default 4 KB stack (manifest + mbedtls +
     // VFS blew it on begin/commit).

@@ -19,3 +19,10 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # itself valid only once the PORTA beacon is confirmed working, so an update
 # that boots but cannot talk reverts on its own rather than needing a cable.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# IDF default (10) is a global ceiling shared by every socket in the system --
+# httpd, mDNS, station/AP netif. httpd alone wants a real client budget (see
+# max_open_sockets in wifi_prov.c), so raised with headroom left over for the
+# rest. Picked blind, without an on-device heap reading -- TEST_PLAN.md
+# Pending.
+CONFIG_LWIP_MAX_SOCKETS=16
