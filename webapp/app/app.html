@@ -590,11 +590,15 @@ function renderQueue() {
 
 var decodes = []; // newest first, capped
 
+function fmtDt(dt) {
+  return (dt > 0 ? '+' : '') + dt.toFixed(1);
+}
+
 function renderDecodes() {
   var rows = document.getElementById('opDecodeRows');
   rows.innerHTML = decodes.map(function (d) {
     return '<div class=drow data-id="' + d.id + '">' +
-      '<div class=meta><span>' + d.hhmmss + '</span><span>' + d.hz + ' Hz</span><span>' +
+      '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
       (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
       '<div class="txt' + (d.me ? ' strong' : '') + '">' + esc(d.x) +
       (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
@@ -608,11 +612,6 @@ function renderDecodes() {
   });
 }
 
-function hhmmss(t) {
-  if (!t) return '--:--:--';
-  return new Date(t * 1000).toISOString().substr(11, 8);
-}
-
 // ===================== Operate: event poll =====================
 // Same polled /api/events?since= shape as /log's viewer (RFC 0004 §6):
 // a poll cannot wedge the server the way a long-lived stream could.
@@ -621,7 +620,7 @@ var evSeq = 0;
 
 function applyEvent(e) {
   if (e.d === 1) {
-    decodes.unshift({ id: e.id, hhmmss: hhmmss(e.t), hz: e.hz, snr: e.snr, x: e.x, me: !!e.me });
+    decodes.unshift({ id: e.id, dt: e.dt, hz: e.hz, snr: e.snr, x: e.x, me: !!e.me });
     if (decodes.length > 80) decodes.length = 80;
   } else if (e.d === 2) {
     if (e.st === 6) {
