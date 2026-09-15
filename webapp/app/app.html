@@ -123,8 +123,14 @@ button:disabled{opacity:.45}
 .bandfreqwrap{display:flex;align-items:center;gap:.3rem;font-size:.8rem;color:GrayText;white-space:nowrap}
 .bandfreq{width:5.5rem;margin:0;padding:.3rem .4rem;font-size:.85rem}
 .bandfreq:disabled{opacity:.5}
+#staleBanner{background:#fef3c7;color:#78350f;padding:.5rem 1rem;font-size:.85rem;display:flex;justify-content:space-between;align-items:center;gap:.5rem}
+#staleBanner button{padding:.3rem .6rem;font-size:.8rem}
 </style>
 
+<div id=staleBanner hidden>
+  <span>A newer version is available.</span>
+  <button id=staleBannerReload type=button>Reload</button>
+</div>
 <div class=wrap>
   <h1>Mini-FT8</h1>
   <p id=m>Loading…</p>
@@ -273,6 +279,7 @@ button:disabled{opacity:.45}
       <a href=/update>Install / update</a> ·
       <a href=/>Status</a>
     </nav>
+    <div style="padding:0 1rem 1rem;font-size:.75rem;color:GrayText">App: <span id=appVersion>—</span></div>
   </section>
 </div>
 
@@ -334,6 +341,73 @@ function esc(s) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
   });
 }
+
+// Not crypto.subtle -- that's unavailable on this page's own origin, since
+// RFC 0004 §2 means the sidekick never speaks TLS and a plain-HTTP origin is
+// not a secure context (SubtleCrypto requires one). FNV-1a over the UTF-8
+// bytes is plenty for "did this desk_push actually land": desk_push.py
+// prints the identical hash (same algorithm, over the same file's bytes on
+// disk) so the two can be eyeballed against each other without needing a
+// build step or a server-side version endpoint.
+function fnv1a(bytes) {
+  var h = 0x811c9dc5;
+  for (var i = 0; i < bytes.length; i++) {
+    h ^= bytes[i];
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return ('00000000' + h.toString(16)).slice(-8);
+}
+
+// Re-fetches this same page fresh (cache: no-store) rather than hashing the
+// already-parsed, JS-mutated DOM, so this matches gen_manifest.py's sha256
+// of the file on disk in spirit (both are the served bytes, not a rendering
+// of them) -- FNV-1a instead of sha256 only because of the secure-context
+// gap above, but the "same bytes in, same hash out" property is what makes
+// this a useful A/B against desk_push.py's own printed hash.
+var loadedAppHash = null;
+async function computeAppVersion() {
+  try {
+    var r = await fetch(location.pathname, { cache: 'no-store' });
+    var text = await r.text();
+    var bytes = new TextEncoder().encode(text);
+    loadedAppHash = fnv1a(bytes);
+    document.getElementById('appVersion').textContent =
+      loadedAppHash + ' · ' + bytes.length + ' B';
+  } catch (e) {
+    document.getElementById('appVersion').textContent = 'unknown';
+  }
+}
+
+// A back-forward-cache restore resumes whatever JS state the page had when
+// it was backgrounded, without a real navigation or a single fetch --
+// nothing above (the no-store header, this fetch-based version check) can
+// see it happen, because no network request occurs at all. This is likely
+// what an operator-reported "settings looked blank, a reload fixed it,
+// couldn't reproduce" session actually was: not a bug in setForm(), a stale
+// resumed tab. event.persisted is true only on a bfcache restore, never a
+// fresh load, so this is a no-op almost always and a forced real reload the
+// one time it matters.
+window.addEventListener('pageshow', function (ev) {
+  if (ev.persisted) location.reload();
+});
+
+// Checks when the tab regains focus, not on a timer -- this only matters
+// after the operator has stepped away and a desk_push may have landed
+// meanwhile. Offers a reload rather than forcing one, unlike the bfcache
+// case above: the operator may be mid-QSO, and reloading unprompted would
+// be worse than a stale-version banner.
+async function checkAppStale() {
+  if (document.visibilityState !== 'visible' || !loadedAppHash) return;
+  try {
+    var r = await fetch(location.pathname, { cache: 'no-store' });
+    var bytes = new TextEncoder().encode(await r.text());
+    if (fnv1a(bytes) !== loadedAppHash) {
+      document.getElementById('staleBanner').hidden = false;
+    }
+  } catch (e) { /* offline or similar -- not a staleness signal */ }
+}
+document.addEventListener('visibilitychange', checkAppStale);
+document.getElementById('staleBannerReload').onclick = function () { location.reload(); };
 
 // ===================== tabs =====================
 
@@ -1494,6 +1568,7 @@ if (MiniFT8Pairing.getToken()) {
 }
 
 loadConfig().catch(function () { /* setMsg already */ });
+computeAppVersion();
 renderCountdown();
 renderBeacon();
 renderQueue();

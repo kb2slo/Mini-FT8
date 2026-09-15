@@ -282,8 +282,16 @@ static esp_err_t get_static(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
     }
     httpd_resp_set_type(req, mime_for(rel));
-    // Seed updates on reflash/hydrate; do not keep a stale browser copy.
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+    // Seed updates on reflash/hydrate, or a desk_push bundle push; do not
+    // keep a stale browser copy. no-cache (was here before) still permits a
+    // conditional-revalidation cache entry in principle -- moot without an
+    // ETag/Last-Modified for the browser to revalidate against, but no-store
+    // says it plainly and is also one of the signals browsers check before
+    // allowing a page into the back-forward cache, which no-cache does not
+    // reliably block (see app.html's own pageshow handler for the other
+    // half of that: a bfcache restore skips a network request altogether,
+    // so no Cache-Control header sees it at all).
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     const esp_err_t err = httpd_resp_send(req, body, body_len);
     free(body);
     return err;

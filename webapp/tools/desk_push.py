@@ -162,6 +162,19 @@ def wait_for_token(host: str, wait_s: float) -> str:
     die("timed out waiting for pairing button / token")
 
 
+def fnv1a(data: bytes) -> str:
+    """Matches app.html's own fnv1a() exactly -- same algorithm over the same
+    bytes, so its printed hash for app.html can be eyeballed directly against
+    the "App: ..." line Settings shows after a push, without needing
+    crypto.subtle (unavailable on the sidekick's plain-HTTP origin) or a
+    server-side version endpoint."""
+    h = 0x811C9DC5
+    for b in data:
+        h ^= b
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return f"{h:08x}"
+
+
 def push(host: str, token: str, doc: dict) -> None:
     man_bytes = MANIFEST.read_bytes()
     code, body = http(
@@ -189,7 +202,8 @@ def push(host: str, token: str, doc: dict) -> None:
         )
         if code != 200:
             die(f"put {path} → {code}: {body.decode(errors='replace')}")
-        print(f"put {path} ({len(data)} bytes)")
+        suffix = f", fnv1a {fnv1a(data)}" if path == "app.html" else ""
+        print(f"put {path} ({len(data)} bytes{suffix})")
 
     code, body = http("POST", url(host, "/api/bundle/commit"), token=token)
     if code != 200:
