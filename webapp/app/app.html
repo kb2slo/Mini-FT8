@@ -103,6 +103,7 @@ button:disabled{opacity:.45}
 .frow .sub{font-size:.7rem;color:GrayText;text-align:right}
 .frow-extra{margin-top:.25rem;font-size:.7rem;color:GrayText;display:flex;flex-wrap:wrap;gap:.6rem}
 .frow-extra .degrid{font-family:ui-monospace,monospace;font-weight:700}
+.frow-extra .distbearing{font-family:ui-monospace,monospace}
 .frow-extra .comment{font-style:italic;overflow-wrap:anywhere}
 #logMore{padding:.7rem 1rem;text-align:center;color:GrayText;font-size:.8rem}
 
@@ -946,6 +947,54 @@ function fmtRst(v) {
   return (v === -99 || v == null) ? '—' : (v > 0 ? '+' + v : String(v));
 }
 
+// Maidenhead -> lat/lon (center of the square), then great-circle distance
+// and initial bearing. Standard formulas, no external data -- unlike a
+// callsign->DXCC lookup, a grid square's own characters already encode its
+// position exactly, so this needs nothing beyond the two grids on the row.
+function gridToLatLon(grid) {
+  if (!grid || grid.length < 4) return null;
+  var g = grid.toUpperCase();
+  var A = 'A'.charCodeAt(0), Z0 = '0'.charCodeAt(0);
+  var fl = g.charCodeAt(0) - A, fu = g.charCodeAt(1) - A;
+  var sl = g.charCodeAt(2) - Z0, su = g.charCodeAt(3) - Z0;
+  if (fl < 0 || fl > 17 || fu < 0 || fu > 17 || sl < 0 || sl > 9 || su < 0 || su > 9) return null;
+  var lon = fl * 20 - 180 + sl * 2;
+  var lat = fu * 10 - 90 + su * 1;
+  if (g.length >= 6) {
+    var tl = g.charCodeAt(4) - A, tu = g.charCodeAt(5) - A;
+    if (tl >= 0 && tl <= 23 && tu >= 0 && tu <= 23) {
+      lon += tl * (2 / 24) + (2 / 24) / 2;
+      lat += tu * (1 / 24) + (1 / 24) / 2;
+      return { lat: lat, lon: lon };
+    }
+  }
+  lon += 1;   // center of the 4-char (2 deg lon x 1 deg lat) square
+  lat += 0.5;
+  return { lat: lat, lon: lon };
+}
+function toRad(d) { return d * Math.PI / 180; }
+function greatCircle(a, b) {
+  var R = 6371; // km
+  var dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+  var la1 = toRad(a.lat), la2 = toRad(b.lat);
+  var h = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLon / 2) ** 2;
+  var km = R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  var y = Math.sin(dLon) * Math.cos(la2);
+  var x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dLon);
+  var bearing = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  return { km: km, bearing: bearing };
+}
+// "1,234 km 047°", or '' if either grid is missing/malformed -- never a
+// half-computed badge.
+function fmtDistBearing(myGrid, theirGrid) {
+  var a = gridToLatLon(myGrid), b = gridToLatLon(theirGrid);
+  if (!a || !b) return '';
+  var gc = greatCircle(a, b);
+  var mi = gc.km * 0.621371;
+  return Math.round(gc.km).toLocaleString() + ' km (' + Math.round(mi).toLocaleString() + ' mi) ' +
+        String(Math.round(gc.bearing)).padStart(3, '0') + '°';
+}
+
 // Appends to `file`'s own persistent container rather than the end of
 // #logList, so a later call for a file that already has rows (either
 // loadMoreLog() continuing to page through it, or refreshLogHead() finding
@@ -995,11 +1044,15 @@ function appendLogRows(file, rows, prependGroup) {
         (q.freq ? ' · ' + esc(q.freq) + ' MHz' : '') + ' · ' +
         fmtRst(q.rst_sent) + '/' + fmtRst(q.rst_rcvd) + '</span>' +
       '</div>' +
-      ((q.my_grid || q.comment) ?
-        '<div class=frow-extra>' +
+      (function () {
+        var distBearing = (q.my_grid && q.grid) ? fmtDistBearing(q.my_grid, q.grid) : '';
+        if (!q.my_grid && !q.comment && !distBearing) return '';
+        return '<div class=frow-extra>' +
           (q.my_grid ? '<span class=degrid>DE ' + esc(q.my_grid) + '</span>' : '') +
+          (distBearing ? '<span class=distbearing>' + esc(distBearing) + '</span>' : '') +
           (q.comment ? '<span class=comment>' + esc(q.comment) + '</span>' : '') +
-        '</div>' : '');
+        '</div>';
+      })();
     group.appendChild(row);
     logRenderedAny = true;
   });
