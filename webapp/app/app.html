@@ -126,11 +126,34 @@ button:disabled{opacity:.45}
 .bandfreq:disabled{opacity:.5}
 #staleBanner{background:#fef3c7;color:#78350f;padding:.5rem 1rem;font-size:.85rem;display:flex;justify-content:space-between;align-items:center;gap:.5rem}
 #staleBanner button{padding:.3rem .6rem;font-size:.8rem}
+.callink{text-decoration:underline;text-decoration-style:dotted;cursor:pointer}
+.qrow .call,.frow .call{cursor:pointer;text-decoration:underline;text-decoration-style:dotted}
+#callInfoModal{position:fixed;inset:0;z-index:20;display:flex;align-items:flex-end;justify-content:center}
+#callInfoBackdrop{position:absolute;inset:0;background:rgba(0,0,0,.4)}
+#callInfoCard{position:relative;width:100%;max-width:26rem;max-height:80vh;overflow-y:auto;background:Canvas;color:CanvasText;border-radius:.75rem .75rem 0 0;padding:1rem;box-shadow:0 -2px 16px rgba(0,0,0,.25)}
+#callInfoHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem}
+#callInfoCallName{font-family:ui-monospace,monospace;font-weight:700;font-size:1.2rem}
+#callInfoClose{border:0;background:transparent;font-size:1.5rem;line-height:1;padding:.2rem .6rem;color:GrayText}
+.ci-row{padding:.5rem 0;border-top:1px solid color-mix(in srgb, GrayText 20%, transparent);font-size:.85rem}
+.ci-label{font-size:.7rem;color:GrayText;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.15rem}
+.ci-heard{font-family:ui-monospace,monospace;font-size:.75rem;padding:.15rem 0}
+#callInfoQrz{display:block;text-align:center;margin-top:.8rem;padding:.6rem;background:ButtonFace;color:#1d4ed8;border:1px solid GrayText;border-radius:.4rem;text-decoration:none;font-weight:700}
 </style>
 
 <div id=staleBanner hidden>
   <span>A newer version is available.</span>
   <button id=staleBannerReload type=button>Reload</button>
+</div>
+<div id=callInfoModal hidden>
+  <div id=callInfoBackdrop></div>
+  <div id=callInfoCard>
+    <div id=callInfoHead>
+      <span id=callInfoCallName></span>
+      <button id=callInfoClose type=button aria-label=Close>&times;</button>
+    </div>
+    <div id=callInfoBody></div>
+    <a id=callInfoQrz href=# target=_blank rel="noopener">View on QRZ.com</a>
+  </div>
 </div>
 <div class=wrap>
   <h1>Mini-FT8</h1>
@@ -1021,8 +1044,14 @@ function renderQueue() {
   document.getElementById('opQueueEmpty').hidden = ids.length > 0;
   rows.innerHTML = ids.map(function (id) {
     var q = queue[id];
+    // CQ is the beacon placeholder, not a real station -- not clickable,
+    // same reasoning changeBand() already uses to leave it out of the
+    // per-band queue clear.
+    var callSpan = q.dxcall === 'CQ'
+      ? '<span class=call>' + esc(q.dxcall) + '</span>'
+      : '<span class="call callink" data-call="' + esc(q.dxcall) + '">' + esc(q.dxcall) + '</span>';
     return '<div class=qrow>' +
-      '<div><span class=call>' + esc(q.dxcall) + '</span>' +
+      '<div>' + callSpan +
       '<span class=retry>retry ' + q.retry_count + '/' + q.retry_limit + '</span></div>' +
       '<span class="qstate qs-' + q.state + '">' + esc(QUEUE_STATE_NAMES[q.state] || '?') + '</span>' +
       '<button type=button class=qcancel data-id="' + id + '">&times;</button>' +
@@ -1032,6 +1061,12 @@ function renderQueue() {
     b.onclick = function () {
       radioPost('/api/queue/cancel', b.getAttribute('data-id'), 'Cancel…')
         .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+    };
+  });
+  rows.querySelectorAll('.callink').forEach(function (el) {
+    el.onclick = function (ev) {
+      ev.stopPropagation();
+      showCallInfo(el.getAttribute('data-call'));
     };
   });
 }
@@ -1117,12 +1152,18 @@ function renderDecodes() {
       return '<div class=drow data-id="' + d.id + '">' +
         '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
         (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
-        '<div class="txt ' + decodeColorClass(d) + '">' + esc(d.x) +
+        '<div class="txt ' + decodeColorClass(d) + '">' + highlightCallInText(d.x, senderCall) +
         (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
         (distBearing ? '<div class=ddist>' + esc(theirGrid) + ' · ' + esc(distBearing) + '</div>' : '') +
         '</div>';
     }).join('');
   }).join('');
+  rows.querySelectorAll('.callink').forEach(function (el) {
+    el.onclick = function (ev) {
+      ev.stopPropagation();
+      showCallInfo(el.getAttribute('data-call'));
+    };
+  });
   rows.querySelectorAll('.drow').forEach(function (el) {
     el.onclick = function () {
       radioPost('/api/queue/reply', el.getAttribute('data-id'), 'Queueing…')
@@ -1367,6 +1408,68 @@ function learnCallsignGrid(text) {
   saveCallsignGridCache();
 }
 
+// ---- Callsign info modal (Operate + QSOs) ----
+// Wraps just the sender token within a decode's own text in a clickable
+// span, rather than making the whole row open the modal -- .drow already
+// has a full-row tap-to-reply, and this has to coexist with it (the
+// callink's own click handler stops propagation so tapping the callsign
+// doesn't also queue a reply). Every other token is still individually
+// escaped same as before, so this can't reopen the class of hole esc()
+// exists to close.
+function highlightCallInText(text, call) {
+  if (!call) return esc(text);
+  return text.split(/(\s+)/).map(function (tok) {
+    var bare = tok.replace(/^<|>$/g, '').toUpperCase();
+    return bare === call ? '<span class=callink data-call="' + esc(call) + '">' + esc(tok) + '</span>' : esc(tok);
+  }).join('');
+}
+
+// "Offline" here means everything this session already knows on its own --
+// the opportunistic grid cache and whatever decodes are still in
+// decodeSlots -- not an external lookup. Deliberately no country/DXCC
+// guess: that needs a real prefix table, sourced and verified rather than
+// typed from memory (see ROADMAP B57's identical caution about the CAT
+// commands this same session researched), so the row stays a labeled
+// placeholder pointing at QRZ instead of shipping something that might be
+// wrong. QRZ integration proper (their API, not just a link) is the stated
+// next iteration, not this one.
+function showCallInfo(call) {
+  if (!call) return;
+  var grid = callsignGridCache[call];
+  var distBearing = (grid && lastCfg.grid) ? fmtDistBearing(lastCfg.grid, grid) : '';
+  var heard = [];
+  decodeSlots.forEach(function (slot) {
+    slot.forEach(function (d) {
+      if (extractSenderCall(d.x) === call) {
+        heard.push({ x: d.x, snr: d.snr, ts: slot.ts, band: slot.band });
+      }
+    });
+  });
+
+  document.getElementById('callInfoCallName').textContent = call;
+  var body = '';
+  body += '<div class=ci-row><div class=ci-label>Grid square</div>' +
+    (grid
+      ? esc(grid) + (distBearing ? ' · ' + esc(distBearing) : '') +
+        ' <span style="color:GrayText;font-size:.75rem">(opportunistically cached from an earlier decode, not authoritative)</span>'
+      : 'Not seen sending a grid yet this session') +
+    '</div>';
+  body += '<div class=ci-row><div class=ci-label>Heard this session (' + heard.length + ')</div>' +
+    (heard.length
+      ? heard.slice(0, 6).map(function (h) {
+          return '<div class=ci-heard>' + esc(fmtSlotDateTime(h.ts)) + (h.band ? ' · ' + esc(h.band) : '') +
+            ' · ' + (h.snr > 0 ? '+' : '') + h.snr + ' dB · ' + esc(h.x) + '</div>';
+        }).join('')
+      : 'No decodes from this callsign in the current decode history') +
+    '</div>';
+  body += '<div class=ci-row><div class=ci-label>Country / DXCC</div>' +
+    'Not looked up yet in this version -- check QRZ below.</div>';
+  document.getElementById('callInfoBody').innerHTML = body;
+  document.getElementById('callInfoQrz').href = 'https://www.qrz.com/db/' + encodeURIComponent(call);
+  document.getElementById('callInfoModal').hidden = false;
+}
+function hideCallInfo() { document.getElementById('callInfoModal').hidden = true; }
+
 // Appends to `file`'s own persistent container rather than the end of
 // #logList, so a later call for a file that already has rows (either
 // loadMoreLog() continuing to page through it, or refreshLogHead() finding
@@ -1410,7 +1513,7 @@ function appendLogRows(file, rows, prependGroup) {
     row.className = 'frow';
     row.innerHTML =
       '<div class=frow-main>' +
-        '<div><span class=call>' + esc(q.call) + '</span>' +
+        '<div><span class="call callink" data-call="' + esc(q.call) + '">' + esc(q.call) + '</span>' +
         (q.grid ? '<span class=grid>' + esc(q.grid) + '</span>' : '') + '</div>' +
         '<span class=sub>' + esc(q.time) + ' · ' + esc(q.band) +
         (q.freq ? ' · ' + esc(q.freq) + ' MHz' : '') + ' · ' +
@@ -1436,6 +1539,10 @@ function appendLogRows(file, rows, prependGroup) {
     // top of Today, which is the point -- it just happened.
     group.insertBefore(row, group.children[1] || null);
     logRenderedAny = true;
+    var callEl = row.querySelector('.callink');
+    if (callEl) {
+      callEl.onclick = function () { showCallInfo(callEl.getAttribute('data-call')); };
+    }
   });
 }
 
@@ -1638,6 +1745,8 @@ document.getElementById('logClearAll').onclick = function (ev) {
   ev.preventDefault();
   clearAllAdif();
 };
+document.getElementById('callInfoClose').onclick = hideCallInfo;
+document.getElementById('callInfoBackdrop').onclick = hideCallInfo;
 
 // ensureLogFiles() only ever looks *past* the end of what it has fetched
 // (older files); a file newer than logFiles[0] -- the ADV's day rollover at
