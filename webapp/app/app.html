@@ -1205,7 +1205,16 @@ function appendLogRows(file, rows, prependGroup) {
           (q.comment ? '<span class=comment>' + esc(q.comment) + '</span>' : '') +
         '</div>';
       })();
-    group.appendChild(row);
+    // Day files are written oldest-first (log_adif_entry() appends), and
+    // skip/take pages forward through that same order -- so within one
+    // day, each fetched batch is itself oldest-to-newest, and a plain
+    // append would put the newest QSO at the *bottom*. Inserting right
+    // after the day header instead means: processing a batch in its given
+    // (oldest-first) order naturally lands the newest row on top, since
+    // each later (newer) row gets inserted above the one before it. Same
+    // logic makes a QSO refreshLogHead() catches live land at the very
+    // top of Today, which is the point -- it just happened.
+    group.insertBefore(row, group.children[1] || null);
     logRenderedAny = true;
   });
 }
