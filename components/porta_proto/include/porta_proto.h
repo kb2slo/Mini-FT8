@@ -407,6 +407,12 @@ bool porta_proto_parse_config_value(const porta_frame_t *f, char *key_out, char 
 // ADIF is verbose text and the parser already exists and is host-tested
 // (qso_browse_pager_feed); re-parsing it in JavaScript would cost wire
 // budget and correctness for nothing.
+//
+// mode/station_callsign (added for the browser's "Download ADI" button)
+// exist for the same reason as every other field here: the browser
+// reconstructs a real per-record ADIF line client-side from these rows, and
+// both are required ADIF fields the record can't omit -- unlike grid/freq/
+// comment, which are genuinely optional per QSO.
 
 typedef enum {
     PORTA_FILE_LIST_QSO_DAILY = 0x01,  // matches FileListKind::QsoDaily
@@ -422,6 +428,7 @@ typedef enum {
 #define PORTA_GRID_MAX 8u
 #define PORTA_FREQ_MAX 12u
 #define PORTA_COMMENT_MAX 48u
+#define PORTA_MODE_MAX 7u  // "FT8"/"FT4" today; room for a longer protocol name
 
 size_t porta_proto_encode_file_list_req(uint8_t kind, uint16_t skip, uint8_t take,
                                         uint8_t *out, size_t out_cap);
@@ -451,6 +458,8 @@ typedef struct {
     char    freq[PORTA_FREQ_MAX + 1];        // raw ADIF MHz string, empty if absent
     char    my_grid[PORTA_GRID_MAX + 1];     // own grid at the time (<my_gridsquare>), empty if absent
     char    comment[PORTA_COMMENT_MAX + 1];  // <comment>, empty if absent
+    char    mode[PORTA_MODE_MAX + 1];              // <mode>, e.g. "FT8"
+    char    station_callsign[PORTA_CALLSIGN_MAX + 1]; // <station_callsign>, own call at log time
 } porta_qso_entry_row_t;
 
 size_t porta_proto_encode_file_entry_row(const porta_qso_entry_row_t *e,

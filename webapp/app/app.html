@@ -93,7 +93,9 @@ button:disabled{opacity:.45}
 
 /* ---- log ---- */
 #logList{padding-bottom:.5rem}
-.day{padding:.6rem 1rem .2rem;font-size:.75rem;font-weight:700;color:GrayText}
+.day{padding:.6rem 1rem .2rem;font-size:.75rem;font-weight:700;color:GrayText;display:flex;justify-content:space-between;align-items:baseline;gap:.5rem}
+.dlink{font-weight:400;color:#1d4ed8;text-decoration:none}
+.dlink:active{opacity:.6}
 .frow{padding:.5rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent)}
 .frow-main{display:flex;justify-content:space-between;align-items:center}
 .frow .call{font-family:ui-monospace,monospace;font-weight:700}
@@ -934,7 +936,18 @@ function appendLogRows(file, rows, prependGroup) {
     group.className = 'daygroup';
     var day = document.createElement('div');
     day.className = 'day';
-    day.textContent = dayLabel(file);
+    var dayText = document.createElement('span');
+    dayText.textContent = dayLabel(file);
+    day.appendChild(dayText);
+    var dlink = document.createElement('a');
+    dlink.className = 'dlink';
+    dlink.href = '#';
+    dlink.textContent = 'Download ADI';
+    dlink.onclick = function (ev) {
+      ev.preventDefault();
+      downloadDayAdif(file, dlink);
+    };
+    day.appendChild(dlink);
     group.appendChild(day);
     // loadMoreLog() walks files oldest-of-what's-known-so-far last, so a
     // plain append keeps newest-first order there. checkForNewDayFiles()
@@ -966,6 +979,78 @@ function appendLogRows(file, rows, prependGroup) {
     group.appendChild(row);
     logRenderedAny = true;
   });
+}
+
+// Mirrors adif.cpp's adif_format_log_record() field-for-field: same tag
+// order, same omit rules for empty grid/my_gridsquare/comment and a -99
+// (no-report) rst, same no-trailing-space-after-mode quirk -- so a
+// downloaded file merges cleanly with the ADV's own archives on identical
+// keys instead of just looking similar. mode/station_callsign came onto the
+// wire (porta_proto.h's porta_qso_entry_row_t) and into /api/log/entries
+// specifically to make this possible without a second, raw-bytes relay path
+// -- FILE_READ deliberately never ships raw ADIF (see that header's own
+// comment). time_on here is "HHMM" (the colon stripped from the already-
+// truncated display value) rather than "HHMMSS": ADIF's TIME_ON accepts
+// either width, and seconds were never on the wire to begin with.
+function adifField(tag, value, trailingSpace) {
+  return '<' + tag + ':' + value.length + '>' + value + (trailingSpace === false ? '' : ' ');
+}
+function adifFieldIfSet(tag, value) {
+  return value ? adifField(tag, value) : '';
+}
+function buildAdifRecord(q, dateStr) {
+  var out = '';
+  out += adifField('call', q.call || '');
+  out += adifFieldIfSet('gridsquare', q.grid);
+  out += adifField('mode', q.mode || '', false);
+  out += adifField('qso_date', dateStr);
+  out += adifField('time_on', (q.time || '').replace(':', ''));
+  out += adifField('freq', q.freq || '');
+  out += adifField('station_callsign', q.station_callsign || '');
+  out += adifFieldIfSet('my_gridsquare', q.my_grid);
+  if (q.rst_sent != null && q.rst_sent !== -99) out += adifField('rst_sent', String(q.rst_sent));
+  if (q.rst_rcvd != null && q.rst_rcvd !== -99) out += adifField('rst_rcvd', String(q.rst_rcvd));
+  out += adifFieldIfSet('comment', q.comment);
+  out += '<eor>\n';
+  return out;
+}
+
+// Loops /api/log/entries past whatever page size the Log tab itself has
+// loaded so far -- the visible list may only hold the first screenful of a
+// long day, and a download has to carry all of it, not just what's rendered.
+async function downloadDayAdif(file, linkEl) {
+  var origText = linkEl.textContent;
+  linkEl.textContent = 'Preparing…';
+  try {
+    var dateStr = file.slice(0, 8);
+    var rows = [];
+    var skip = 0;
+    while (true) {
+      var r = await fetch('/api/log/entries?file=' + encodeURIComponent(file) +
+                          '&skip=' + skip + '&take=50', { cache: 'no-store' });
+      var j = await r.json();
+      if (!j.ok) throw new Error(j.why || 'entries failed');
+      var page = j.entries || [];
+      rows = rows.concat(page);
+      skip += page.length;
+      if (page.length < 50) break;
+    }
+    var text = 'ADIF EXPORT\n<eoh>\n' +
+              rows.map(function (q) { return buildAdifRecord(q, dateStr); }).join('');
+    var blob = new Blob([text], { type: 'text/plain' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = file;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    setMsg(String(e && e.message ? e.message : e));
+  } finally {
+    linkEl.textContent = origText;
+  }
 }
 
 // Fetches the next page of day filenames the first time (or another page

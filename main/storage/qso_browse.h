@@ -23,6 +23,8 @@ struct QsoLogEntry {
     std::string grid;     // <gridsquare> (their grid), empty if absent
     std::string my_grid;  // <my_gridsquare> (own grid at the time), empty if absent
     std::string comment;  // <comment>, empty if absent
+    std::string mode;     // <mode>, e.g. "FT8"
+    std::string station_callsign;  // <station_callsign>, own call at log time
 };
 
 enum class QsoBrowsePageView { Default, Alternate };

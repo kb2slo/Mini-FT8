@@ -79,6 +79,8 @@ int main()
     expect_str(pager.entries[0].freq, "14.074", "raw freq kept");
     expect_str(pager.entries[0].my_grid, "FN30", "my_grid parsed");
     expect_str(pager.entries[0].comment, "nice sig", "comment parsed (declared-length, survives the internal space)");
+    expect_str(pager.entries[0].mode, "FT8", "mode parsed");
+    expect_str(pager.entries[0].station_callsign, "KB2SLO", "station_callsign parsed");
     expect_true(!pager.has_next, "no next on one qso");
 
     const std::string rec_no_grid =

@@ -142,6 +142,8 @@ bool parse_record_line(const std::string& line,
     const std::string grid = field_after_tag(line, s_lower, "gridsquare:");
     const std::string my_grid = field_after_tag(line, s_lower, "my_gridsquare:");
     const std::string comment = field_after_tag(line, s_lower, "comment:");
+    const std::string mode = field_after_tag(line, s_lower, "mode:");
+    const std::string station_callsign = field_after_tag(line, s_lower, "station_callsign:");
     const std::string rst_rcvd_raw = field_after_tag(line, s_lower, "rst_rcvd:");
     const std::string rst_sent_raw = field_after_tag(line, s_lower, "rst_sent:");
     std::string band = freq;
@@ -175,6 +177,8 @@ bool parse_record_line(const std::string& line,
     out->grid = grid;
     out->my_grid = my_grid;
     out->comment = comment;
+    out->mode = mode;
+    out->station_callsign = station_callsign;
     return true;
 }
 
