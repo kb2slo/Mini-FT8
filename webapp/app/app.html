@@ -912,7 +912,7 @@ function fmtRst(v) {
 // loadMoreLog() continuing to page through it, or refreshLogHead() finding
 // new QSOs logged since) lands them in the right place regardless of what
 // has been appended after it in the meantime.
-function appendLogRows(file, rows) {
+function appendLogRows(file, rows, prependGroup) {
   var list = document.getElementById('logList');
   if (!logRenderedAny) list.innerHTML = ''; // clear the "Loading…" placeholder
   var group = logGroupEls[file];
@@ -923,7 +923,15 @@ function appendLogRows(file, rows) {
     day.className = 'day';
     day.textContent = dayLabel(file);
     group.appendChild(day);
-    list.appendChild(group);
+    // loadMoreLog() walks files oldest-of-what's-known-so-far last, so a
+    // plain append keeps newest-first order there. checkForNewDayFiles()
+    // below discovers a file *newer* than anything rendered yet, which has
+    // to land above the existing groups instead.
+    if (prependGroup && list.firstChild) {
+      list.insertBefore(group, list.firstChild);
+    } else {
+      list.appendChild(group);
+    }
     logGroupEls[file] = group;
   }
   rows.forEach(function (q) {
@@ -1004,19 +1012,48 @@ async function loadMoreLog() {
 }
 document.getElementById('logMoreBtn').onclick = function () { loadMoreLog(); };
 
+// ensureLogFiles() only ever looks *past* the end of what it has fetched
+// (older files); a file newer than logFiles[0] -- the ADV's day rollover at
+// UTC midnight -- is otherwise never noticed short of a page reload, since
+// nothing else re-checks the front of the listing. Prepends any such file(s)
+// in newest-first order, ahead of everything already rendered, then leaves
+// logFiles[0] pointing at the true latest file so refreshLogHead() below
+// polls the right one.
+async function checkForNewDayFiles() {
+  if (!logFiles.length) return;
+  var r = await fetch('/api/log/files?skip=0&take=5', { cache: 'no-store' });
+  var j = await r.json();
+  if (!j.ok) return;
+  var files = j.files || [];
+  var known = logFiles[0];
+  var fresh = [];
+  for (var i = 0; i < files.length; i++) {
+    if (files[i] === known) break; // caught up to what we already know
+    fresh.push(files[i]);
+  }
+  if (!fresh.length) return;
+  for (var k = fresh.length - 1; k >= 0; k--) {
+    logFiles.unshift(fresh[k]);
+    appendLogRows(fresh[k], [], true);
+  }
+  logFileIdx += fresh.length;
+  logFilesSkip += fresh.length;
+}
+
 // Today's file (logFiles[0]) is the only one still growing -- a QSO logged
 // while the tab is open lands at its end. Re-checks it on a timer, only
 // while the Log tab is actually visible, and only picks up rows beyond
 // what's already loaded (so this also backfills today's file if the
 // operator never paged all the way through it via "Load older QSOs").
-// Deliberately does not detect a new day file appearing (midnight
-// rollover mid-session) -- a real gap, not worth this pass's scope.
+// checkForNewDayFiles() runs first so a midnight rollover mid-session
+// retargets logFiles[0] before this fetches its entries.
 async function refreshLogHead() {
   if (!logLoadedOnce || logLoading || logRefreshing) return;
   if (currentView !== 'log') return;
   if (!logFiles.length) return; // first loadMoreLog() hasn't run yet
   logRefreshing = true;
   try {
+    await checkForNewDayFiles();
     var file = logFiles[0];
     var skip = logFileLoadedCount[file] || 0;
     var r = await fetch('/api/log/entries?file=' + encodeURIComponent(file) +
