@@ -320,9 +320,13 @@ static void file_list_json_add(const char *name)
     if (!s_file_list_gathering || !name) {
         return;
     }
-    char esc[PORTA_FILENAME_MAX * 6 + 1];
+    // Static scratch, same reasoning as file_entries_json_add() below and
+    // config_json_add() above: porta_rx task, 4 KB stack. Smaller than
+    // either of those today (~400 B), but the same shape of landmine --
+    // fixed alongside them rather than left for the next field to grow.
+    static char esc[PORTA_FILENAME_MAX * 6 + 1];
     json_escape(name, esc, sizeof(esc));
-    char piece[sizeof(esc) + 8];
+    static char piece[sizeof(esc) + 8];
     const int n = snprintf(piece, sizeof(piece), "%s\"%s\"",
                            s_file_list_json_first ? "" : ",", esc);
     if (n <= 0 || s_file_list_json_len + (size_t)n + 3 >= FILE_LIST_JSON_MAX) {
@@ -367,14 +371,21 @@ static void file_entries_json_add(const porta_qso_entry_row_t *e)
     if (!s_file_entries_gathering || !e) {
         return;
     }
-    char esc_band[PORTA_BAND_MAX * 6 + 1];
-    char esc_call[PORTA_CALLSIGN_MAX * 6 + 1];
-    char esc_grid[PORTA_GRID_MAX * 6 + 1];
-    char esc_freq[PORTA_FREQ_MAX * 6 + 1];
-    char esc_my_grid[PORTA_GRID_MAX * 6 + 1];
-    char esc_comment[PORTA_COMMENT_MAX * 6 + 1];
-    char esc_mode[PORTA_MODE_MAX * 6 + 1];
-    char esc_station_callsign[PORTA_CALLSIGN_MAX * 6 + 1];
+    // Static scratch: this runs on the porta_rx task (4 KB stack), same as
+    // config_json_add() above -- these buffers were stack-local (like that
+    // function's were before its own fix) and, with mode/station_callsign
+    // added on top of the original six fields, pushed this function's frame
+    // to ~1.7 KB, enough on its own to overflow the task stack once the rest
+    // of the call chain is counted. Field-found 2026-09-15: a live
+    // GET /api/log/entries crashed porta_rx with a stack overflow.
+    static char esc_band[PORTA_BAND_MAX * 6 + 1];
+    static char esc_call[PORTA_CALLSIGN_MAX * 6 + 1];
+    static char esc_grid[PORTA_GRID_MAX * 6 + 1];
+    static char esc_freq[PORTA_FREQ_MAX * 6 + 1];
+    static char esc_my_grid[PORTA_GRID_MAX * 6 + 1];
+    static char esc_comment[PORTA_COMMENT_MAX * 6 + 1];
+    static char esc_mode[PORTA_MODE_MAX * 6 + 1];
+    static char esc_station_callsign[PORTA_CALLSIGN_MAX * 6 + 1];
     json_escape(e->band, esc_band, sizeof(esc_band));
     json_escape(e->call, esc_call, sizeof(esc_call));
     json_escape(e->grid, esc_grid, sizeof(esc_grid));
@@ -383,7 +394,7 @@ static void file_entries_json_add(const porta_qso_entry_row_t *e)
     json_escape(e->comment, esc_comment, sizeof(esc_comment));
     json_escape(e->mode, esc_mode, sizeof(esc_mode));
     json_escape(e->station_callsign, esc_station_callsign, sizeof(esc_station_callsign));
-    char piece[sizeof(esc_band) + sizeof(esc_call) + sizeof(esc_grid) + sizeof(esc_freq) +
+    static char piece[sizeof(esc_band) + sizeof(esc_call) + sizeof(esc_grid) + sizeof(esc_freq) +
               sizeof(esc_my_grid) + sizeof(esc_comment) + sizeof(esc_mode) +
               sizeof(esc_station_callsign) + 160];
     const int n = snprintf(piece, sizeof(piece),
