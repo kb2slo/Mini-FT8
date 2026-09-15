@@ -294,6 +294,17 @@ button:disabled{opacity:.45}
       </label>
     </div>
 
+    <div class="hd sep">This phone</div>
+    <p class=setnote>Local to this browser -- not saved to the ADV, not part of Save station below.</p>
+    <div class=setrow>
+      <label>Distance units
+        <select id=dist_unit>
+          <option value=km>Kilometers</option>
+          <option value=mi>Miles</option>
+        </select>
+      </label>
+    </div>
+
     <div style="padding:1rem">
       <button id=save type=button disabled style="width:100%">Save station</button>
     </div>
@@ -895,6 +906,7 @@ document.getElementById('band_sel').onchange = function () {
 document.getElementById('protocol_mode').onchange = function () {
   buildBandRows(lastCfg, this.value === 'FT4');
 };
+document.getElementById('dist_unit').onchange = function () { setDistUnit(this.value); };
 document.getElementById('save').onclick = function () {
   saveConfig().catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
@@ -1148,7 +1160,7 @@ function renderDecodes() {
       // never seen sending a grid.
       var senderCall = extractSenderCall(d.x);
       var theirGrid = senderCall && callsignGridCache[senderCall];
-      var distBearing = theirGrid ? fmtDistBearing(lastCfg.grid, theirGrid, true) : '';
+      var distBearing = theirGrid ? fmtDistBearing(lastCfg.grid, theirGrid) : '';
       return '<div class=drow data-id="' + d.id + '">' +
         '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
         (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
@@ -1322,17 +1334,34 @@ function greatCircle(a, b) {
   var bearing = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
   return { km: km, bearing: bearing };
 }
-// "1,234 km 047°", or '' if either grid is missing/malformed -- never a
-// half-computed badge. compact drops the miles conversion for Operate's
-// decode rows, which are already three fields wide on a phone screen.
-function fmtDistBearing(myGrid, theirGrid, compact) {
+// Local-only preference (not a device CONFIG key, never sent over Port A):
+// which unit fmtDistBearing() below shows everywhere it's used. Operator-
+// requested -- either unit, not both, so every grid-distance display picks
+// up whatever was last chosen instead of each deciding independently.
+var DIST_UNIT_KEY = 'minift8_dist_unit_v1';
+var distUnit = 'km'; // 'km' or 'mi'
+function loadDistUnit() {
+  try {
+    var v = localStorage.getItem(DIST_UNIT_KEY);
+    if (v === 'km' || v === 'mi') distUnit = v;
+  } catch (e) { /* default stands */ }
+}
+function setDistUnit(v) {
+  if (v !== 'km' && v !== 'mi') return;
+  distUnit = v;
+  try { localStorage.setItem(DIST_UNIT_KEY, v); } catch (e) { /* applies live even if not persisted */ }
+  renderDecodes(); // cheap, already-in-memory data; Log rows already on screen don't retroactively update
+}
+
+// "1,234 km 047°" or "723 mi 047°", per the operator's chosen distUnit --
+// or '' if either grid is missing/malformed, never a half-computed badge.
+function fmtDistBearing(myGrid, theirGrid) {
   var a = gridToLatLon(myGrid), b = gridToLatLon(theirGrid);
   if (!a || !b) return '';
   var gc = greatCircle(a, b);
   var bearing = String(Math.round(gc.bearing)).padStart(3, '0') + '°';
-  if (compact) return Math.round(gc.km).toLocaleString() + ' km ' + bearing;
-  var mi = gc.km * 0.621371;
-  return Math.round(gc.km).toLocaleString() + ' km (' + Math.round(mi).toLocaleString() + ' mi) ' + bearing;
+  var value = distUnit === 'mi' ? gc.km * 0.621371 : gc.km;
+  return Math.round(value).toLocaleString() + ' ' + distUnit + ' ' + bearing;
 }
 
 // ---- Opportunistic callsign -> grid cache (Operate decode rows) ----
@@ -1451,7 +1480,7 @@ function showCallInfo(call) {
   body += '<div class=ci-row><div class=ci-label>Grid square</div>' +
     (grid
       ? esc(grid) + (distBearing ? ' · ' + esc(distBearing) : '') +
-        ' <span style="color:GrayText;font-size:.75rem">(opportunistically cached from an earlier decode, not authoritative)</span>'
+        ' <span style="color:GrayText;font-size:.75rem">(cached, not authoritative)</span>'
       : 'Not seen sending a grid yet this session') +
     '</div>';
   body += '<div class=ci-row><div class=ci-label>Heard this session (' + heard.length + ')</div>' +
@@ -1872,6 +1901,8 @@ function loadStateCache() {
 }
 loadStateCache();
 loadCallsignGridCache();
+loadDistUnit();
+document.getElementById('dist_unit').value = distUnit;
 if (Object.keys(lastCfg).length) {
   setForm(lastCfg);
   applyOperateLive(lastCfg);
