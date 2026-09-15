@@ -26,6 +26,14 @@ static QsoContext s_queue[AUTOSEQ_MAX_QUEUE];
 static int s_active_count = 0;
 static int s_inactive_start = AUTOSEQ_MAX_QUEUE;  // no inactive entries
 
+// QsoContext::entry_id source. Starts at 1 (0 is "not a real entry") and is
+// deliberately NOT reset by autoseq_init()/autoseq_clear(): an id already
+// handed to the browser over Port A must not be reassigned to an unrelated
+// later entry within the same boot. A u16 wraps after 65535 QSOs in one
+// boot, which is an acceptable nuisance-collision risk, not a target to
+// engineer around.
+static uint16_t s_next_entry_id = 1;
+
 // Singleton TX message buffer — holds the TX text for queue[0].
 // Invariant: (s_active_count == 0) ⇔ s_tx_msg_buffer.empty()
 // Refreshed by refresh_tx_msg_buffer() whenever queue[0] or its text
@@ -159,6 +167,16 @@ bool autoseq_drop_index(int idx) {
     move_to_inactive(idx);
     refresh_tx_msg_buffer();
     return true;
+}
+
+bool autoseq_drop_by_entry_id(uint16_t entry_id) {
+    if (entry_id == 0) return false;  // the sentinel is never a real entry
+    for (int i = 0; i < s_active_count; ++i) {
+        if (s_queue[i].entry_id == entry_id) {
+            return autoseq_drop_index(i);
+        }
+    }
+    return false;
 }
 
 bool autoseq_rotate_same_parity() {
@@ -1288,6 +1306,10 @@ static QsoContext* append_ctx() {
 
     QsoContext* ctx = &s_queue[s_active_count++];
     *ctx = QsoContext{};  // Reset to defaults
+    ctx->entry_id = s_next_entry_id++;
+    if (s_next_entry_id == 0) {
+        s_next_entry_id = 1;  // skip the "not a real entry" sentinel on wrap
+    }
     return ctx;
 }
 

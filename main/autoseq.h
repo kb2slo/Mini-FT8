@@ -55,6 +55,16 @@ struct QsoContext {
     TxMsgType next_tx = TxMsgType::TX_NONE;
     TxMsgType rcvd_msg_type = TxMsgType::TX_NONE;
 
+    // Stable identity for Port A (RFC 0004 §11 QUEUE_ENTRY/QUEUE_CANCEL):
+    // 0 means "not a real entry" (a free slot's default). Assigned once, in
+    // append_ctx(), and never reused within a boot -- the queue re-sorts by
+    // priority and moves entries around the array via plain struct copies,
+    // which already carry this field along for free, so nothing else needs
+    // to touch it. A cancel must address this, not a display index: the
+    // browser's snapshot and the live queue can disagree on order by the
+    // time a cancel arrives.
+    uint16_t entry_id = 0;
+
     std::string dxcall;     // Remote station callsign
     std::string dxgrid;     // Remote grid (preserved from initial exchange!)
 
@@ -115,6 +125,11 @@ void autoseq_clear();
 // Drop a QSO by index (0-based in display order).
 // For active QSOs, this moves the context to inactive; CQ entries are removed.
 bool autoseq_drop_index(int idx);
+
+// Drop by the stable entry_id above rather than a display index -- what
+// Port A's QUEUE_CANCEL addresses. Active zone only; entry_id is not
+// exposed for inactive rows. False if no active entry carries that id.
+bool autoseq_drop_by_entry_id(uint16_t entry_id);
 
 // Rotate to the next QSO with the same slot parity as the current head.
 // Returns true if a rotation occurred.

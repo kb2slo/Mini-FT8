@@ -2,6 +2,10 @@
  * Assert: R-screen touch does not duplicate the same DX in the TX queue.
  * - Second touch of the same CQ promotes to front (one entry).
  * - Touch while that call is the live queue head is ignored.
+ * - QsoContext::entry_id (RFC 0004 §11 QUEUE_ENTRY/QUEUE_CANCEL): distinct
+ *   per real entry, stable across a reshuffle that moves the same contact,
+ *   fresh for a re-touch that actually drops and re-creates one, and
+ *   autoseq_drop_by_entry_id removes the right one and nothing else.
  */
 #include <cstdio>
 #include <cstdlib>
@@ -71,6 +75,19 @@ int main() {
         strcasecmp(head.dxcall.c_str(), "W1AW") != 0) {
         return fail("W1AW should be at front before re-touch");
     }
+    const uint16_t w1aw_id = head.entry_id;
+    QsoContext deeper;
+    if (!autoseq_get_active_context(1, &deeper) ||
+        strcasecmp(deeper.dxcall.c_str(), "K1ABC") != 0) {
+        return fail("K1ABC should be behind W1AW before re-touch");
+    }
+    const uint16_t k1abc_id_before = deeper.entry_id;
+    if (w1aw_id == 0 || k1abc_id_before == 0) {
+        return fail("entry_id must be non-zero for a real entry");
+    }
+    if (w1aw_id == k1abc_id_before) {
+        return fail("distinct entries must have distinct entry_id");
+    }
 
     // Re-touch K1ABC: drop the deeper entry, promote fresh tap to front.
     if (autoseq_on_touch(target2) != AutoseqTouchResult::Queued) {
@@ -89,6 +106,23 @@ int main() {
     }
     if (head.offset_hz != 1800 || head.snr_tx != -2) {
         return fail("promoted entry should use latest tap offset/snr");
+    }
+    // Re-touch actually drops and re-creates the K1ABC context (the "deeper
+    // entry" comment above), so its entry_id must change -- a stale id from
+    // before the re-touch must not still resolve.
+    if (head.entry_id == k1abc_id_before) {
+        return fail("re-touched entry should get a fresh entry_id, not reuse the old one");
+    }
+    if (head.entry_id == 0) {
+        return fail("re-touched entry must still get a real entry_id");
+    }
+    QsoContext still_w1aw;
+    if (!autoseq_get_active_context(1, &still_w1aw) ||
+        strcasecmp(still_w1aw.dxcall.c_str(), "W1AW") != 0) {
+        return fail("W1AW should now be behind the re-touched K1ABC");
+    }
+    if (still_w1aw.entry_id != w1aw_id) {
+        return fail("W1AW's entry_id must survive being moved by the reshuffle");
     }
 
     // Live QSO at head: ignore duplicate tap.
@@ -117,6 +151,50 @@ int main() {
     if (!autoseq_get_active_context(1, &behind) ||
         strcasecmp(behind.dxcall.c_str(), "K1ABC") != 0) {
         return fail("hold-head should place K1ABC next");
+    }
+
+    // autoseq_drop_by_entry_id: cancels the right entry by stable id, not by
+    // whatever position it currently occupies.
+    autoseq_init();
+    autoseq_set_station("KB2SLO", "FN30");
+    autoseq_set_max_retry(5);
+    if (autoseq_on_touch(other) != AutoseqTouchResult::Queued) {
+        return fail("drop_by_entry_id setup: queue W1AW");
+    }
+    if (autoseq_on_touch(target) != AutoseqTouchResult::Queued) {
+        return fail("drop_by_entry_id setup: queue K1ABC");
+    }
+    QsoContext w1aw_ctx, k1abc_ctx;
+    if (!autoseq_get_active_context(1, &w1aw_ctx) ||
+        strcasecmp(w1aw_ctx.dxcall.c_str(), "W1AW") != 0) {
+        return fail("drop_by_entry_id setup: expected W1AW behind K1ABC");
+    }
+    if (!autoseq_get_active_context(0, &k1abc_ctx) ||
+        strcasecmp(k1abc_ctx.dxcall.c_str(), "K1ABC") != 0) {
+        return fail("drop_by_entry_id setup: expected K1ABC at front");
+    }
+
+    if (autoseq_drop_by_entry_id(0)) {
+        return fail("entry_id 0 (the sentinel) must never match a real entry");
+    }
+    if (autoseq_drop_by_entry_id(w1aw_ctx.entry_id + k1abc_ctx.entry_id + 1000)) {
+        return fail("an id nothing carries must not match by accident");
+    }
+    if (autoseq_active_count() != 2) {
+        return fail("failed cancels must not mutate the queue");
+    }
+
+    if (!autoseq_drop_by_entry_id(w1aw_ctx.entry_id)) {
+        return fail("drop_by_entry_id should find W1AW regardless of its position");
+    }
+    if (count_dx("W1AW") != 0) {
+        return fail("W1AW should be gone after drop_by_entry_id");
+    }
+    if (count_dx("K1ABC") != 1) {
+        return fail("drop_by_entry_id must not touch the other entry");
+    }
+    if (autoseq_drop_by_entry_id(w1aw_ctx.entry_id)) {
+        return fail("dropping the same entry_id twice should fail the second time");
     }
 
     printf("PASS: unique-callsign touch dedupe/promote\n");
