@@ -650,9 +650,45 @@ async function putConfigLine(line, busyMsg) {
   await loadConfig();
 }
 
+// Auth'd POST without radioPost()'s status-message/loadConfig() ceremony --
+// changeBand() below fires several of these together and wants one combined
+// status line and one final config reload at the end, not one of each per
+// call.
+async function authPostQuiet(path, body) {
+  if (!MiniFT8Pairing.getToken()) return false;
+  var opts = { method: 'POST' };
+  if (body !== undefined) opts.body = body;
+  try {
+    var r = await MiniFT8Pairing.authFetch(path, opts);
+    return r.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Operator-requested: a band change means every queued contact was for the
+// old band, and an in-flight TX on the old frequency should not continue
+// once the operator has already moved on. Both /api/tx/cancel and
+// /api/queue/cancel already exist for the TX-HUD cancel button and the
+// Queue section's own per-row cancel -- reused here rather than adding a
+// new bulk-cancel ACTION, since looping the client's own already-current
+// `queue` (kept live by the same QUEUE_ENTRY stream the Queue section
+// renders from) covers it without any wire/firmware change. The beacon CQ
+// placeholder (dxcall "CQ") is deliberately left alone: it carries no
+// per-band state of its own (frequency is resolved from g_band_sel at the
+// moment of TX, not baked into the queue entry), so beaconing continues
+// seamlessly on the new band once it's synced. Fires TX-cancel and every
+// non-CQ queue-cancel together rather than one after another -- band_sel
+// itself is the last thing sent, once the rest have landed.
 function changeBand(idx) {
-  putConfigLine('band_sel=' + idx, 'Changing band…')
-    .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+  setMsg('Changing band…');
+  var stops = [authPostQuiet('/api/tx/cancel')];
+  Object.keys(queue).forEach(function (id) {
+    if (queue[id].dxcall !== 'CQ') stops.push(authPostQuiet('/api/queue/cancel', id));
+  });
+  Promise.all(stops).then(function () {
+    return putConfigLine('band_sel=' + idx, 'Changing band…');
+  }).catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 }
 
 async function loadConfig() {
