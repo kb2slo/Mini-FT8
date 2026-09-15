@@ -766,6 +766,16 @@ function fmtDt(dt) {
   return (dt > 0 ? '+' : '') + dt.toFixed(1);
 }
 
+// Phone-clock receipt time for a slot batch, not a firmware timestamp -- the
+// DECODE event carries no wall-clock field, and the phone's own clock is
+// already this app's source of truth elsewhere (countdown, TX HUD, clock
+// sync). UTC to match ADIF/the Log tab's own day labels.
+function fmtSlotTime(ts) {
+  var d = new Date(ts);
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + 'z';
+}
+
 // Mirrors main/decode_sort.h exactly (decode_sort_group/decode_sort_cmp):
 // to_me first, then fresh CQ (strongest SNR first), then other fresh, then
 // recent QSOs last. Applied per poll batch (one FT8 slot's worth of new
@@ -797,7 +807,8 @@ function renderDecodes() {
   var rows = document.getElementById('opDecodeRows');
   rows.innerHTML = decodeSlots.map(function (slot, i) {
     var divider = i > 0 ? '<div class=dslotdiv></div>' : '';
-    return divider + slot.map(function (d) {
+    var header = '<div class=day>' + fmtSlotTime(slot.ts) + '</div>';
+    return divider + header + slot.map(function (d) {
       return '<div class=drow data-id="' + d.id + '">' +
         '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
         (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
@@ -848,6 +859,7 @@ async function pollEvents() {
       j.events.forEach(applyEvent);
       if (pendingDecodes.length) {
         pendingDecodes.sort(decodeSortCmp);
+        pendingDecodes.ts = Date.now();
         decodeSlots.unshift(pendingDecodes);
         if (decodeSlots.length > DECODE_SLOTS_MAX) decodeSlots.length = DECODE_SLOTS_MAX;
       }
