@@ -67,3 +67,8 @@ sidekick/sdkconfig.old
 # by the blanket *.bin rule above, called out explicitly so the exclusion is
 # a decision, not an accident.
 sidekick/stock_backup/
+
+# Cached sidekick pairing token (webapp/tools/sidekick.py) -- a live
+# credential that guards transmit control on a licensed radio, scoped to one
+# physical device. Never belongs in source control.
+webapp/tools/.sidekick_token
