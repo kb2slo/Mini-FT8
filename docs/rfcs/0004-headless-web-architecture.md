@@ -558,7 +558,9 @@ it decides which half of the cycle we occupy.
 
 ### The queue is a set of concurrent QSOs, not a conversation
 
-iFTx's Exchange mode shows *the* contact — one status line, singular. Autoseq holds up to 120 contexts,
+iFTx's Exchange mode shows *the* contact — one status line, singular. Autoseq holds up to `AUTOSEQ_MAX_QUEUE`
+contexts — **30**, active plus inactive (`main/autoseq.h`; corrected 2026-09-14, this section previously
+said 120, checked against the constant rather than assumed while building the protocol slice against it) —
 sorted by state, with an inactive zone that preserves metadata across retry exhaustion so a patient DX
 can reactivate a dormant QSO minutes later (`AUTOSEQ_INACTIVE_QUEUE.md`). A single "current QSO" panel
 would actively misrepresent that state. The queue is a first-class region of the screen, not a detail
@@ -713,21 +715,24 @@ This section describes how the feature would work if and when it is built, not t
 | Waterfall | `offset_src` already does its control job better on a phone, and §6 cannot afford spectrum. |
 | Mode control (Listen / Call / Exchange) | Autoseq's priority queue sequences without being told; a mode would add an error state that does not currently exist. |
 | A view per feature | FT8CN's own review says there is too much going on for a phone, and mid-QSO tab-switching runs against a 15-second clock. |
-| Single "current QSO" panel | Misrepresents a 120-entry concurrent queue. |
+| Single "current QSO" panel | Misrepresents a multi-entry concurrent queue (`AUTOSEQ_MAX_QUEUE` — 30, §11's "queue is a set" section). |
 | Modifier-key interactions | The Hinson operating guide's standing complaint about WSJT-X; there are no modifiers on a phone anyway. |
 
 ### Open
 
 * Whether the decode stream needs explicit filtering (CQ-only, addressed-to-me) or whether emphasis is
   enough. Related to [I1](../ROADMAP.md), which is sort/filter on the ADV side.
-* Whether the queue region is scrollable on the operate screen or truncates to the active zone with the
-  inactive zone behind disclosure. 120 entries is a lot of phone.
+* ~~Whether the queue region is scrollable on the operate screen or truncates to the active zone with the
+  inactive zone behind disclosure.~~ **Resolved 2026-09-14, once the real ceiling was checked rather than
+  assumed:** `AUTOSEQ_MAX_QUEUE` is 30, not the 120 this section previously said. Thirty rows is nothing to
+  scroll on a phone, so the two-tier active/inactive disclosure the wireframe pass had sketched for "a lot
+  of phone" was solving a problem that does not exist at this size — plain scroll, no split.
 * B37's beacon time limit is the one beacon change the phone makes natural — "beaconing 1h23m, stop at
   2h" is a phone control and an awkward Cardputer one. Not in this ship; recorded so the screen leaves
   room for it.
-* Nav pattern: a bottom tab bar (Operate/Log/Settings) was sketched in the wireframe pass and drew no
-  objection, but §11 does not specify navigation and today's `app.html` uses a top text-link nav instead
-  — not yet a decision.
+* ~~Nav pattern~~ **Decided 2026-09-14:** a bottom tab bar (Operate/Log/Settings), replacing today's
+  `app.html` top text-link nav. Chosen over top nav because the queue and decode-stream regions need the
+  vertical space more than a header does.
 * Sync-status persistence and dedup policy for QRZ (and later destinations) — see the Log sync subsection
   above. `localStorage` only, same honest-limit shape as §7's token; whether that is sufficient or needs a
   reconciliation pass against the destination is undecided.
