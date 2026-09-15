@@ -48,8 +48,11 @@ void porta_tick();
 void porta_emit_log(const char* text);
 
 // One decoded message. `dt_s` is the decoder's time offset in seconds.
-void porta_emit_decode(const char* text, int snr, int offset_hz, float dt_s,
-                       bool is_cq, bool is_to_me, bool is_recent_qso);
+// `decode_id` names this decode for a later PORTA_ACT_QUEUE_REPLY -- assigned
+// by the caller (main.cpp's remember_decode_for_reply()), not here, since
+// only the caller has anywhere to resolve it back to a message.
+void porta_emit_decode(uint32_t decode_id, const char* text, int snr, int offset_hz,
+                       float dt_s, bool is_cq, bool is_to_me, bool is_recent_qso);
 
 // What the companion looks like from here. Three failure states rather than
 // one, because they need different words: a sidekick that is merely behind can

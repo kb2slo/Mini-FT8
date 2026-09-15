@@ -1901,6 +1901,29 @@ static bool charge_mode_set_cpu_mhz(uint32_t mhz) {
 // and the next slot arm picks it up when this TX ends.
 // ---------------------------------------------------------------------------
 
+// Shared reply-to-decode logic: touches autoseq, arms the resulting TX unless
+// one is already in flight, marks the queue view dirty. Returns nullptr on
+// success or a short reason a caller can log or NAK with. Shared by the
+// on-device R-tap (below) and Port A's QUEUE_REPLY action.
+static const char* apply_reply_touch(const UiRxLine& msg) {
+  const AutoseqTouchResult touch = autoseq_on_touch(msg, g_tx_active);
+  if (touch == AutoseqTouchResult::IgnoredInProgress) {
+    g_tx_view_dirty = true;
+    return "QSO in progress";
+  }
+  if (touch == AutoseqTouchResult::NoRoom) {
+    return "TX queue full";
+  }
+
+  // Do not replace the in-flight pending TX.
+  AutoseqTxEntry pending{};
+  if (!g_tx_active && autoseq_fetch_pending_tx(pending)) {
+    arm_pending_tx(pending);
+  }
+  g_tx_view_dirty = true;
+  return nullptr;
+}
+
 // Reply to the decoded message at rx_list_idx. Returns false if the index is
 // stale, a QSO is already in progress, or the TX queue is full.
 static bool rx_tap_reply(int rx_list_idx) {
@@ -1919,24 +1942,60 @@ static bool rx_tap_reply(int rx_list_idx) {
   msg.is_cq     = entry.is_cq;
   msg.is_to_me  = entry.is_to_me;
 
-  const AutoseqTouchResult touch = autoseq_on_touch(msg, g_tx_active);
-  if (touch == AutoseqTouchResult::IgnoredInProgress) {
-    debug_log_line("QSO in progress");
-    g_tx_view_dirty = true;
+  const char* why = apply_reply_touch(msg);
+  if (why) {
+    debug_log_line(why);
     return false;
   }
-  if (touch == AutoseqTouchResult::NoRoom) {
-    debug_log_line("TX queue full");
-    return false;
-  }
-
-  // Do not replace the in-flight pending TX.
-  AutoseqTxEntry pending{};
-  if (!g_tx_active && autoseq_fetch_pending_tx(pending)) {
-    arm_pending_tx(pending);
-  }
-  g_tx_view_dirty = true;
   return true;
+}
+
+// Recent decodes, keyed by the id handed out with EVENT DECODE (RFC 0004 §11)
+// so Port A's QUEUE_REPLY can name one without re-parsing rendered text on
+// the phone. A ring, not a map: bounded and allocation-free like everything
+// else on this path. An id that has scrolled out of the ring resolves to
+// nothing, which porta_host_queue_reply reports plainly rather than guessing.
+constexpr int kDecodeIdRingLen = 64;
+struct DecodeIdEntry {
+  uint32_t id = 0;  // 0 = empty slot
+  UiRxLine rx;
+};
+static DecodeIdEntry s_decode_ring[kDecodeIdRingLen];
+static int s_decode_ring_next = 0;
+static uint32_t s_next_decode_id = 1;  // 0 is "not a real decode"
+
+// Assigns the next id, remembers enough of `e` to reconstruct a UiRxLine for
+// a later reply, and returns the id for porta_emit_decode() to carry.
+static uint32_t remember_decode_for_reply(const RxDecodeEntry& e) {
+  uint32_t id = s_next_decode_id++;
+  if (s_next_decode_id == 0) {
+    s_next_decode_id = 1;  // skip the sentinel on wrap
+  }
+  DecodeIdEntry& slot = s_decode_ring[s_decode_ring_next];
+  s_decode_ring_next = (s_decode_ring_next + 1) % kDecodeIdRingLen;
+  slot.id            = id;
+  slot.rx.text        = e.text;
+  slot.rx.field1      = e.field1;
+  slot.rx.field2      = e.field2;
+  slot.rx.field3      = e.field3;
+  slot.rx.snr         = e.snr;
+  slot.rx.offset_hz   = e.offset_hz;
+  slot.rx.slot_id     = e.slot_id;
+  slot.rx.is_cq       = e.is_cq;
+  slot.rx.is_to_me    = e.is_to_me;
+  slot.rx.is_recent_qso = e.is_recent_qso;
+  return id;
+}
+
+static bool find_decode_for_reply(uint32_t decode_id, UiRxLine* out) {
+  if (decode_id == 0) return false;
+  for (int i = 0; i < kDecodeIdRingLen; ++i) {
+    if (s_decode_ring[i].id == decode_id) {
+      *out = s_decode_ring[i].rx;
+      return true;
+    }
+  }
+  return false;
 }
 
 // Abort the in-flight TX. tx_tick() reads g_tx_cancel_requested on its next
@@ -3206,7 +3265,8 @@ void decode_monitor_results(monitor_t* mon, const monitor_config_t* cfg, bool up
     // the R screen disagree, the fault is between here and the browser.
     for (int i = 0; i < s_dec_count; ++i) {
       const RxDecodeEntry& e = s_dec[i];
-      porta_emit_decode(e.text, e.snr, e.offset_hz, e.time_s,
+      uint32_t decode_id = remember_decode_for_reply(e);
+      porta_emit_decode(decode_id, e.text, e.snr, e.offset_hz, e.time_s,
                         e.is_cq, e.is_to_me, e.is_recent_qso);
     }
     if (update_ui) {
@@ -4605,6 +4665,84 @@ const char* porta_host_tune(bool on) {
   return nullptr;
 }
 
+// Applies a beacon mode change and its side effects (arming/dropping the CQ
+// one-shot, `g_tx_view_dirty`, persistence). Extracted from enter_mode()'s
+// STATUS-exit handling so Port A's BEACON action can share it: enter_mode()
+// still stages into g_status_beacon_temp and applies on STATUS exit, while
+// Port A applies immediately -- same effect, different trigger. A no-op
+// when the mode is unchanged, so either caller can call it unconditionally.
+static void apply_beacon_mode(BeaconMode new_mode) {
+  if (g_beacon == new_mode) {
+    return;
+  }
+  bool was_off = (g_beacon == BeaconMode::OFF);
+  g_beacon = new_mode;
+  save_station_data();
+  g_tx_view_dirty = true;
+  debug_log_line(std::string("Beacon ") + beacon_name(g_beacon));
+
+  if (g_beacon == BeaconMode::OFF) {
+    autoseq_cancel_cq(g_tx_active);
+    AutoseqTxEntry pending;
+    if (!g_tx_active) {
+      if (autoseq_fetch_pending_tx(pending)) {
+        arm_pending_tx(pending);
+      } else {
+        g_qso_xmit = false;
+        g_pending_tx_valid = false;
+      }
+    }
+  } else if (was_off) {
+    // Beacon just enabled: enqueue CQ; TX at next matching slot boundary.
+    enqueue_beacon_cq();
+    AutoseqTxEntry pending;
+    if (autoseq_fetch_pending_tx(pending)) {
+      arm_pending_tx(pending);
+    }
+  } else {
+    // EVEN <-> ODD: drop the old-parity CQ and arm the new one.
+    autoseq_cancel_cq(g_tx_active);
+    enqueue_beacon_cq();
+    AutoseqTxEntry pending;
+    if (!g_tx_active && autoseq_fetch_pending_tx(pending)) {
+      arm_pending_tx(pending);
+    }
+  }
+}
+
+const char* porta_host_beacon(uint8_t mode) {
+  if (mode > (uint8_t)BeaconMode::ODD) {
+    return "unknown beacon mode";
+  }
+  if (mode != (uint8_t)BeaconMode::OFF && board_power_halted()) {
+    return "battery halt";
+  }
+  apply_beacon_mode((BeaconMode)mode);
+  if (ui_mode == UIMode::STATUS) {
+    // Keep the STATUS screen's own staging value in sync so a remote change
+    // does not get silently overwritten if the operator exits that screen.
+    g_status_beacon_temp = g_beacon;
+    draw_status_view();
+  }
+  return nullptr;
+}
+
+const char* porta_host_queue_cancel(uint16_t entry_id) {
+  if (!autoseq_drop_by_entry_id(entry_id)) {
+    return "unknown entry";
+  }
+  g_tx_view_dirty = true;
+  return nullptr;
+}
+
+const char* porta_host_queue_reply(uint32_t decode_id) {
+  UiRxLine msg;
+  if (!find_decode_for_reply(decode_id, &msg)) {
+    return "unknown decode";
+  }
+  return apply_reply_touch(msg);
+}
+
 static void enter_mode(UIMode new_mode) {
   // No special handling needed when leaving TX mode - autoseq manages queue internally
   if (new_mode != ui_mode) {
@@ -4622,40 +4760,7 @@ static void enter_mode(UIMode new_mode) {
     if (board_power_halted()) {
       g_status_beacon_temp = BeaconMode::OFF;
     }
-    if (g_beacon != g_status_beacon_temp) {
-      bool was_off = (g_beacon == BeaconMode::OFF);
-      g_beacon = g_status_beacon_temp;
-      save_station_data();
-      g_tx_view_dirty = true;
-
-      if (g_beacon == BeaconMode::OFF) {
-        autoseq_cancel_cq(g_tx_active);
-        AutoseqTxEntry pending;
-        if (!g_tx_active) {
-          if (autoseq_fetch_pending_tx(pending)) {
-            arm_pending_tx(pending);
-          } else {
-            g_qso_xmit = false;
-            g_pending_tx_valid = false;
-          }
-        }
-      } else if (was_off) {
-        // Beacon just enabled: enqueue CQ; TX at next matching slot boundary.
-        enqueue_beacon_cq();
-        AutoseqTxEntry pending;
-        if (autoseq_fetch_pending_tx(pending)) {
-          arm_pending_tx(pending);
-        }
-      } else {
-        // EVEN <-> ODD: drop the old-parity CQ and arm the new one.
-        autoseq_cancel_cq(g_tx_active);
-        enqueue_beacon_cq();
-        AutoseqTxEntry pending;
-        if (!g_tx_active && autoseq_fetch_pending_tx(pending)) {
-          arm_pending_tx(pending);
-        }
-      }
-    }
+    apply_beacon_mode(g_status_beacon_temp);
     status_edit_idx = -1;
     status_edit_buffer.clear();
 
