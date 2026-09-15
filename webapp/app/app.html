@@ -1145,6 +1145,19 @@ function decodeColorClass(d) {
   return '';
 }
 
+// Reply only makes sense at the two points an FT8 exchange can actually be
+// entered from this decode: a fresh CQ (same `d.cq` flag decodeColorClass
+// green-codes -- reuse it rather than re-deriving "is this a CQ" a second
+// way), or a closing 73/RR73 (the other party signing -- worth logging a
+// reply to even though the exchange itself is done). Everything in between
+// (signal reports, RRR) has no useful reply target, so no button.
+function isReplyableDecode(d) {
+  if (d.cq) return true;
+  var tokens = (d.x || '').trim().toUpperCase().split(/\s+/);
+  var last = tokens[tokens.length - 1].replace(/^<|>$/g, '');
+  return last === '73' || last === 'RR73';
+}
+
 function renderDecodes() {
   var rows = document.getElementById('opDecodeRows');
   rows.innerHTML = decodeSlots.map(function (slot, i) {
@@ -1170,7 +1183,7 @@ function renderDecodes() {
         '<div class=drow-body>' +
           '<div class="txt ' + decodeColorClass(d) + '">' + highlightCallInText(d.x, allCalls) +
           (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
-          '<button type=button class=replyBtn data-id="' + d.id + '">Reply</button>' +
+          (isReplyableDecode(d) ? '<button type=button class=replyBtn data-id="' + d.id + '">Reply</button>' : '') +
         '</div>' +
         (distBearing ? '<div class=ddist>' + esc(theirGrid) + ' · ' + esc(distBearing) + '</div>' : '') +
         '</div>';
