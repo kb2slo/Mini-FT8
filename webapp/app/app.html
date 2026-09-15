@@ -46,7 +46,8 @@ button:disabled{opacity:.45}
 .pill-parity{background:#dbeafe;color:#1e3a8a}
 .pill-beacon-on{background:#dcfce7;color:#14532d}
 .pill-beacon-off{background:color-mix(in srgb, GrayText 20%, transparent);color:GrayText}
-#opLive{display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:.75rem;color:GrayText;margin-top:.6rem}
+#opLive{display:flex;justify-content:space-between;align-items:center;font-family:ui-monospace,monospace;font-size:.75rem;color:GrayText;margin-top:.6rem}
+#opBandSel{width:auto;margin-top:0;padding:.25rem .4rem;font-size:.75rem;font-family:ui-monospace,monospace;background:Field;color:FieldText}
 #opDots{display:flex;gap:.9rem;margin-top:.4rem;font-size:.7rem;color:GrayText}
 .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:.3rem;background:GrayText}
 .dot.up{background:#22c55e}
@@ -98,7 +99,7 @@ button:disabled{opacity:.45}
         <span id=parityPill class="pill pill-parity">—</span>
       </div>
       <button id=beaconBtn type=button disabled>Beacon: —</button>
-      <div id=opLive><span id=opBandFreq>Band: —</span><span id=opOffset>TX: —</span></div>
+      <div id=opLive><select id=opBandSel disabled></select><span id=opOffset>TX: —</span></div>
       <div id=opDots>
         <span><span id=dotCat class=dot></span>CAT</span>
         <span><span id=dotAudio class=dot></span>Audio</span>
@@ -279,8 +280,9 @@ function bandFreq(cfg, idx) {
   return '';
 }
 
-function fillBandSelect(cfg) {
-  var sel = document.getElementById('band_sel');
+// Shared by both band dropdowns (Operate + Settings) -- one function, one
+// set of option labels, so they can never drift out of sync with each other.
+function fillBandSelect(cfg, sel) {
   var want = {};
   var any = false;
   String(cfg.active_bands || '').split(/[\s,;\/]+/).forEach(function (t) {
@@ -326,7 +328,12 @@ function setLive(cfg) {
 }
 
 function setForm(cfg) {
-  fillBandSelect(cfg);
+  // Rebuilding a <select>'s options while the operator has it open would
+  // yank the picker out from under them -- same reason loadConfig() only
+  // ever runs at boot or right after an explicit action, never on the
+  // periodic poll (see pollLiveStatus()/applyOperateLive() below).
+  fillBandSelect(cfg, document.getElementById('band_sel'));
+  fillBandSelect(cfg, document.getElementById('opBandSel'));
   FIELDS.forEach(function (k) {
     var el = document.getElementById(k);
     if (!el) return;
@@ -340,6 +347,7 @@ function setForm(cfg) {
   });
   if (cfg.band_sel !== undefined && cfg.band_sel !== null) {
     document.getElementById('band_sel').value = String(cfg.band_sel);
+    document.getElementById('opBandSel').value = String(cfg.band_sel);
   }
   setLive(cfg);
 }
@@ -359,17 +367,50 @@ function formBody() {
   return lines.join('\n');
 }
 
-// Operate's header: band/freq, CAT/audio dots, cq_type (for the beacon
-// label). Safe to call on every poll tick -- never touches Settings' inputs.
+// Operate's header: CAT/audio dots, cq_type (for the beacon label). Safe to
+// call on every poll tick -- never touches Settings' inputs, and never
+// rebuilds #opBandSel's options (that only happens in setForm(), same
+// reasoning as the comment there). The band dropdown's own closed-state
+// text already shows the selected band's label ("20m · 14074 kHz"), so
+// there is no separate band/freq readout to keep current here.
 function applyOperateLive(cfg) {
-  var band = cfg.band_name || '—';
-  if (cfg.freq_khz !== undefined && cfg.freq_khz !== null && cfg.freq_khz !== '') {
-    band += ' · ' + cfg.freq_khz + ' kHz';
-  }
-  document.getElementById('opBandFreq').textContent = 'Band: ' + band;
   document.getElementById('dotCat').classList.toggle('up', yn(cfg.cat_ready) === 'yes');
   document.getElementById('dotAudio').classList.toggle('up', yn(cfg.streaming) === 'yes');
   renderBeacon();
+}
+
+// Shared by both band dropdowns (Operate + Settings) -- one PUT, one code
+// path, one fix. A single-field PUT rather than the full Settings form, so
+// picking a band applies immediately and never touches any other field.
+async function putConfigLine(line, busyMsg) {
+  if (!MiniFT8Pairing.getToken()) {
+    setMsg('Press the sidekick button to pair first.');
+    MiniFT8Pairing.needsReauth();
+    return;
+  }
+  setMsg(busyMsg);
+  var r = await MiniFT8Pairing.authFetch('/api/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain' },
+    body: line
+  });
+  if (r.status == 401) {
+    MiniFT8Pairing.needsReauth();
+    setMsg('Press the sidekick button to pair');
+    return;
+  }
+  var j = await r.json().catch(function () { return {}; });
+  if (!r.ok || j.ok === false) {
+    setMsg((busyMsg.replace(/\.\.\.$/, '')) + ' failed: ' + (j.why || r.status));
+    return;
+  }
+  setMsg(busyMsg.replace(/\.\.\.$/, '') + ' ok.');
+  await loadConfig();
+}
+
+function changeBand(idx) {
+  putConfigLine('band_sel=' + idx, 'Changing band…')
+    .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 }
 
 async function loadConfig() {
@@ -495,8 +536,15 @@ function enableWrites(on) {
   document.getElementById('tune_on').disabled = !on;
   document.getElementById('tune_off').disabled = !on;
   document.getElementById('beaconBtn').disabled = !on;
+  document.getElementById('opBandSel').disabled = !on;
 }
 
+document.getElementById('opBandSel').onchange = function () {
+  changeBand(this.value);
+};
+document.getElementById('band_sel').onchange = function () {
+  changeBand(this.value);
+};
 document.getElementById('save').onclick = function () {
   saveConfig().catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
@@ -742,8 +790,19 @@ renderDecodes();
 
 function tick() {
   pollEvents();
-  pollLiveStatus();
   setTimeout(tick, 1000);
 }
 tick();
+
+// CAT/audio/band/offset don't need 1 Hz freshness the way decodes do, and
+// every extra request is extra WiFi traffic -- found 2026-09-14, sustained
+// 2 Hz polling (this plus pollEvents, both at 1000ms) correlated with
+// steady WiFi block-ack renegotiation and a CCMP replay error on the
+// operator's router. 5s is still comfortably live for a status line, and
+// halves steady-state request volume on its own even before considering
+// that pollEvents is genuinely useful at 1 Hz (viewer.html already polls
+// /api/events that often) while this one was just riding along at the same
+// rate for no real reason.
+setInterval(pollLiveStatus, 5000);
+pollLiveStatus();
 </script>
