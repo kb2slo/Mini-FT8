@@ -372,3 +372,98 @@ bool porta_proto_parse_nak(const porta_frame_t *f, uint8_t *verb_out, char *reas
     }
     return true;
 }
+
+// --- CONFIG payloads -----------------------------------------------------
+
+static size_t encode_config_kv(uint8_t type, const char *key, const char *value,
+                               bool require_key, uint8_t *out, size_t out_cap)
+{
+    const size_t key_n = key ? strnlen(key, PORTA_CONFIG_KEY_MAX + 1) : 0;
+    if (key_n > PORTA_CONFIG_KEY_MAX) {
+        return 0;
+    }
+    if (require_key && key_n == 0) {
+        return 0;
+    }
+    const size_t val_n = value ? strnlen(value, PORTA_CONFIG_VALUE_MAX + 1) : 0;
+    if (val_n > PORTA_CONFIG_VALUE_MAX) {
+        return 0;
+    }
+    if (1u + key_n + val_n > PORTA_PROTO_MAX_PAYLOAD) {
+        return 0;
+    }
+    uint8_t payload[PORTA_PROTO_MAX_PAYLOAD];
+    payload[0] = (uint8_t)key_n;
+    if (key_n > 0) {
+        memcpy(&payload[1], key, key_n);
+    }
+    if (val_n > 0) {
+        memcpy(&payload[1 + key_n], value, val_n);
+    }
+    return porta_proto_encode(type, payload, (uint8_t)(1u + key_n + val_n), out, out_cap);
+}
+
+static bool parse_config_kv(const porta_frame_t *f, uint8_t type, bool require_key,
+                            char *key_out, char *value_out)
+{
+    if (!f || f->type != type || f->len < 1 || !key_out) {
+        return false;
+    }
+    const uint8_t key_n = f->payload[0];
+    if ((size_t)key_n + 1u > f->len || key_n > PORTA_CONFIG_KEY_MAX) {
+        return false;
+    }
+    if (require_key && key_n == 0) {
+        return false;
+    }
+    const size_t val_n = (size_t)f->len - 1u - (size_t)key_n;
+    if (val_n > PORTA_CONFIG_VALUE_MAX) {
+        return false;
+    }
+    memcpy(key_out, &f->payload[1], key_n);
+    key_out[key_n] = '\0';
+    if (value_out) {
+        memcpy(value_out, &f->payload[1 + key_n], val_n);
+        value_out[val_n] = '\0';
+    }
+    return true;
+}
+
+size_t porta_proto_encode_config_get(const char *key, uint8_t *out, size_t out_cap)
+{
+    // GET carries no value; empty key means get-all.
+    return encode_config_kv(PORTA_MSG_CONFIG_GET, key, NULL, false, out, out_cap);
+}
+
+size_t porta_proto_encode_config_set(const char *key, const char *value,
+                                     uint8_t *out, size_t out_cap)
+{
+    if (!value) {
+        return 0;
+    }
+    return encode_config_kv(PORTA_MSG_CONFIG_SET, key, value, true, out, out_cap);
+}
+
+size_t porta_proto_encode_config_value(const char *key, const char *value,
+                                       uint8_t *out, size_t out_cap)
+{
+    if (!value) {
+        return 0;
+    }
+    return encode_config_kv(PORTA_MSG_CONFIG_VALUE, key, value, true, out, out_cap);
+}
+
+bool porta_proto_parse_config_get(const porta_frame_t *f, char *key_out)
+{
+    return parse_config_kv(f, PORTA_MSG_CONFIG_GET, false, key_out, NULL);
+}
+
+bool porta_proto_parse_config_set(const porta_frame_t *f, char *key_out, char *value_out)
+{
+    return parse_config_kv(f, PORTA_MSG_CONFIG_SET, true, key_out, value_out);
+}
+
+bool porta_proto_parse_config_value(const porta_frame_t *f, char *key_out, char *value_out)
+{
+    return parse_config_kv(f, PORTA_MSG_CONFIG_VALUE, true, key_out, value_out);
+}

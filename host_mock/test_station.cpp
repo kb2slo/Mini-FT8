@@ -140,6 +140,11 @@ int main()
         fprintf(stderr, "%d FAIL(s)\n", g_fails);
         return 1;
     }
+    expect_true(station_key_known("call"), "call known");
+    expect_true(station_key_known("band0"), "band0 known");
+    expect_true(station_key_known("ft4_band3"), "ft4_band3 known");
+    expect_true(!station_key_known("beacon"), "beacon not a CONFIG key");
+    expect_true(!station_key_known(""), "empty unknown");
     printf("PASS: station parse/serialize\n");
     return 0;
 }

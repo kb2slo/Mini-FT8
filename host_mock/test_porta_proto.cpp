@@ -489,6 +489,50 @@ static void test_ack_and_nak()
     check(got.size() == 1 && got[0].len == 1, "a reasonless nak is one byte");
 }
 
+static void test_config_kv()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    size_t n = porta_proto_encode_config_get("", buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "config get-all encodes");
+    if (got.size() == 1) {
+        char key[PORTA_CONFIG_KEY_MAX + 1] = {'x'};
+        check(porta_proto_parse_config_get(&got[0], key), "get-all parses");
+        check(key[0] == '\0', "get-all key is empty");
+    }
+
+    porta_decoder_init(&d);
+    n = porta_proto_encode_config_set("call", "KB2SLO", buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "config set encodes");
+    if (got.size() == 1) {
+        char key[PORTA_CONFIG_KEY_MAX + 1] = {};
+        char value[PORTA_CONFIG_VALUE_MAX + 1] = {};
+        check(porta_proto_parse_config_set(&got[0], key, value), "set parses");
+        check(std::string(key) == "call", "set key");
+        check(std::string(value) == "KB2SLO", "set value");
+        check(!porta_proto_parse_config_get(&got[0], key), "set is not get");
+    }
+
+    porta_decoder_init(&d);
+    n = porta_proto_encode_config_value("grid", "FN20", buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "config value encodes");
+    if (got.size() == 1) {
+        char key[PORTA_CONFIG_KEY_MAX + 1] = {};
+        char value[PORTA_CONFIG_VALUE_MAX + 1] = {};
+        check(porta_proto_parse_config_value(&got[0], key, value), "value parses");
+        check(std::string(key) == "grid" && std::string(value) == "FN20", "value kv");
+    }
+
+    check(porta_proto_encode_config_set("", "x", buf, sizeof(buf)) == 0, "set refuses empty key");
+    check(porta_proto_encode_config_set("call", nullptr, buf, sizeof(buf)) == 0,
+          "set refuses null value");
+}
+
 int main()
 {
     test_round_trip();
@@ -508,6 +552,7 @@ int main()
     test_action_set_clock();
     test_action_tx_free_and_cancel();
     test_ack_and_nak();
+    test_config_kv();
 
     if (g_fail) {
         std::printf("FAILED: %d check(s)\n", g_fail);

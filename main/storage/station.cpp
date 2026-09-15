@@ -376,3 +376,23 @@ std::string station_serialize(const StationSettings& in)
     }
     return out.str();
 }
+
+bool station_key_known(const char* name)
+{
+    if (!name || name[0] == '\0') {
+        return false;
+    }
+    StationKey key = key_from_name(name);
+    switch (key) {
+        case StationKey::Beacon:
+        case StationKey::Unknown:
+            break;
+        default:
+            return true;
+    }
+    int idx = 0;
+    if (sscanf(name, "band%d", &idx) == 1 || sscanf(name, "ft4_band%d", &idx) == 1) {
+        return idx >= 0 && idx < kStationBandCount;
+    }
+    return false;
+}

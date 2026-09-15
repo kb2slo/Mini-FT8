@@ -358,6 +358,12 @@ decodes is roughly 3 KB, so sustained throughput is a couple of hundred bytes pe
 WebSocket. Decodes are a one-way stream and commands are infrequent, so SSE plus POST is simpler and degrades
 better on flaky WiFi than a WebSocket — but this deserves its own argument, not a default.
 
+**CONFIG (I28d, 2026-09-14).** `CONFIG_GET` / `CONFIG_SET` / `CONFIG_VALUE` carry
+`key_len` + key + value bytes. Empty key on GET means the whole Station.txt surface; SET/VALUE require a
+key. ACK/NAK for SET and end-of-GET-all reuse `PORTA_MSG_ACK`/`NAK` with verb = the CONFIG message type.
+HTTP: open `GET /api/config` (JSON object), token-guarded `PUT /api/config` (Station.txt lines). Entry app
+asset is `app.html`.
+
 ## 7. Who may key the transmitter
 
 A headless radio driven by an unauthenticated local HTTP API means **any device on the network can start a

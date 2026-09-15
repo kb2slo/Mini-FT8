@@ -16,6 +16,7 @@
 #include "esp_littlefs.h"
 
 #include "pairing_http.h"
+#include "pairing_http_cap.h"
 #include "web_seed_table.h"
 
 static const char *TAG = "web_fs";
@@ -176,6 +177,8 @@ esp_err_t web_fs_register_rehydrate(httpd_handle_t server)
         .method = HTTP_POST,
         .handler = post_rehydrate,
     };
+    _Static_assert(PAIRING_ROUTES_WEB_FS_STATION == 2, "station: rehydrate + static");
+    _Static_assert(PAIRING_ROUTES_WEB_FS_AP == 1, "AP: static only");
     return pairing_http_register(server, &route, PAIRING_REQUIRED);
 }
 

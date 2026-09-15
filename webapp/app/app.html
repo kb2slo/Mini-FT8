@@ -1,0 +1,227 @@
+<!doctype html>
+<meta name=viewport content='width=device-width,initial-scale=1'>
+<title>Mini-FT8</title>
+<style>
+body{font-family:system-ui;margin:1rem auto;max-width:26rem;padding:0 1rem;line-height:1.35}
+h1{font-size:1.25rem;margin:0 0 .5rem}
+h2{font-size:1rem;margin:1.4rem 0 .5rem;color:#333}
+label{display:block;font-size:.8rem;color:#666;margin-top:.6rem}
+input,select{width:100%;box-sizing:border-box;padding:.45rem;font-size:1rem;margin-top:.15rem}
+button{width:100%;padding:.7rem;font-size:1rem;margin-top:.8rem}
+#m{color:#666;font-size:.85rem;min-height:1.2em;margin-top:.5rem}
+nav{font-size:.9rem;margin-top:1.2rem}
+a{color:#06c}
+.row{display:flex;gap:.5rem}
+.row>*{flex:1}
+</style>
+
+<h1>Mini-FT8</h1>
+<p id=m>Loading…</p>
+
+<section>
+  <h2>Station</h2>
+  <label>Call <input id=call autocomplete=off spellcheck=false></label>
+  <label>Grid <input id=grid autocomplete=off spellcheck=false></label>
+  <label>CQ type
+    <select id=cq_type>
+      <option value=0>CQ</option>
+      <option value=1>SOTA</option>
+      <option value=2>POTA</option>
+      <option value=3>QRP</option>
+      <option value=4>FD</option>
+      <option value=5>FreeText</option>
+    </select>
+  </label>
+  <label>CQ / exchange text <input id=cq_ft autocomplete=off></label>
+  <label>Free-text field <input id=free_text autocomplete=off></label>
+  <label>Comment <input id=comment1 autocomplete=off></label>
+  <label>Ignore prefixes <input id=ignore_prefixes autocomplete=off></label>
+</section>
+
+<section>
+  <h2>Radio</h2>
+  <div class=row>
+    <label>Offset Hz <input id=offset type=number></label>
+    <label>Offset src
+      <select id=offset_src>
+        <option value=0>Random</option>
+        <option value=1>RX</option>
+        <option value=2>Fixed</option>
+      </select>
+    </label>
+  </div>
+  <label>Radio profile (saved int) <input id=radio type=number></label>
+  <label>Active bands <input id=active_bands autocomplete=off></label>
+  <label>Band select index <input id=band_sel type=number></label>
+  <label>Protocol
+    <select id=protocol_mode>
+      <option value=FT8>FT8</option>
+      <option value=FT4>FT4</option>
+    </select>
+  </label>
+  <div class=row>
+    <label>Skip TX1
+      <select id=skiptx1>
+        <option value=0>Off</option>
+        <option value=1>On</option>
+      </select>
+    </label>
+    <label>Max retry <input id=autoseq_max_retry type=number min=0></label>
+  </div>
+  <label>RxTx log
+    <select id=rxtx_log>
+      <option value=0>Off</option>
+      <option value=1>On</option>
+    </select>
+  </label>
+</section>
+
+<button id=save type=button disabled>Save station</button>
+<button id=clock type=button disabled>Sync clock from phone</button>
+
+<nav>
+  <a href=/log>Live log</a> ·
+  <a href=/update>Install / update</a> ·
+  <a href=/>Status</a>
+</nav>
+
+<script src=/pairing.js></script>
+<script>
+var m = document.getElementById('m');
+var FIELDS = [
+  'call','grid','cq_type','cq_ft','free_text','comment1','ignore_prefixes',
+  'offset','offset_src','radio','active_bands','band_sel','protocol_mode',
+  'skiptx1','autoseq_max_retry','rxtx_log'
+];
+
+function setMsg(t) { m.textContent = t; }
+
+function setForm(cfg) {
+  FIELDS.forEach(function (k) {
+    var el = document.getElementById(k);
+    if (!el) return;
+    if (k === 'protocol_mode') {
+      el.value = (cfg.protocol_mode === 'FT4') ? 'FT4' : 'FT8';
+      return;
+    }
+    if (cfg[k] === undefined || cfg[k] === null) return;
+    el.value = String(cfg[k]);
+  });
+}
+
+function formBody() {
+  var lines = [];
+  FIELDS.forEach(function (k) {
+    var el = document.getElementById(k);
+    if (!el) return;
+    var v = el.value;
+    if (k === 'protocol_mode') {
+      lines.push('protocol_mode=' + (v === 'FT4' ? 'FT4' : 'FT8'));
+      return;
+    }
+    lines.push(k + '=' + v);
+  });
+  return lines.join('\n');
+}
+
+async function loadConfig() {
+  setMsg('Loading config from ADV…');
+  var ac = new AbortController();
+  var timer = setTimeout(function () { ac.abort(); }, 8000);
+  try {
+    var r = await fetch('/api/config', { signal: ac.signal, cache: 'no-store' });
+    clearTimeout(timer);
+    if (!r.ok) throw new Error('config HTTP ' + r.status);
+    var cfg = await r.json();
+    if (cfg.ok === false) {
+      throw new Error(cfg.why || 'config failed');
+    }
+    setForm(cfg);
+    var n = Object;
+    for (var k in cfg) { if (Object.prototype.hasOwnProperty.call(cfg, k)) n++; }
+    if (n === 0) {
+      setMsg('ADV returned empty config — is Port A linked?');
+      return;
+    }
+    setMsg(MiniFT8Pairing.getToken()
+      ? ('Loaded ' + n + ' fields from ADV — edit and save')
+      : 'Loaded from ADV — press the sidekick button to pair before saving');
+  } catch (e) {
+    clearTimeout(timer);
+    var msg = (e && e.name === 'AbortError')
+      ? 'Config timed out — flash ADV with CONFIG support, check Port A'
+      : String(e && e.message ? e.message : e);
+    setMsg(msg);
+    throw e;
+  }
+}
+
+async function saveConfig() {
+  if (!MiniFT8Pairing.getToken()) {
+    setMsg('Press the sidekick button to pair first.');
+    MiniFT8Pairing.needsReauth();
+    return;
+  }
+  setMsg('Saving…');
+  var r = await MiniFT8Pairing.authFetch('/api/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain' },
+    body: formBody()
+  });
+  if (r.status == 401) {
+    MiniFT8Pairing.needsReauth();
+    setMsg('Press the sidekick button to pair');
+    return;
+  }
+  var j = await r.json().catch(function () { return {}; });
+  if (!r.ok || j.ok === false) {
+    setMsg('Save failed: ' + (j.why || await r.text()));
+    return;
+  }
+  setMsg('Saved.');
+  await loadConfig();
+}
+
+async function syncClock() {
+  if (!MiniFT8Pairing.getToken()) {
+    setMsg('Press the sidekick button to pair first.');
+    MiniFT8Pairing.needsReauth();
+    return;
+  }
+  setMsg('Syncing clock…');
+  var r = await MiniFT8Pairing.authFetch('/api/time', {
+    method: 'POST',
+    body: String(Date.now())
+  });
+  if (r.status == 401) {
+    MiniFT8Pairing.needsReauth();
+    setMsg('Press the sidekick button to pair');
+    return;
+  }
+  var j = await r.json().catch(function () { return {}; });
+  setMsg(j.ok ? 'Clock synced.' : ('Clock: ' + (j.why || 'failed')));
+}
+
+function enableWrites(on) {
+  document.getElementById('save').disabled = !on;
+  document.getElementById('clock').disabled = !on;
+}
+
+MiniFT8Pairing.boot({
+  status: m,
+  onPaired: function () {
+    enableWrites(true);
+    setMsg('Paired — edit and save');
+  }
+});
+if (MiniFT8Pairing.getToken()) enableWrites(true);
+
+document.getElementById('save').onclick = function () {
+  saveConfig().catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+};
+document.getElementById('clock').onclick = function () {
+  syncClock().catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+};
+
+loadConfig().catch(function () { /* setMsg already */ });
+</script>

@@ -15,6 +15,7 @@
 #include "mbedtls/sha256.h"
 
 #include "pairing_http.h"
+#include "pairing_http_cap.h"
 #include "web_fs.h"
 #include "web_manifest.h"
 
@@ -487,6 +488,8 @@ esp_err_t web_bundle_register(httpd_handle_t server)
     const struct {
         const httpd_uri_t *uri;
     } routes[] = {{&begin}, {&file}, {&commit}};
+    _Static_assert(sizeof(routes) / sizeof(routes[0]) == PAIRING_ROUTES_WEB_BUNDLE,
+                   "web_bundle route count");
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); ++i) {
         const esp_err_t err = pairing_http_register(server, routes[i].uri, PAIRING_REQUIRED);
         if (err != ESP_OK) {

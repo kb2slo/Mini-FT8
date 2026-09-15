@@ -30,6 +30,9 @@ esp_err_t pairing_http_init(void);
 //
 // Guarded requests are refused with 401 before the handler runs, so a handler
 // never has to remember to check -- and never sees a request it should not.
+//
+// Slot-table capacity is compile-time: see pairing_http_cap.h. Each module
+// owns a named count and asserts its routes[] length against it.
 esp_err_t pairing_http_register(httpd_handle_t server, const httpd_uri_t *uri, pairing_policy_t policy);
 
 // Registers the token disclosure route and the shared pairing.js script. Call

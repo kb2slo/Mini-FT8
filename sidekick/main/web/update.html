@@ -99,8 +99,16 @@ async function install() {
     }
     if (!cr.ok) throw new Error('commit: ' + (await cr.text()));
 
-    setMsg('Installed. Opening /installed.html …');
-    location.href = '/installed.html';
+    // Land on app.html when this bundle has it; older Pages manifests only
+    // shipped installed.html — hardcoding /app.html 404'd after a "successful" install.
+    var land = 'installed.html';
+    for (var j = 0; j < manifest.assets.length; j++) {
+      var p = manifest.assets[j].path;
+      if (p === 'app.html') { land = 'app.html'; break; }
+      if (p === 'installed.html') land = 'installed.html';
+    }
+    setMsg('Installed. Opening /' + land + ' …');
+    location.href = '/' + land;
   } catch (e) {
     setMsg(String(e && e.message ? e.message : e));
     go.disabled = false;
