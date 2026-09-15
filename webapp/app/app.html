@@ -409,14 +409,21 @@ function formBody() {
   return lines.join('\n');
 }
 
-// Operate's header: CAT/audio/clock status, Connect/Tune labels, cq_type
-// (for the beacon label). Safe to call on every poll tick -- never touches
-// Settings' inputs, and never rebuilds #opBandSel's options (that only
-// happens in setForm(), same reasoning as the comment there). The band
-// dropdown's own closed-state text already shows the selected band's label
-// ("20m · 14074 kHz"), so there is no separate band/freq readout to keep
-// current here.
+// Operate's header: CAT/audio/clock status, Connect/Tune labels, cq_type (for
+// the beacon label), and #opBandSel's selected value. Safe to call on every
+// poll tick -- never touches Settings' inputs, and never rebuilds
+// #opBandSel's *options* (that only happens in setForm(), same reasoning as
+// the comment there: rebuilding the list while the operator has the picker
+// open would yank it out from under them). Syncing the already-built list's
+// *value* carries no such risk (see renderBeacon()'s beaconSel comment) and
+// is what makes a band changed on the ADV itself -- MENU, not this page --
+// show up here without a reload. One gap this doesn't close: if the device
+// also changed active_bands so the new band isn't among the options already
+// built, the value silently fails to apply until the next full setForm().
 function applyOperateLive(cfg) {
+  if (cfg.band_sel !== undefined && cfg.band_sel !== null) {
+    document.getElementById('opBandSel').value = String(cfg.band_sel);
+  }
   document.getElementById('dotCat').classList.toggle('up', yn(cfg.cat_ready) === 'yes');
   // audio_rx is deliberately stricter than "streaming is engaged" -- the ADV
   // only sends it true when a real USB audio frame arrived in the last
@@ -699,12 +706,13 @@ function renderBeacon() {
   var mode = slotState ? slotState.bm : 0;
   var cqName = CQ_TYPE_NAMES[parseInt(lastCfg.cq_type, 10)] || 'CQ';
   document.getElementById('beaconCqName').textContent = 'Beacon: ' + cqName;
-  var sel = document.getElementById('beaconSel');
-  // Don't stomp a selection the operator is mid-pick on -- the poll tick
-  // that drives this can land between opening the dropdown and choosing.
-  if (document.activeElement !== sel) {
-    sel.value = String(mode);
-  }
+  // A native <select> stays document.activeElement after the operator picks
+  // an option (focus doesn't return to the page), so gating this on focus --
+  // the original approach -- silently stopped all future live updates after
+  // the first tap. Setting .value doesn't fire 'change' and doesn't disturb
+  // an open native picker's own pending selection, so there's nothing here
+  // actually worth guarding against.
+  document.getElementById('beaconSel').value = String(mode);
   // 0 means "nothing pending" (main.cpp's porta_queue_state_tick sends it
   // when g_pending_tx_valid is false) -- not a real offset, so it must not
   // pass a != null check the way it would.
