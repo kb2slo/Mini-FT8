@@ -19,8 +19,7 @@
 :root{color-scheme:light dark}
 body{font-family:system-ui;margin:0;padding:0 0 3.75rem;line-height:1.35;background:Canvas;color:CanvasText}
 h1{font-size:1.15rem;margin:0}
-h2{font-size:.95rem;margin:1.1rem 0 .5rem;color:GrayText}
-label{display:block;font-size:.8rem;color:GrayText;margin-top:.6rem}
+label{display:block;font-size:.7rem;color:GrayText;text-transform:uppercase;letter-spacing:.04em;margin-top:0}
 input,select{width:100%;box-sizing:border-box;padding:.45rem;font-size:1rem;margin-top:.15rem;background:Field;color:FieldText}
 button{padding:.6rem;font-size:.95rem;background:ButtonFace;color:ButtonText;border:1px solid GrayText;border-radius:.4rem}
 button:disabled{opacity:.45}
@@ -105,6 +104,15 @@ button:disabled{opacity:.45}
 .frow-extra .degrid{font-family:ui-monospace,monospace;font-weight:700}
 .frow-extra .comment{font-style:italic;overflow-wrap:anywhere}
 #logMore{padding:.7rem 1rem;text-align:center;color:GrayText;font-size:.8rem}
+
+/* ---- settings ---- */
+/* Same flat, hairline-divided list language as Operate's #opQueue/#opDecodes
+   and Log's .frow rows, replacing the boxed <section>/<h2> form look. */
+.hd{padding:.6rem 1rem .2rem;font-size:.7rem;color:GrayText;text-transform:uppercase;letter-spacing:.04em}
+.hd.sep{border-top:1px solid color-mix(in srgb, GrayText 30%, transparent);margin-top:.5rem}
+.setrow{padding:.5rem 1rem .55rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent)}
+.setrow label{margin-top:0}
+.setnote{padding:0 1rem;font-size:.8rem;color:GrayText;margin-top:0}
 </style>
 
 <div class=wrap>
@@ -163,11 +171,13 @@ button:disabled{opacity:.45}
   </section>
 
   <!-- ================= SETTINGS ================= -->
+  <!-- Same flat hairline-row list language as Operate/Log (.hd + .setrow),
+       not the boxed <section>/<h2> form look this page used to have. -->
   <section id=view-settings hidden>
-    <section>
-      <h2>Station</h2>
-      <label>Call <input id=call autocomplete=off spellcheck=false></label>
-      <label>Grid <input id=grid autocomplete=off spellcheck=false></label>
+    <div class=hd>Station</div>
+    <div class=setrow><label>Call <input id=call autocomplete=off spellcheck=false></label></div>
+    <div class=setrow><label>Grid <input id=grid autocomplete=off spellcheck=false></label></div>
+    <div class=setrow>
       <label>CQ type
         <select id=cq_type>
           <option value=0>CQ</option>
@@ -178,54 +188,58 @@ button:disabled{opacity:.45}
           <option value=5>FreeText</option>
         </select>
       </label>
-      <label>CQ / exchange text <input id=cq_ft autocomplete=off></label>
-      <label>Free-text field <input id=free_text autocomplete=off></label>
-      <label>Comment <input id=comment1 autocomplete=off></label>
-      <label>Ignore prefixes <input id=ignore_prefixes autocomplete=off></label>
-    </section>
+    </div>
+    <div class=setrow><label>CQ / exchange text <input id=cq_ft autocomplete=off></label></div>
+    <div class=setrow><label>Free-text field <input id=free_text autocomplete=off></label></div>
+    <div class=setrow><label>Comment <input id=comment1 autocomplete=off></label></div>
+    <div class=setrow><label>Ignore prefixes <input id=ignore_prefixes autocomplete=off></label></div>
 
-    <section>
-      <h2>Radio</h2>
-      <p style="font-size:.8rem;color:GrayText;margin-top:0">Connect, tune and clock sync now live on Operate.</p>
-      <div class=row>
-        <label>Offset Hz <input id=offset type=number></label>
-        <label>Offset src
-          <select id=offset_src>
-            <option value=0>Random</option>
-            <option value=1>RX</option>
-            <option value=2>Fixed</option>
-          </select>
-        </label>
-      </div>
-      <label>Radio profile (saved int) <input id=radio type=number></label>
-      <label>Active bands <input id=active_bands autocomplete=off></label>
-      <label>Band <select id=band_sel></select></label>
+    <div class="hd sep">Radio</div>
+    <p class=setnote>Connect, tune and clock sync now live on Operate.</p>
+    <div class="setrow row">
+      <label>Offset Hz <input id=offset type=number></label>
+      <label>Offset src
+        <select id=offset_src>
+          <option value=0>Random</option>
+          <option value=1>RX</option>
+          <option value=2>Fixed</option>
+        </select>
+      </label>
+    </div>
+    <div class=setrow><label>Radio profile (saved int) <input id=radio type=number></label></div>
+    <div class=setrow><label>Active bands <input id=active_bands autocomplete=off></label></div>
+    <div class=setrow><label>Band <select id=band_sel></select></label></div>
+    <div class=setrow>
       <label>Protocol
         <select id=protocol_mode>
           <option value=FT8>FT8</option>
           <option value=FT4>FT4</option>
         </select>
       </label>
-      <div class=row>
-        <label>Skip TX1
-          <select id=skiptx1>
-            <option value=0>Off</option>
-            <option value=1>On</option>
-          </select>
-        </label>
-        <label>Max retry <input id=autoseq_max_retry type=number min=0></label>
-      </div>
+    </div>
+    <div class="setrow row">
+      <label>Skip TX1
+        <select id=skiptx1>
+          <option value=0>Off</option>
+          <option value=1>On</option>
+        </select>
+      </label>
+      <label>Max retry <input id=autoseq_max_retry type=number min=0></label>
+    </div>
+    <div class=setrow>
       <label>RxTx log
         <select id=rxtx_log>
           <option value=0>Off</option>
           <option value=1>On</option>
         </select>
       </label>
-    </section>
+    </div>
 
-    <button id=save type=button disabled style="width:100%">Save station</button>
+    <div style="padding:1rem">
+      <button id=save type=button disabled style="width:100%">Save station</button>
+    </div>
 
-    <nav style="font-size:.85rem;margin:1rem 0">
+    <nav style="font-size:.85rem;padding:0 1rem 1rem">
       <a href=/log>Raw ADV log</a> ·
       <a href=/update>Install / update</a> ·
       <a href=/>Status</a>
