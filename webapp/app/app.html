@@ -82,9 +82,9 @@ button:disabled{opacity:.45}
 #opDecodes .hd{padding:.6rem 1rem .2rem;font-size:.7rem;color:GrayText;text-transform:uppercase;letter-spacing:.04em}
 .drow{padding:.4rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent)}
 .drow .meta{font-family:ui-monospace,monospace;font-size:.7rem;color:GrayText;display:flex;justify-content:space-between}
-.drow-body{display:flex;align-items:flex-start;gap:.5rem;margin-top:.1rem}
+.drow-body{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-top:.1rem}
 .replyBtn{flex:none;font-size:.7rem;padding:.15rem .5rem;background:ButtonFace;color:ButtonText;border:1px solid GrayText;border-radius:.3rem}
-.drow .txt{font-size:.85rem}
+.drow .txt{font-size:.85rem;flex:1;min-width:0}
 /* Same precedence as ui.cpp's draw_rx_line(): to_me red, else recent_qso gray,
    else cq green, else default text color. */
 .drow .txt.c-me{color:#ff0000;font-weight:700}
@@ -1168,9 +1168,9 @@ function renderDecodes() {
         '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
         (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
         '<div class=drow-body>' +
-          '<button type=button class=replyBtn data-id="' + d.id + '">Reply</button>' +
           '<div class="txt ' + decodeColorClass(d) + '">' + highlightCallInText(d.x, allCalls) +
           (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
+          '<button type=button class=replyBtn data-id="' + d.id + '">Reply</button>' +
         '</div>' +
         (distBearing ? '<div class=ddist>' + esc(theirGrid) + ' · ' + esc(distBearing) + '</div>' : '') +
         '</div>';
