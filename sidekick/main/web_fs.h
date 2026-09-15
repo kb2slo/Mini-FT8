@@ -7,8 +7,10 @@
 // and hydrated). After hydrate, HTTP serves from the FS; embed is not a live
 // second backend. GET /* serves any path that exists on the FS (register last).
 //
-// Force re-hydrate (present-but-broken recovery) is web_fs_rehydrate(); the
-// gesture that calls it is a later slice.
+// Force re-hydrate (present-but-broken recovery) is web_fs_rehydrate(),
+// exposed as token-guarded POST /api/web/rehydrate. Restores seed files from
+// the firmware embed only; promoted app assets are left alone. USB-C reflash
+// remains the hard floor if the recovery UI itself is unreachable.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -34,6 +36,9 @@ bool web_fs_ready(void);
 // already matches. Used for recovery; ordinary boots use web_fs_init()'s
 // compare-and-write.
 esp_err_t web_fs_rehydrate(void);
+
+// POST /api/web/rehydrate — PAIRING_REQUIRED. Call before the static GET /*.
+esp_err_t web_fs_register_rehydrate(httpd_handle_t server);
 
 // Load a file under WEB_FS_ROOT into a malloc'd buffer. `relpath` is relative
 // (e.g. "status.html"). If size_out is non-NULL it receives the byte length

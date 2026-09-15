@@ -152,6 +152,33 @@ esp_err_t web_fs_rehydrate(void)
     return hydrate_seeds(true);
 }
 
+static esp_err_t post_rehydrate(httpd_req_t *req)
+{
+    char discard[64];
+    while (httpd_req_recv(req, discard, sizeof(discard)) > 0) {
+    }
+    ESP_LOGI(TAG, "force rehydrate requested");
+    const esp_err_t err = web_fs_rehydrate();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "force rehydrate failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "rehydrate failed");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "force rehydrate done");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+esp_err_t web_fs_register_rehydrate(httpd_handle_t server)
+{
+    static const httpd_uri_t route = {
+        .uri = "/api/web/rehydrate",
+        .method = HTTP_POST,
+        .handler = post_rehydrate,
+    };
+    return pairing_http_register(server, &route, PAIRING_REQUIRED);
+}
+
 char *web_fs_load(const char *relpath, size_t *size_out)
 {
     if (!s_ready || !relpath_ok(relpath)) {

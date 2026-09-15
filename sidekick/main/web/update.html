@@ -21,6 +21,7 @@ a{color:#06c}
 <p>Fetches from the bundle host over HTTPS, then writes the web filesystem on this device.</p>
 <p>Host: <code id=host>{{bundle_host}}</code></p>
 <button id=go type=button disabled>Install</button>
+<button id=rh type=button>Restore seed pages</button>
 <p id=m></p>
 <p><a href="/">Status</a> · <a href="/log">ADV log</a></p>
 
@@ -106,6 +107,39 @@ async function install() {
   }
 }
 
+// In-page confirm — native confirm() often cancels silently on phones.
+var rhArmed = false;
+async function rehydrate() {
+  if (!MiniFT8Pairing.getToken()) {
+    rhArmed = false;
+    setMsg('Press the sidekick button to pair first.');
+    MiniFT8Pairing.needsReauth();
+    return;
+  }
+  if (!rhArmed) {
+    rhArmed = true;
+    setMsg('Tap Restore again to rewrite seed pages (app files kept).');
+    return;
+  }
+  rhArmed = false;
+  setMsg('Restoring…');
+  try {
+    var r = await MiniFT8Pairing.authFetch('/api/web/rehydrate', { method: 'POST' });
+    if (r.status == 401) {
+      MiniFT8Pairing.needsReauth();
+      setMsg('Press the sidekick button to pair');
+      return;
+    }
+    if (!r.ok) {
+      setMsg('Restore failed: ' + (await r.text()));
+      return;
+    }
+    setMsg('Seed pages restored from firmware.');
+  } catch (e) {
+    setMsg('Restore error: ' + (e && e.message ? e.message : e));
+  }
+}
+
 MiniFT8Pairing.boot({
   status: m,
   onPaired: function () {
@@ -120,4 +154,5 @@ if (MiniFT8Pairing.getToken()) {
   setMsg('Press the sidekick button to pair');
 }
 go.onclick = install;
+document.getElementById('rh').onclick = rehydrate;
 </script>
