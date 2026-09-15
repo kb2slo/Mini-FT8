@@ -906,13 +906,14 @@ var LOG_REFRESH_MS = 8000;   // how often to check today's file for new QSOs whi
 
 function dayLabel(name) {
   // name is "YYYYMMDD.adi" (qso_browse.cpp / file_list.cpp). Today gets a
-  // friendlier label; anything else reads as-is -- no client-side date math
-  // worth the edge cases for a first pass.
+  // friendlier label; anything else renders YYYY-MM-DD, matching the ADV's
+  // own STATUS screen date field (main.cpp's "%04d-%02d-%02d") rather than
+  // inventing a second order for the same date.
   var y = name.slice(0, 4), mo = name.slice(4, 6), d = name.slice(6, 8);
   var today = new Date();
   var todayStr = today.getUTCFullYear() + String(today.getUTCMonth() + 1).padStart(2, '0') +
                 String(today.getUTCDate()).padStart(2, '0');
-  return (name.slice(0, 8) === todayStr) ? 'Today' : (mo + '-' + d + '-' + y);
+  return (name.slice(0, 8) === todayStr) ? 'Today' : (y + '-' + mo + '-' + d);
 }
 
 function fmtRst(v) {
