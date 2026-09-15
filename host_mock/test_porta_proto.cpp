@@ -464,6 +464,61 @@ static void test_slot_state_event()
     }
 }
 
+static void test_tx_hud_event()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    porta_tx_hud_event_t in = {};
+    in.epoch_secs = 1789012345u;
+    in.active = true;
+    in.aborted = false;
+    in.writes_blocked = false;
+    in.power_dw = 42;   // 4.2 W
+    in.swr_c = 135;     // 1.35
+    in.battery_pct = 87;
+    std::snprintf(in.text, sizeof(in.text), "CQ KB2SLO FN30");
+
+    size_t n = porta_proto_encode_tx_hud(&in, buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "tx_hud event decodes");
+    if (got.size() == 1) {
+        porta_tx_hud_event_t out;
+        check(porta_proto_parse_tx_hud(&got[0], &out), "tx_hud event parses");
+        check(out.active && !out.aborted && !out.writes_blocked, "flags round-trip");
+        check(out.power_dw == 42, "power_dw round-trips");
+        check(out.swr_c == 135, "swr_c round-trips");
+        check(out.battery_pct == 87, "battery_pct round-trips");
+        check(std::string(out.text) == "CQ KB2SLO FN30", "text round-trips");
+
+        porta_slot_state_event_t ss;
+        check(!porta_proto_parse_slot_state(&got[0], &ss),
+              "a tx_hud event is not a slot_state event");
+    }
+
+    // -1 sentinels (unread power/SWR/battery) must survive the cast through
+    // uint16_t/uint8_t on the wire and back, same as rst_sent/rst_rcvd's -99.
+    porta_tx_hud_event_t unknown = {};
+    unknown.active = false;
+    unknown.aborted = true;
+    unknown.writes_blocked = true;
+    unknown.power_dw = -1;
+    unknown.swr_c = -1;
+    unknown.battery_pct = -1;
+    porta_decoder_init(&d);
+    n = porta_proto_encode_tx_hud(&unknown, buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    if (got.size() == 1) {
+        porta_tx_hud_event_t out;
+        check(porta_proto_parse_tx_hud(&got[0], &out) &&
+              !out.active && out.aborted && out.writes_blocked &&
+              out.power_dw == -1 && out.swr_c == -1 && out.battery_pct == -1 &&
+              std::string(out.text).empty(),
+              "unknown sentinels and an inactive/aborted banner round-trip");
+    }
+}
+
 // ACTION is the control direction, and the first thing to cross it is the
 // clock. These pin the round trip and, more importantly, that a reply can be
 // matched to its request by verb -- there is no sequence number, so a NAK that
@@ -852,6 +907,7 @@ int main()
     test_decode_event();
     test_queue_entry_event();
     test_slot_state_event();
+    test_tx_hud_event();
     test_action_set_clock();
     test_action_tx_free_and_cancel();
     test_action_connect_and_tune();

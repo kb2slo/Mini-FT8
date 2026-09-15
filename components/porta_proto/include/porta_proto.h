@@ -185,6 +185,7 @@ typedef enum {
     PORTA_EVT_DECODE      = 0x02,  // one decoded FT8/FT4 message
     PORTA_EVT_QUEUE_ENTRY = 0x03,  // one autoseq queue row: added, changed, or removed
     PORTA_EVT_SLOT_STATE  = 0x04,  // small scalars: slot parity, beacon mode, resolved TX offset
+    PORTA_EVT_TX_HUD      = 0x05,  // TX HUD banner mirror: message, power/SWR, battery
 } porta_event_subtype_t;
 
 #define PORTA_EVENT_TEXT_MAX 64  // matches RX_TEXT_MAX on the host
@@ -265,6 +266,30 @@ typedef struct {
 size_t porta_proto_encode_slot_state(const porta_slot_state_event_t *s,
                                      uint8_t *out, size_t out_cap);
 bool porta_proto_parse_slot_state(const porta_frame_t *f, porta_slot_state_event_t *out);
+
+// TX_HUD mirrors components/ui/include/tx_hud_banner.h's TxHudBannerInput --
+// same raw fields the on-device banner already computes each ~500 ms while
+// visible, not a re-derivation. power_w/swr travel as fixed-point (x10/x100)
+// since the wire has no float; -1 means "not read yet" on every numeric
+// field, the same sentinel TxHudBannerInput itself uses. `active` is the
+// TX_HUD_LEN-carried banner-visible flag (tx_hud_visible(): TX running, or
+// the post-abort linger window) -- the browser hides its panel the instant
+// an event arrives with this false, rather than guessing from a timeout.
+#define PORTA_TX_HUD_TEXT_MAX PORTA_EVENT_TEXT_MAX
+
+typedef struct {
+    uint32_t epoch_secs;
+    bool     active;
+    bool     aborted;
+    bool     writes_blocked;
+    int16_t  power_dw;      // deciwatts (power_w * 10), -1 = unknown
+    int16_t  swr_c;         // SWR * 100, -1 = unknown
+    int8_t   battery_pct;   // -1 = unknown
+    char     text[PORTA_TX_HUD_TEXT_MAX + 1];
+} porta_tx_hud_event_t;
+
+size_t porta_proto_encode_tx_hud(const porta_tx_hud_event_t *h, uint8_t *out, size_t out_cap);
+bool porta_proto_parse_tx_hud(const porta_frame_t *f, porta_tx_hud_event_t *out);
 
 // --- ACTION payloads -----------------------------------------------------
 // ACTION is the other namespace: payload[0] is the verb, the rest is

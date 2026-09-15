@@ -48,10 +48,21 @@ button:disabled{opacity:.45}
 .pill-beacon-off{background:color-mix(in srgb, GrayText 20%, transparent);color:GrayText}
 #opLive{display:flex;justify-content:space-between;align-items:center;font-family:ui-monospace,monospace;font-size:.75rem;color:GrayText;margin-top:.6rem}
 #opBandSel{width:auto;margin-top:0;padding:.25rem .4rem;font-size:.75rem;font-family:ui-monospace,monospace;background:Field;color:FieldText}
-#opDots{display:flex;gap:.9rem;margin-top:.4rem;font-size:.7rem;color:GrayText}
+#opDots{display:flex;gap:.9rem;margin-top:.6rem;font-size:.7rem;color:GrayText}
 .dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:.3rem;background:GrayText}
 .dot.up{background:#22c55e}
+.dot.bad{background:#ef4444}
+#clockDotWrap{cursor:pointer}
+#opConnRow button{font-size:.85rem}
 #beaconBtn{width:100%;margin-top:.6rem;text-align:left}
+
+/* ---- operate: TX HUD ---- */
+#opTxHud{padding:.6rem 1rem;border-bottom:1px solid color-mix(in srgb, GrayText 30%, transparent);background:color-mix(in srgb, #ef4444 8%, transparent)}
+#opTxHud .hd{font-size:.7rem;color:#b91c1c;text-transform:uppercase;letter-spacing:.04em;font-weight:700}
+#opTxHud.aborted{background:color-mix(in srgb, #f59e0b 14%, transparent)}
+#opTxHud.aborted .hd{color:#b45309}
+#opTxHudText{font-family:ui-monospace,monospace;font-weight:700;font-size:1rem;margin-top:.2rem;min-height:1.2em}
+#opTxHudMeta{font-family:ui-monospace,monospace;font-size:.8rem;color:GrayText;margin-top:.15rem}
 
 /* ---- operate: queue ---- */
 #opQueue{border-bottom:1px solid color-mix(in srgb, GrayText 30%, transparent);max-height:11rem;overflow-y:auto}
@@ -103,12 +114,23 @@ button:disabled{opacity:.45}
         </div>
         <span id=parityPill class="pill pill-parity">—</span>
       </div>
-      <button id=beaconBtn type=button disabled>Beacon: —</button>
-      <div id=opLive><select id=opBandSel disabled></select><span id=opOffset>TX: —</span></div>
       <div id=opDots>
         <span><span id=dotCat class=dot></span>CAT</span>
         <span><span id=dotAudio class=dot></span>Audio</span>
+        <span id=clockDotWrap title="Tap to sync now"><span id=dotClock class=dot></span><span id=clockLabel>Clock</span></span>
       </div>
+      <div id=opConnRow class=row>
+        <button id=opConnect type=button disabled>Connect</button>
+        <button id=opTune type=button disabled>Tune: Off</button>
+      </div>
+      <button id=beaconBtn type=button disabled>Beacon: —</button>
+      <div id=opLive><select id=opBandSel disabled></select><span id=opOffset>TX: —</span></div>
+    </div>
+
+    <div id=opTxHud hidden>
+      <div class=hd>Transmitting</div>
+      <div id=opTxHudText></div>
+      <div id=opTxHudMeta></div>
     </div>
 
     <div id=opQueue>
@@ -157,12 +179,7 @@ button:disabled{opacity:.45}
 
     <section>
       <h2>Radio</h2>
-      <p id=live>Audio: — · CAT: — · Tune: — · Band: —</p>
-      <div class=row>
-        <button id=connect type=button disabled>Connect</button>
-        <button id=tune_on type=button disabled>Tune on</button>
-        <button id=tune_off type=button disabled>Tune off</button>
-      </div>
+      <p style="font-size:.8rem;color:GrayText;margin-top:0">Connect, tune and clock sync now live on Operate.</p>
       <div class=row>
         <label>Offset Hz <input id=offset type=number></label>
         <label>Offset src
@@ -200,7 +217,6 @@ button:disabled{opacity:.45}
     </section>
 
     <button id=save type=button disabled style="width:100%">Save station</button>
-    <button id=clock type=button disabled style="width:100%">Sync clock from phone</button>
 
     <nav style="font-size:.85rem;margin:1rem 0">
       <a href=/log>Raw ADV log</a> ·
@@ -228,7 +244,6 @@ button:disabled{opacity:.45}
 <script src=/pairing.js></script>
 <script>
 var m = document.getElementById('m');
-var live = document.getElementById('live');
 // Index order matches ADV g_bands[] (main.cpp). Names are fixed; freqs come from config.
 var BANDS = [
   {i: 0, name: '160m', n: 160}, {i: 1, name: '80m', n: 80}, {i: 2, name: '60m', n: 60},
@@ -326,20 +341,6 @@ function fillBandSelect(cfg, sel) {
   if (sel.value !== cur && rows.length) sel.selectedIndex = 0;
 }
 
-// Settings' own live line (kept for that screen); Operate has its own header
-// below fed by the same cfg object, applyOperateLive().
-function setLive(cfg) {
-  var band = cfg.band_name || '—';
-  if (cfg.freq_khz !== undefined && cfg.freq_khz !== null && cfg.freq_khz !== '') {
-    band += ' ' + cfg.freq_khz + ' kHz';
-  }
-  live.textContent =
-    'Audio: ' + yn(cfg.streaming) +
-    ' · CAT: ' + yn(cfg.cat_ready) +
-    ' · Tune: ' + yn(cfg.tune) +
-    ' · Band: ' + band;
-}
-
 function setForm(cfg) {
   // Rebuilding a <select>'s options while the operator has it open would
   // yank the picker out from under them -- same reason loadConfig() only
@@ -362,7 +363,6 @@ function setForm(cfg) {
     document.getElementById('band_sel').value = String(cfg.band_sel);
     document.getElementById('opBandSel').value = String(cfg.band_sel);
   }
-  setLive(cfg);
 }
 
 function formBody() {
@@ -380,15 +380,31 @@ function formBody() {
   return lines.join('\n');
 }
 
-// Operate's header: CAT/audio dots, cq_type (for the beacon label). Safe to
-// call on every poll tick -- never touches Settings' inputs, and never
-// rebuilds #opBandSel's options (that only happens in setForm(), same
-// reasoning as the comment there). The band dropdown's own closed-state
-// text already shows the selected band's label ("20m · 14074 kHz"), so
-// there is no separate band/freq readout to keep current here.
+// Operate's header: CAT/audio/clock status, Connect/Tune labels, cq_type
+// (for the beacon label). Safe to call on every poll tick -- never touches
+// Settings' inputs, and never rebuilds #opBandSel's options (that only
+// happens in setForm(), same reasoning as the comment there). The band
+// dropdown's own closed-state text already shows the selected band's label
+// ("20m · 14074 kHz"), so there is no separate band/freq readout to keep
+// current here.
 function applyOperateLive(cfg) {
   document.getElementById('dotCat').classList.toggle('up', yn(cfg.cat_ready) === 'yes');
-  document.getElementById('dotAudio').classList.toggle('up', yn(cfg.streaming) === 'yes');
+  // audio_rx is deliberately stricter than "streaming is engaged" -- the ADV
+  // only sends it true when a real USB audio frame arrived in the last
+  // couple of seconds, not merely that the pipe is open (see
+  // porta_host_config_snapshot() in main.cpp).
+  document.getElementById('dotAudio').classList.toggle('up', yn(cfg.audio_rx) === 'yes');
+
+  var clockSet = yn(cfg.clock_set) === 'yes';
+  var dotClock = document.getElementById('dotClock');
+  dotClock.classList.toggle('up', clockSet);
+  dotClock.classList.toggle('bad', !clockSet && !!MiniFT8Pairing.getToken());
+  var srcName = cfg.clock_source ? (CLOCK_SOURCE_NAMES[cfg.clock_source] || cfg.clock_source) : 'Internal';
+  document.getElementById('clockLabel').textContent = clockSet ? ('Clock: ' + srcName) : 'Clock';
+
+  document.getElementById('opTune').textContent = 'Tune: ' + (yn(cfg.tune) === 'yes' ? 'On' : 'Off');
+
+  renderTxHud();
   renderBeacon();
 }
 
@@ -470,6 +486,10 @@ async function pollLiveStatus() {
     lastCfg = cfg;
     applyOperateLive(cfg);
   } catch (e) { /* next tick */ }
+  // Gated internally (paired + backoff timer), so this is a no-op almost
+  // every tick -- an actual sync attempt only every CLOCK_AUTO_SYNC_MS, or
+  // every few seconds right after one that failed.
+  autoSyncClock(false);
 }
 
 async function saveConfig() {
@@ -498,24 +518,60 @@ async function saveConfig() {
   await loadConfig();
 }
 
-async function syncClock() {
+// Clock sync is automatic (RFC 0004 §11: display it, don't make the
+// operator hunt for a button). porta_host_set_clock() on the ADV already
+// only acts when the clock is actually off by more than ~2s, so calling
+// this on a cheap timer costs nothing when the clock is already right --
+// same "always sync, only act when wrong" reasoning viewer.html's own
+// sync() uses. Piggybacks on pollLiveStatus()'s existing 5s tick rather
+// than a separate interval, so this adds no new steady-state WiFi traffic
+// (see that function's own note on why extra polling matters here).
+var clockSyncInFlight = false;
+var clockNextSyncAfter = 0;
+var CLOCK_AUTO_SYNC_MS = 180000; // re-check every 3 min: crystal drift, not urgency
+var CLOCK_SOURCE_NAMES = { R: 'DS3231', G: 'GPS', P: 'Phone', W: 'Browser' };
+
+async function autoSyncClock(manual) {
   if (!MiniFT8Pairing.getToken()) {
-    setMsg('Press the sidekick button to pair first.');
-    MiniFT8Pairing.needsReauth();
+    if (manual) {
+      setMsg('Press the sidekick button to pair first.');
+      MiniFT8Pairing.needsReauth();
+    }
     return;
   }
-  setMsg('Syncing clock…');
-  var r = await MiniFT8Pairing.authFetch('/api/time', {
-    method: 'POST',
-    body: String(Date.now())
-  });
-  if (r.status == 401) {
-    MiniFT8Pairing.needsReauth();
-    setMsg('Press the sidekick button to pair');
-    return;
+  if (clockSyncInFlight) return;
+  if (!manual && Date.now() < clockNextSyncAfter) return;
+  clockSyncInFlight = true;
+  if (manual) setMsg('Syncing clock…');
+  // Round-trip halving, the same reasoning NTP uses: set the host to the
+  // time at the midpoint of the exchange, not when we started asking.
+  var t0 = Date.now();
+  try {
+    var r = await MiniFT8Pairing.authFetch('/api/time', {
+      method: 'POST',
+      body: String(t0 + Math.round((Date.now() - t0) / 2))
+    });
+    if (r.status == 401) {
+      MiniFT8Pairing.needsReauth();
+      if (manual) setMsg('Press the sidekick button to pair');
+      return;
+    }
+    var j = await r.json().catch(function () { return {}; });
+    if (j.ok) {
+      clockNextSyncAfter = Date.now() + CLOCK_AUTO_SYNC_MS;
+      if (manual) setMsg('Clock synced.');
+    } else {
+      // Host still coming up, or PORTA not ready -- short backoff rather
+      // than waiting a full CLOCK_AUTO_SYNC_MS to try again.
+      clockNextSyncAfter = Date.now() + 3000;
+      if (manual) setMsg('Clock: ' + (j.why || 'failed'));
+    }
+  } catch (e) {
+    clockNextSyncAfter = Date.now() + 3000;
+    if (manual) setMsg(String(e && e.message ? e.message : e));
+  } finally {
+    clockSyncInFlight = false;
   }
-  var j = await r.json().catch(function () { return {}; });
-  setMsg(j.ok ? 'Clock synced.' : ('Clock: ' + (j.why || 'failed')));
 }
 
 async function radioPost(path, body, busyMsg) {
@@ -544,10 +600,8 @@ async function radioPost(path, body, busyMsg) {
 
 function enableWrites(on) {
   document.getElementById('save').disabled = !on;
-  document.getElementById('clock').disabled = !on;
-  document.getElementById('connect').disabled = !on;
-  document.getElementById('tune_on').disabled = !on;
-  document.getElementById('tune_off').disabled = !on;
+  document.getElementById('opConnect').disabled = !on;
+  document.getElementById('opTune').disabled = !on;
   document.getElementById('beaconBtn').disabled = !on;
   document.getElementById('opBandSel').disabled = !on;
 }
@@ -561,20 +615,17 @@ document.getElementById('band_sel').onchange = function () {
 document.getElementById('save').onclick = function () {
   saveConfig().catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
-document.getElementById('clock').onclick = function () {
-  syncClock().catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
-};
-document.getElementById('connect').onclick = function () {
+document.getElementById('opConnect').onclick = function () {
   radioPost('/api/radio/connect', undefined, 'Connecting…')
     .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
-document.getElementById('tune_on').onclick = function () {
-  radioPost('/api/radio/tune', '1', 'Tune on…')
+document.getElementById('opTune').onclick = function () {
+  var next = (yn(lastCfg.tune) === 'yes') ? '0' : '1';
+  radioPost('/api/radio/tune', next, 'Tune…')
     .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
-document.getElementById('tune_off').onclick = function () {
-  radioPost('/api/radio/tune', '0', 'Tune off…')
-    .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+document.getElementById('clockDotWrap').onclick = function () {
+  autoSyncClock(true).catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
 
 // ===================== Operate: countdown + parity (client clock, no wire dependency) =====================
@@ -621,6 +672,37 @@ document.getElementById('beaconBtn').onclick = function () {
   radioPost('/api/beacon', String(next), 'Beacon…')
     .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
+
+// ===================== Operate: TX HUD =====================
+// Mirrors the on-device TX HUD banner (main.cpp's draw_tx_hud() / porta_tx_hud_tick()):
+// same message/power/SWR/battery, one event per ~500 ms while transmitting,
+// with a final active:false event the instant the banner would come down --
+// no timeout to guess at on this side.
+
+var txHud = null; // last TX_HUD event: {active, aborted, wrblk, pw, swr, batt, x}
+
+function renderTxHud() {
+  var el = document.getElementById('opTxHud');
+  if (!txHud || !txHud.active) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  el.classList.toggle('aborted', txHud.aborted);
+  document.getElementById('opTxHudText').textContent = txHud.x || '(empty)';
+
+  var parts = [];
+  if (txHud.wrblk) {
+    parts.push('WRITE BLOCKED');
+  } else {
+    if (txHud.pw > -1) parts.push((txHud.pw / 10).toFixed(1) + 'W');
+    if (txHud.swr > -1) parts.push('SWR ' + (txHud.swr / 100).toFixed(2));
+  }
+  if (txHud.batt > -1) parts.push(txHud.batt + '%');
+  document.getElementById('opTxHudMeta').textContent = txHud.aborted
+    ? 'TX ABORTED (low battery)'
+    : (parts.length ? parts.join(' · ') : '—');
+}
 
 // ===================== Operate: queue =====================
 
@@ -719,6 +801,9 @@ function applyEvent(e) {
     }
   } else if (e.d === 3) {
     slotState = { sp: e.sp, bm: e.bm, hz: e.hz };
+  } else if (e.d === 4) {
+    txHud = { active: !!e.active, aborted: !!e.aborted, wrblk: !!e.wrblk,
+             pw: e.pw, swr: e.swr, batt: e.batt, x: e.x };
   }
 }
 
@@ -737,6 +822,7 @@ async function pollEvents() {
       renderQueue();
       renderDecodes();
       renderBeacon();
+      renderTxHud();
     }
     evSeq = j.seq;
   } catch (e) { /* next tick */ }
@@ -867,15 +953,20 @@ MiniFT8Pairing.boot({
   onPaired: function () {
     enableWrites(true);
     setMsg('Paired — edit and save');
+    autoSyncClock(false);
   }
 });
-if (MiniFT8Pairing.getToken()) enableWrites(true);
+if (MiniFT8Pairing.getToken()) {
+  enableWrites(true);
+  autoSyncClock(false);
+}
 
 loadConfig().catch(function () { /* setMsg already */ });
 renderCountdown();
 renderBeacon();
 renderQueue();
 renderDecodes();
+renderTxHud();
 
 function tick() {
   pollEvents();

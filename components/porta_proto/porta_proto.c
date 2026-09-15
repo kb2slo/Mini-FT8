@@ -361,6 +361,50 @@ bool porta_proto_parse_slot_state(const porta_frame_t *f, porta_slot_state_event
     return true;
 }
 
+// subtype | epoch(4) | flags | power_dw(2) | swr_c(2) | battery_pct(1) | text...
+#define TX_HUD_BODY_OFFSET (EVENT_HEADER_LEN + 1u + 2u + 2u + 1u)
+
+size_t porta_proto_encode_tx_hud(const porta_tx_hud_event_t *h, uint8_t *out, size_t out_cap)
+{
+    if (!h) {
+        return 0;
+    }
+    uint8_t payload[TX_HUD_BODY_OFFSET + PORTA_TX_HUD_TEXT_MAX];
+    payload[0] = PORTA_EVT_TX_HUD;
+    put_u32(&payload[1], h->epoch_secs);
+    payload[5] = (uint8_t)((h->active ? 0x01u : 0u) |
+                           (h->aborted ? 0x02u : 0u) |
+                           (h->writes_blocked ? 0x04u : 0u));
+    put_u16(&payload[6], (uint16_t)h->power_dw);
+    put_u16(&payload[8], (uint16_t)h->swr_c);
+    payload[10] = (uint8_t)h->battery_pct;
+
+    size_t n = strnlen(h->text, PORTA_TX_HUD_TEXT_MAX);
+    if (n > 0) {
+        memcpy(&payload[TX_HUD_BODY_OFFSET], h->text, n);
+    }
+    return porta_proto_encode(PORTA_MSG_EVENT, payload,
+                              (uint8_t)(TX_HUD_BODY_OFFSET + n), out, out_cap);
+}
+
+bool porta_proto_parse_tx_hud(const porta_frame_t *f, porta_tx_hud_event_t *out)
+{
+    if (!f || !out || f->type != PORTA_MSG_EVENT || f->len < TX_HUD_BODY_OFFSET ||
+        f->payload[0] != PORTA_EVT_TX_HUD) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->epoch_secs      = get_u32(&f->payload[1]);
+    out->active          = (f->payload[5] & 0x01u) != 0;
+    out->aborted         = (f->payload[5] & 0x02u) != 0;
+    out->writes_blocked  = (f->payload[5] & 0x04u) != 0;
+    out->power_dw        = (int16_t)get_u16(&f->payload[6]);
+    out->swr_c           = (int16_t)get_u16(&f->payload[8]);
+    out->battery_pct     = (int8_t)f->payload[10];
+    event_text_out(f, TX_HUD_BODY_OFFSET, out->text, sizeof(out->text));
+    return true;
+}
+
 // --- ACTION payloads -----------------------------------------------------
 
 size_t porta_proto_encode_set_clock(uint32_t epoch_secs, uint16_t millis,

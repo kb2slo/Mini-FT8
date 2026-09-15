@@ -34,6 +34,10 @@ typedef enum {
 #define UAC_WATERFALL_ROW_WIDTH FT8_AUDIO_WATERFALL_ROW_WIDTH
 
 bool uac_is_streaming(void);
+// rtc_now_ms() at the last successful USB audio read (bytes_read > 0, a real
+// frame off the wire, not a quiet band -- silence still reads real bytes).
+// 0 if no frame has ever arrived this session.
+int64_t uac_last_rx_ms(void);
 bool uac_start_with_profile(uac_stream_profile_t profile);
 void uac_stop(void);
 esp_err_t uac_host_ensure_started(void);

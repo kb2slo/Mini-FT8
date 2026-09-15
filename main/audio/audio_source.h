@@ -19,6 +19,11 @@ bool audio_source_start(void);
 void audio_source_stop(void);
 
 bool audio_source_is_streaming(void);
+// rtc_now_ms() at the last real audio frame off this backend. See
+// uac_last_rx_ms() -- the "streaming" flag alone can stay latched true past
+// an actual dropout, so callers wanting to know audio is *currently* flowing
+// should also check freshness against this.
+int64_t audio_source_last_rx_ms(void);
 
 #ifdef __cplusplus
 }
