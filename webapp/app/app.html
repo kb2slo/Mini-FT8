@@ -115,6 +115,12 @@ button:disabled{opacity:.45}
 .setrow{padding:.5rem 1rem .55rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent)}
 .setrow label{margin-top:0}
 .setnote{padding:0 1rem;font-size:.8rem;color:GrayText;margin-top:0}
+.bandrow{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
+.bandcheck{display:flex;align-items:center;gap:.4rem;font-size:.85rem;text-transform:none;letter-spacing:normal;color:CanvasText;margin:0}
+.bandcheck input{width:auto;margin:0}
+.bandfreqwrap{display:flex;align-items:center;gap:.3rem;font-size:.8rem;color:GrayText;white-space:nowrap}
+.bandfreq{width:5.5rem;margin:0;padding:.3rem .4rem;font-size:.85rem}
+.bandfreq:disabled{opacity:.5}
 </style>
 
 <div class=wrap>
@@ -216,7 +222,8 @@ button:disabled{opacity:.45}
       </label>
     </div>
     <div class=setrow><label>Radio profile (saved int) <input id=radio type=number></label></div>
-    <div class=setrow><label>Active bands <input id=active_bands autocomplete=off></label></div>
+    <div class=hd>Bands</div>
+    <div id=bandList></div>
     <div class=setrow><label>Band <select id=band_sel></select></label></div>
     <div class=setrow>
       <label>Protocol
@@ -274,16 +281,29 @@ button:disabled{opacity:.45}
 <script src=/pairing.js></script>
 <script>
 var m = document.getElementById('m');
-// Index order matches ADV g_bands[] (main.cpp). Names are fixed; freqs come from config.
+// Index order matches ADV g_bands[] (main.cpp); ft8/ft4 mirror that file's two
+// default tables (the compiled-in g_bands initializer and the FT4 reset block
+// in station_apply_to_globals()) byte-for-byte, since CONFIG only ever
+// reports an *override* (bandN=/ft4_bandN=) when one has actually been
+// stored -- an un-set band has no value on the wire at all, and this is the
+// only place that knows what it defaults to.
 var BANDS = [
-  {i: 0, name: '160m', n: 160}, {i: 1, name: '80m', n: 80}, {i: 2, name: '60m', n: 60},
-  {i: 3, name: '40m', n: 40}, {i: 4, name: '30m', n: 30}, {i: 5, name: '20m', n: 20},
-  {i: 6, name: '17m', n: 17}, {i: 7, name: '15m', n: 15}, {i: 8, name: '12m', n: 12},
-  {i: 9, name: '10m', n: 10}, {i: 10, name: '6m', n: 6}, {i: 11, name: '2m', n: 2}
+  {i: 0, name: '160m', n: 160, ft8: 1840,   ft4: 1843},
+  {i: 1, name: '80m',  n: 80,  ft8: 3573,   ft4: 3575},
+  {i: 2, name: '60m',  n: 60,  ft8: 5357,   ft4: 5357},
+  {i: 3, name: '40m',  n: 40,  ft8: 7074,   ft4: 7047.5},
+  {i: 4, name: '30m',  n: 30,  ft8: 10136,  ft4: 10140},
+  {i: 5, name: '20m',  n: 20,  ft8: 14074,  ft4: 14080},
+  {i: 6, name: '17m',  n: 17,  ft8: 18100,  ft4: 18104},
+  {i: 7, name: '15m',  n: 15,  ft8: 21074,  ft4: 21140},
+  {i: 8, name: '12m',  n: 12,  ft8: 24915,  ft4: 24919},
+  {i: 9, name: '10m',  n: 10,  ft8: 28074,  ft4: 28180},
+  {i: 10, name: '6m',  n: 6,   ft8: 50313,  ft4: 50318},
+  {i: 11, name: '2m',  n: 2,   ft8: 144174, ft4: 144170}
 ];
 var FIELDS = [
   'call','grid','cq_type','cq_ft','free_text','comment1','ignore_prefixes',
-  'offset','offset_src','radio','active_bands','band_sel','protocol_mode',
+  'offset','offset_src','radio','band_sel','protocol_mode',
   'skiptx1','autoseq_max_retry','rxtx_log'
 ];
 var CQ_TYPE_NAMES = ['CQ', 'SOTA', 'POTA', 'QRP', 'FD', 'FreeText'];
@@ -370,13 +390,69 @@ function fillBandSelect(cfg, sel) {
   if (sel.value !== cur && rows.length) sel.selectedIndex = 0;
 }
 
+// Parses active_bands the same lenient way rebuild_active_bands() (main.cpp)
+// does -- whitespace/comma/semicolon/slash separated band numbers, "m" suffix
+// tolerated implicitly since parseInt stops at the first non-digit. Empty or
+// unrecognized text means "no filter" there, which in practice (rebuild_
+// active_bands leaves g_active_band_indices covering every band when nothing
+// matched) means every band is active -- mirrored here as the `any` flag.
+function parseActiveBands(text) {
+  var want = {};
+  var any = false;
+  String(text || '').split(/[\s,;\/]+/).forEach(function (t) {
+    var n = parseInt(t, 10);
+    if (n > 0) { want[n] = true; any = true; }
+  });
+  return { want: want, any: any };
+}
+
+// One row per band: checkbox (membership in active_bands) plus an editable
+// frequency defaulting to BANDS[i]'s ft8/ft4 value when CONFIG carries no
+// explicit bandN=/ft4_band<n>= override. isFt4 is a parameter rather than
+// always reading cfg.protocol_mode because the Protocol <select> itself can
+// change it before Save -- see that element's onchange below -- and a
+// changed-but-unsaved protocol has no overrides of its own in this cfg
+// snapshot at all (CONFIG only ever reports the currently *active*
+// protocol's bandN keys), so switching shows defaults only. That is a real
+// limitation, not a bug: the client cannot know the other protocol's stored
+// overrides without the ADV actually rebooting into it.
+function buildBandRows(cfg, isFt4) {
+  var parsed = parseActiveBands(cfg.active_bands);
+  var container = document.getElementById('bandList');
+  container.innerHTML = '';
+  BANDS.forEach(function (b) {
+    var checked = parsed.any ? !!parsed.want[b.n] : true;
+    var override = bandFreq(cfg, b.i);
+    var freq = override || String(isFt4 ? b.ft4 : b.ft8);
+    var row = document.createElement('div');
+    row.className = 'setrow';
+    row.innerHTML =
+      '<div class=bandrow>' +
+        '<label class=bandcheck><input type=checkbox class=bandactive data-n="' + b.n + '"' +
+          (checked ? ' checked' : '') + '> ' + esc(b.name) + '</label>' +
+        '<span class=bandfreqwrap><input type=number step=0.1 class=bandfreq data-i="' + b.i + '" value="' +
+          esc(freq) + '"' + (checked ? '' : ' disabled') + '> kHz</span>' +
+      '</div>';
+    container.appendChild(row);
+  });
+  container.querySelectorAll('.bandactive').forEach(function (cb) {
+    cb.onchange = function () {
+      var wrap = cb.closest('.bandrow');
+      var freqInput = wrap && wrap.querySelector('.bandfreq');
+      if (freqInput) freqInput.disabled = !cb.checked;
+    };
+  });
+}
+
 function setForm(cfg) {
   // Rebuilding a <select>'s options while the operator has it open would
   // yank the picker out from under them -- same reason loadConfig() only
   // ever runs at boot or right after an explicit action, never on the
-  // periodic poll (see pollLiveStatus()/applyOperateLive() below).
+  // periodic poll (see pollLiveStatus()/applyOperateLive() below). Same
+  // reasoning covers rebuilding the band checkboxes/frequency inputs.
   fillBandSelect(cfg, document.getElementById('band_sel'));
   fillBandSelect(cfg, document.getElementById('opBandSel'));
+  buildBandRows(cfg, cfg.protocol_mode === 'FT4');
   FIELDS.forEach(function (k) {
     var el = document.getElementById(k);
     if (!el) return;
@@ -396,15 +472,29 @@ function setForm(cfg) {
 
 function formBody() {
   var lines = [];
+  var isFt4 = false;
   FIELDS.forEach(function (k) {
     var el = document.getElementById(k);
     if (!el) return;
     var v = el.value;
     if (k === 'protocol_mode') {
-      lines.push('protocol_mode=' + (v === 'FT4' ? 'FT4' : 'FT8'));
+      isFt4 = (v === 'FT4');
+      lines.push('protocol_mode=' + (isFt4 ? 'FT4' : 'FT8'));
       return;
     }
     lines.push(k + '=' + v);
+  });
+  // active_bands and per-band frequency come from the checkboxes/inputs
+  // buildBandRows() renders, not a plain FIELDS entry -- same reasoning
+  // as band_sel already had its own dropdown-shared path above.
+  var active = [];
+  document.querySelectorAll('#bandList .bandactive').forEach(function (cb) {
+    if (cb.checked) active.push(cb.getAttribute('data-n'));
+  });
+  lines.push('active_bands=' + active.join(' '));
+  document.querySelectorAll('#bandList .bandfreq').forEach(function (input) {
+    if (input.value === '') return;
+    lines.push((isFt4 ? 'ft4_band' : 'band') + input.getAttribute('data-i') + '=' + input.value);
   });
   return lines.join('\n');
 }
@@ -647,6 +737,13 @@ document.getElementById('opBandSel').onchange = function () {
 };
 document.getElementById('band_sel').onchange = function () {
   changeBand(this.value);
+};
+// protocol_mode is pending-until-reboot (matches MENU), so switching it here
+// can't retarget which set of overrides is live -- but the band rows should
+// still switch which defaults/prefix they show and save against, rather than
+// silently saving FT8 numbers under ft4_bandN or vice versa.
+document.getElementById('protocol_mode').onchange = function () {
+  buildBandRows(lastCfg, this.value === 'FT4');
 };
 document.getElementById('save').onclick = function () {
   saveConfig().catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
