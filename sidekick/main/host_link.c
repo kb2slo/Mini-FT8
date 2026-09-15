@@ -79,6 +79,7 @@ typedef struct {
     int16_t  dt_centis;                       // DECODE
     bool     is_cq;                           // DECODE
     bool     is_to_me;                        // DECODE
+    bool     is_recent_qso;                   // DECODE
     uint32_t decode_id;                       // DECODE -- names it for QUEUE_REPLY
     uint16_t entry_id;                        // QUEUE_ENTRY
     uint8_t  state;                           // QUEUE_ENTRY (AutoseqState wire value)
@@ -174,9 +175,10 @@ static esp_err_t get_events(httpd_req_t *req)
         case ENTRY_DECODE:
             n = snprintf(row, sizeof(row),
                          "%s{\"s\":%" PRIu32 ",\"t\":%" PRIu32 ",\"d\":1,\"x\":\"%s\","
-                         "\"id\":%" PRIu32 ",\"snr\":%d,\"hz\":%u,\"dt\":%.2f,\"cq\":%d,\"me\":%d}",
+                         "\"id\":%" PRIu32 ",\"snr\":%d,\"hz\":%u,\"dt\":%.2f,\"cq\":%d,\"me\":%d,\"rq\":%d}",
                          first ? "" : ",", e.seq, e.epoch_secs, esc, e.decode_id, e.snr,
-                         e.offset_hz, e.dt_centis / 100.0, e.is_cq ? 1 : 0, e.is_to_me ? 1 : 0);
+                         e.offset_hz, e.dt_centis / 100.0, e.is_cq ? 1 : 0, e.is_to_me ? 1 : 0,
+                         e.is_recent_qso ? 1 : 0);
             break;
         case ENTRY_QUEUE_ENTRY:
             json_escape(e.dxcall, esc_call, sizeof(esc_call));
@@ -347,14 +349,18 @@ static void file_entries_json_add(const porta_qso_entry_row_t *e)
     }
     char esc_band[PORTA_BAND_MAX * 6 + 1];
     char esc_call[PORTA_CALLSIGN_MAX * 6 + 1];
+    char esc_grid[PORTA_GRID_MAX * 6 + 1];
+    char esc_freq[PORTA_FREQ_MAX * 6 + 1];
     json_escape(e->band, esc_band, sizeof(esc_band));
     json_escape(e->call, esc_call, sizeof(esc_call));
-    char piece[sizeof(esc_band) + sizeof(esc_call) + 96];
+    json_escape(e->grid, esc_grid, sizeof(esc_grid));
+    json_escape(e->freq, esc_freq, sizeof(esc_freq));
+    char piece[sizeof(esc_band) + sizeof(esc_call) + sizeof(esc_grid) + sizeof(esc_freq) + 96];
     const int n = snprintf(piece, sizeof(piece),
                            "%s{\"time\":\"%s\",\"band\":\"%s\",\"call\":\"%s\","
-                           "\"rst_sent\":%d,\"rst_rcvd\":%d}",
+                           "\"rst_sent\":%d,\"rst_rcvd\":%d,\"grid\":\"%s\",\"freq\":\"%s\"}",
                            s_file_entries_json_first ? "" : ",", e->time_on, esc_band,
-                           esc_call, e->rst_sent, e->rst_rcvd);
+                           esc_call, e->rst_sent, e->rst_rcvd, esc_grid, esc_freq);
     if (n <= 0 || s_file_entries_json_len + (size_t)n + 3 >= FILE_ENTRIES_JSON_MAX) {
         return;
     }
@@ -879,9 +885,11 @@ static void porta_rx_task(void *arg)
                 e.dt_centis = ev.dt_centis;
                 e.is_cq = ev.is_cq;
                 e.is_to_me = ev.is_to_me;
-                ESP_LOGI("adv", "decode %+d dB %4u Hz %+.2f s %s%s%s",
+                e.is_recent_qso = ev.is_recent_qso;
+                ESP_LOGI("adv", "decode %+d dB %4u Hz %+.2f s %s%s%s%s",
                          e.snr, e.offset_hz, e.dt_centis / 100.0,
-                         e.is_to_me ? "[me] " : "", e.is_cq ? "[cq] " : "", e.text);
+                         e.is_to_me ? "[me] " : "", e.is_cq ? "[cq] " : "",
+                         e.is_recent_qso ? "[qso] " : "", e.text);
                 ring_push(&e);
             } else if (porta_proto_parse_queue_entry(&frame, &qe)) {
                 e.kind = ENTRY_QUEUE_ENTRY;

@@ -72,15 +72,20 @@ button:disabled{opacity:.45}
 .drow{padding:.4rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent);cursor:pointer}
 .drow .meta{font-family:ui-monospace,monospace;font-size:.7rem;color:GrayText;display:flex;justify-content:space-between}
 .drow .txt{font-size:.85rem;margin-top:.1rem}
-.drow .txt.strong{font-weight:700}
+/* Same precedence as ui.cpp's draw_rx_line(): to_me red, else recent_qso gray,
+   else cq green, else default text color. */
+.drow .txt.c-me{color:#ff0000;font-weight:700}
+.drow .txt.c-recent{color:#787878}
+.drow .txt.c-cq{color:#00c800}
 .drow .me{font-size:.65rem;font-weight:700;color:#1d4ed8;border:1px solid #93c5fd;border-radius:.3rem;padding:0 .3rem;margin-left:.3rem}
 
 /* ---- log ---- */
 #logList{padding-bottom:.5rem}
 .day{padding:.6rem 1rem .2rem;font-size:.75rem;font-weight:700;color:GrayText}
-.frow{padding:.5rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent);display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+.frow{padding:.5rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent);display:flex;justify-content:space-between;align-items:center}
 .frow .call{font-family:ui-monospace,monospace;font-weight:700}
-.frow .sub{font-size:.7rem;color:GrayText}
+.frow .grid{font-size:.65rem;font-weight:700;color:#1d4ed8;border:1px solid #93c5fd;border-radius:.3rem;padding:0 .3rem;margin-left:.3rem}
+.frow .sub{font-size:.7rem;color:GrayText;text-align:right}
 #logMore{padding:.7rem 1rem;text-align:center;color:GrayText;font-size:.8rem}
 </style>
 
@@ -119,9 +124,13 @@ button:disabled{opacity:.45}
   </section>
 
   <!-- ================= LOG ================= -->
+  <!-- One continuous list spanning every day file (RFC 0004 §11) -- day
+       dividers, lazy-loaded older entries, no file picker. loadMoreLog()
+       walks logFiles transparently: file boundaries are an implementation
+       detail, not something the operator navigates. -->
   <section id=view-log hidden>
     <div id=logList></div>
-    <div id=logMore hidden><button id=logMoreBtn type=button>Load older days</button></div>
+    <div id=logMore hidden><button id=logMoreBtn type=button>Load older QSOs</button></div>
   </section>
 
   <!-- ================= SETTINGS ================= -->
@@ -262,7 +271,11 @@ function showView(name) {
   document.querySelectorAll('#tabbar button').forEach(function (b) {
     b.classList.toggle('on', b.getAttribute('data-view') === name);
   });
-  if (name === 'log' && !logLoadedOnce) { loadLogFiles(); }
+  if (name === 'log' && !logLoadedOnce) {
+    logLoadedOnce = true;
+    document.getElementById('logList').innerHTML = '<p style="padding:0 1rem;color:GrayText">Loading…</p>';
+    loadMoreLog();
+  }
 }
 document.querySelectorAll('#tabbar button').forEach(function (b) {
   b.onclick = function () { showView(b.getAttribute('data-view')); };
@@ -636,10 +649,37 @@ function renderQueue() {
 
 // ===================== Operate: decode stream =====================
 
-var decodes = []; // newest first, capped
+var decodes = []; // newest batch first; within a batch, decode_sort.h order
 
 function fmtDt(dt) {
   return (dt > 0 ? '+' : '') + dt.toFixed(1);
+}
+
+// Mirrors main/decode_sort.h exactly (decode_sort_group/decode_sort_cmp):
+// to_me first, then fresh CQ (strongest SNR first), then other fresh, then
+// recent QSOs last. Applied per poll batch (one FT8 slot's worth of new
+// decodes), not a global re-sort of the whole rolling history -- the
+// firmware itself only ever sorts one slot's batch at a time.
+function decodeSortGroup(d) {
+  if (d.me) return 0;
+  if (d.rq) return 3;
+  if (d.cq) return 1;
+  return 2;
+}
+function decodeSortCmp(a, b) {
+  var ga = decodeSortGroup(a), gb = decodeSortGroup(b);
+  if (ga !== gb) return ga - gb;
+  if (ga === 1 && a.snr !== b.snr) return b.snr - a.snr;
+  return 0;
+}
+
+// Mirrors ui.cpp's draw_rx_line() color precedence: to_me, else recent_qso,
+// else cq, else default.
+function decodeColorClass(d) {
+  if (d.me) return 'c-me';
+  if (d.rq) return 'c-recent';
+  if (d.cq) return 'c-cq';
+  return '';
 }
 
 function renderDecodes() {
@@ -648,7 +688,7 @@ function renderDecodes() {
     return '<div class=drow data-id="' + d.id + '">' +
       '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
       (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
-      '<div class="txt' + (d.me ? ' strong' : '') + '">' + esc(d.x) +
+      '<div class="txt ' + decodeColorClass(d) + '">' + esc(d.x) +
       (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
       '</div>';
   }).join('');
@@ -665,11 +705,12 @@ function renderDecodes() {
 // a poll cannot wedge the server the way a long-lived stream could.
 
 var evSeq = 0;
+var pendingDecodes = []; // scratch: this poll's new decodes, sorted then merged in
 
 function applyEvent(e) {
   if (e.d === 1) {
-    decodes.unshift({ id: e.id, dt: e.dt, hz: e.hz, snr: e.snr, x: e.x, me: !!e.me });
-    if (decodes.length > 80) decodes.length = 80;
+    pendingDecodes.push({ id: e.id, dt: e.dt, hz: e.hz, snr: e.snr, x: e.x,
+                          me: !!e.me, cq: !!e.cq, rq: !!e.rq });
   } else if (e.d === 2) {
     if (e.st === 6) {
       delete queue[e.eid]; // IDLE is the removal signal (RFC 0004 §11)
@@ -686,7 +727,13 @@ async function pollEvents() {
     var r = await fetch('/api/events?since=' + evSeq, { cache: 'no-store' });
     var j = await r.json();
     if (j.events && j.events.length) {
+      pendingDecodes = [];
       j.events.forEach(applyEvent);
+      if (pendingDecodes.length) {
+        pendingDecodes.sort(decodeSortCmp);
+        decodes = pendingDecodes.concat(decodes);
+        if (decodes.length > 80) decodes.length = 80;
+      }
       renderQueue();
       renderDecodes();
       renderBeacon();
@@ -696,10 +743,26 @@ async function pollEvents() {
 }
 
 // ===================== Log =====================
+// One continuous list of QSOs spanning every day file (RFC 0004 §11): day
+// dividers, lazy-loaded, file boundaries invisible to the operator. Built
+// entirely on the existing per-file /api/log/files and /api/log/entries
+// endpoints -- loadMoreLog() walks day files in order and stitches their
+// entries into one scroll, fetching another file's worth whenever the
+// current one runs out.
 
 var logLoadedOnce = false;
-var logSkip = 0;
-var LOG_PAGE = 10;
+var logFiles = [];           // known day filenames, newest first
+var logFilesSkip = 0;        // pagination cursor into the file listing itself
+var logFilesExhausted = false;
+var logFileIdx = 0;          // logFiles[] index of the file currently draining
+var logEntrySkip = 0;        // pagination cursor within logFiles[logFileIdx]
+var logLastFile = null;      // last file a divider was drawn for
+var logDone = false;         // every file drained, nothing left anywhere
+var logLoading = false;
+var logRenderedAny = false;
+
+var LOG_ENTRY_FETCH = 10;    // rows per /api/log/entries call
+var LOG_ENTRY_GOAL = 15;     // rows to append per loadMoreLog() batch
 
 function dayLabel(name) {
   // name is "YYYYMMDD.adi" (qso_browse.cpp / file_list.cpp). Today gets a
@@ -716,60 +779,86 @@ function fmtRst(v) {
   return (v === -99 || v == null) ? '—' : (v > 0 ? '+' + v : String(v));
 }
 
-async function loadLogFiles() {
-  logLoadedOnce = true;
-  logSkip = 0;
-  document.getElementById('logList').innerHTML = '<p style="padding:0 1rem;color:GrayText">Loading…</p>';
-  await loadMoreLogFiles();
-}
-
-async function loadMoreLogFiles() {
+function appendLogRows(file, rows) {
   var list = document.getElementById('logList');
-  try {
-    var r = await fetch('/api/log/files?skip=' + logSkip + '&take=' + LOG_PAGE, { cache: 'no-store' });
-    var j = await r.json();
-    if (logSkip === 0) list.innerHTML = '';
-    if (!j.ok) {
-      list.innerHTML = '<p style="padding:0 1rem;color:GrayText">' + esc(j.why || 'load failed') + '</p>';
-      return;
-    }
-    var files = j.files || [];
-    files.forEach(function (name) {
-      var day = document.createElement('div');
-      day.innerHTML = '<div class=day>' + esc(dayLabel(name)) + '</div>' +
-        '<div class=frow data-file="' + esc(name) + '"><span class=call>' + esc(name) +
-        '</span><span class=sub>tap to browse</span></div>' +
-        '<div class=entries hidden></div>';
-      list.appendChild(day);
-      day.querySelector('.frow').onclick = function () { toggleLogEntries(name, day.querySelector('.entries')); };
-    });
-    document.getElementById('logMore').hidden = files.length < LOG_PAGE;
-    logSkip += files.length;
-  } catch (e) {
-    list.innerHTML = '<p style="padding:0 1rem;color:GrayText">no reply from sidekick</p>';
+  if (!logRenderedAny) list.innerHTML = ''; // clear the "Loading…" placeholder
+  if (file !== logLastFile) {
+    var day = document.createElement('div');
+    day.className = 'day';
+    day.textContent = dayLabel(file);
+    list.appendChild(day);
+    logLastFile = file;
   }
+  rows.forEach(function (q) {
+    var row = document.createElement('div');
+    row.className = 'frow';
+    row.innerHTML =
+      '<div><span class=call>' + esc(q.call) + '</span>' +
+      (q.grid ? '<span class=grid>' + esc(q.grid) + '</span>' : '') + '</div>' +
+      '<span class=sub>' + esc(q.time) + ' · ' + esc(q.band) +
+      (q.freq ? ' · ' + esc(q.freq) + ' MHz' : '') + ' · ' +
+      fmtRst(q.rst_sent) + '/' + fmtRst(q.rst_rcvd) + '</span>';
+    list.appendChild(row);
+    logRenderedAny = true;
+  });
 }
-document.getElementById('logMoreBtn').onclick = function () { loadMoreLogFiles(); };
 
-async function toggleLogEntries(file, el) {
-  if (!el.hidden) { el.hidden = true; return; }
-  el.hidden = false;
-  el.innerHTML = '<p style="padding:.3rem 1rem;color:GrayText">Loading…</p>';
+// Fetches the next page of day filenames the first time (or another page
+// once logFileIdx runs off the end of what's been fetched so far). A no-op
+// once every file the ADV has is known.
+async function ensureLogFiles() {
+  if (logFileIdx < logFiles.length || logFilesExhausted) return;
+  var r = await fetch('/api/log/files?skip=' + logFilesSkip + '&take=30', { cache: 'no-store' });
+  var j = await r.json();
+  if (!j.ok) throw new Error(j.why || 'file list failed');
+  var files = j.files || [];
+  logFiles = logFiles.concat(files);
+  logFilesSkip += files.length;
+  if (files.length < 30) logFilesExhausted = true;
+}
+
+async function loadMoreLog() {
+  if (logLoading || logDone) return;
+  logLoading = true;
+  document.getElementById('logMoreBtn').disabled = true;
+  var appended = 0;
   try {
-    var r = await fetch('/api/log/entries?file=' + encodeURIComponent(file) + '&take=30', { cache: 'no-store' });
-    var j = await r.json();
-    if (!j.ok) { el.innerHTML = '<p style="padding:.3rem 1rem;color:GrayText">' + esc(j.why || 'load failed') + '</p>'; return; }
-    var rows = j.entries || [];
-    if (!rows.length) { el.innerHTML = '<p style="padding:.3rem 1rem;color:GrayText">No QSOs</p>'; return; }
-    el.innerHTML = rows.map(function (q) {
-      return '<div class=frow style="cursor:default"><span class=call>' + esc(q.call) +
-        '</span><span class=sub>' + esc(q.time) + ' · ' + esc(q.band) + ' · ' +
-        fmtRst(q.rst_sent) + '/' + fmtRst(q.rst_rcvd) + '</span></div>';
-    }).join('');
+    while (appended < LOG_ENTRY_GOAL) {
+      await ensureLogFiles();
+      if (logFileIdx >= logFiles.length) { logDone = true; break; }
+      var file = logFiles[logFileIdx];
+      var r = await fetch('/api/log/entries?file=' + encodeURIComponent(file) +
+                          '&skip=' + logEntrySkip + '&take=' + LOG_ENTRY_FETCH, { cache: 'no-store' });
+      var j = await r.json();
+      if (!j.ok) throw new Error(j.why || 'entries failed');
+      var rows = j.entries || [];
+      if (rows.length) {
+        appendLogRows(file, rows);
+        appended += rows.length;
+        logEntrySkip += rows.length;
+      }
+      if (rows.length < LOG_ENTRY_FETCH) {
+        // This file is exhausted -- move on to the next one.
+        logFileIdx++;
+        logEntrySkip = 0;
+      }
+    }
   } catch (e) {
-    el.innerHTML = '<p style="padding:.3rem 1rem;color:GrayText">no reply from sidekick</p>';
+    if (!logRenderedAny) {
+      document.getElementById('logList').innerHTML =
+        '<p style="padding:0 1rem;color:GrayText">no reply from sidekick</p>';
+    }
+  } finally {
+    logLoading = false;
+    if (logDone && !logRenderedAny) {
+      document.getElementById('logList').innerHTML =
+        '<p style="padding:0 1rem;color:GrayText">No QSOs</p>';
+    }
+    document.getElementById('logMore').hidden = logDone;
+    document.getElementById('logMoreBtn').disabled = false;
   }
 }
+document.getElementById('logMoreBtn').onclick = function () { loadMoreLog(); };
 
 // ===================== boot =====================
 
