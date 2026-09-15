@@ -660,6 +660,7 @@ static void httpd_start_status(void)
     host_link_register_uris(s_httpd);
     web_bundle_register(s_httpd);
     bundle_host_register(s_httpd);
+    web_fs_register_rehydrate(s_httpd);
     // Static GET /* last so exact /api/... routes win.
     web_fs_register_static(s_httpd);
 }

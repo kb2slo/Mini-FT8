@@ -34,6 +34,7 @@ button{width:100%;padding:.7rem;font-size:1rem;margin-top:1.5rem}
 <p><a href="/update">Install / update app &rarr;</a></p>
 
 <button id=f>Forget WiFi</button>
+<button id=rh type=button>Restore seed pages</button>
 <p id=m></p>
 
 <script src=/pairing.js></script>
@@ -59,6 +60,40 @@ document.getElementById('f').onclick = async function () {
   } else {
     document.body.innerHTML = '<h2>Forgotten</h2>'
       + '<p>Restarting into setup. Look for the <b>MiniFT8-SK-…</b> network.</p>'
+  }
+}
+
+// In-page confirm (not window.confirm): phones often dismiss the native
+// dialog with no status text and no POST, which looked like a dead button.
+var rhArmed = false;
+document.getElementById('rh').onclick = async function () {
+  if (!MiniFT8Pairing.getToken()) {
+    rhArmed = false;
+    m.textContent = 'Press the sidekick button to pair first.';
+    MiniFT8Pairing.needsReauth();
+    return;
+  }
+  if (!rhArmed) {
+    rhArmed = true;
+    m.textContent = 'Tap Restore again to rewrite seed pages (app files kept).';
+    return;
+  }
+  rhArmed = false;
+  m.textContent = 'Restoring…';
+  try {
+    var r = await MiniFT8Pairing.authFetch('/api/web/rehydrate', { method: 'POST' });
+    if (r.status == 401) {
+      MiniFT8Pairing.needsReauth();
+      m.textContent = 'Press the sidekick button to pair';
+      return;
+    }
+    if (!r.ok) {
+      m.textContent = 'Restore failed: ' + (await r.text());
+      return;
+    }
+    m.textContent = 'Seed pages restored from firmware.';
+  } catch (e) {
+    m.textContent = 'Restore error: ' + (e && e.message ? e.message : e);
   }
 }
 </script>
