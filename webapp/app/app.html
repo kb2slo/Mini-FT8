@@ -1727,7 +1727,16 @@ var STATE_CACHE_KEY = 'minift8_state_v1';
 function saveStateCache() {
   try {
     localStorage.setItem(STATE_CACHE_KEY, JSON.stringify({
-      lastCfg: lastCfg, queue: queue, decodeSlots: decodeSlots,
+      lastCfg: lastCfg, queue: queue,
+      // Each decodeSlots entry is an array whose .ts/.band/.freqKhz are
+      // properties *on the array object*, not indexed elements -- confirmed
+      // separately, not assumed: JSON.stringify on an array serializes only
+      // indexed elements, silently dropping any other own property. Without
+      // this unwrap, every restored slot's header would compute
+      // fmtSlotDateTime(undefined) -- an Invalid Date, not the real one.
+      decodeSlots: decodeSlots.map(function (slot) {
+        return { ts: slot.ts, band: slot.band, freqKhz: slot.freqKhz, rows: slot };
+      }),
       slotState: slotState, txHud: txHud
     }));
   } catch (e) { /* private browsing, quota, or unavailable -- no seed next time */ }
@@ -1739,7 +1748,15 @@ function loadStateCache() {
     var s = JSON.parse(raw);
     if (s.lastCfg) lastCfg = s.lastCfg;
     if (s.queue) queue = s.queue;
-    if (s.decodeSlots) decodeSlots = s.decodeSlots;
+    if (s.decodeSlots) {
+      decodeSlots = s.decodeSlots.map(function (w) {
+        var slot = w.rows || [];
+        slot.ts = w.ts;
+        slot.band = w.band;
+        slot.freqKhz = w.freqKhz;
+        return slot;
+      });
+    }
     if (s.slotState) slotState = s.slotState;
     if (s.txHud) txHud = s.txHud;
   } catch (e) { /* corrupt or unavailable -- boot normally, no seed */ }
