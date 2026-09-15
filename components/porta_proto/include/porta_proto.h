@@ -86,6 +86,10 @@ typedef enum {
     PORTA_MSG_CONFIG_VALUE = 0x08,
     PORTA_MSG_ACTION       = 0x09,  // namespace: verb in the payload
     PORTA_MSG_EVENT        = 0x0A,  // namespace: subtype in the payload
+    // FILE_LIST / FILE_READ (sidekick -> host) request one page (skip/take)
+    // of day-file names or parsed QSO rows; the reply is zero or more
+    // FILE_DATA frames -- one row each -- followed by ACK/NAK carrying the
+    // request's own type as verb. See the FILE_* payloads section.
     PORTA_MSG_FILE_LIST    = 0x0B,
     PORTA_MSG_FILE_READ    = 0x0C,
     PORTA_MSG_FILE_DATA    = 0x0D,
@@ -177,8 +181,10 @@ bool porta_proto_parse_hello(const porta_frame_t *f, uint8_t *protocol_version_o
 // bytes to say something already known.
 
 typedef enum {
-    PORTA_EVT_LOG    = 0x01,  // one line of the host's on-screen log
-    PORTA_EVT_DECODE = 0x02,  // one decoded FT8/FT4 message
+    PORTA_EVT_LOG         = 0x01,  // one line of the host's on-screen log
+    PORTA_EVT_DECODE      = 0x02,  // one decoded FT8/FT4 message
+    PORTA_EVT_QUEUE_ENTRY = 0x03,  // one autoseq queue row: added, changed, or removed
+    PORTA_EVT_SLOT_STATE  = 0x04,  // small scalars: slot parity, beacon mode, resolved TX offset
 } porta_event_subtype_t;
 
 #define PORTA_EVENT_TEXT_MAX 64  // matches RX_TEXT_MAX on the host
@@ -195,6 +201,9 @@ bool porta_proto_parse_log(const porta_frame_t *f, uint32_t *epoch_secs_out,
 
 typedef struct {
     uint32_t epoch_secs;   // UTC seconds, 0 when the host's clock is not set
+    uint32_t decode_id;    // monotonic, assigned by the host at emit -- names this
+                            // decode for a later QUEUE_REPLY action instead of making
+                            // the browser re-parse rendered text back into a message
     char     text[PORTA_EVENT_TEXT_MAX + 1];
     int8_t   snr;          // FT8 reports span roughly -24..+50, so int8 is ample
     uint16_t offset_hz;    // 200..3000 in practice
@@ -206,6 +215,56 @@ typedef struct {
 
 size_t porta_proto_encode_decode(const porta_decode_event_t *d, uint8_t *out, size_t out_cap);
 bool porta_proto_parse_decode(const porta_frame_t *f, porta_decode_event_t *out);
+
+// --- QUEUE_ENTRY / SLOT_STATE payloads ------------------------------------
+// Both are EVENT subtypes and share the subtype+epoch envelope, same as LOG
+// and DECODE above.
+//
+// QUEUE_ENTRY reports one autoseq context. `state` is the wire form of
+// AutoseqState (main/autoseq.h): 0=CALLING, 1=REPLYING, 2=REPORT,
+// 3=ROGER_REPORT, 4=ROGERS, 5=SIGNOFF, 6=IDLE -- and IDLE *is* the removal
+// signal, since that is already what the state means on the host (evicted by
+// sort_and_clean). No separate "removed" flag is needed.
+//
+// `entry_id` is a stable identity assigned when the context is created, not
+// a queue position: the queue re-sorts by priority (autoseq.cpp
+// compare_ctx), so a browser snapshot's row index can point at a different
+// context by the time a cancel arrives. QUEUE_CANCEL below addresses by this
+// id for the same reason.
+//
+// AUTOSEQ_MAX_QUEUE is 30 (active + inactive), not a number that needs
+// paging on its own -- the whole queue fits comfortably in individual
+// per-change frames.
+
+#define PORTA_CALLSIGN_MAX 16u
+
+typedef struct {
+    uint32_t epoch_secs;
+    uint16_t entry_id;
+    uint8_t  state;         // AutoseqState wire value
+    uint8_t  retry_count;
+    uint8_t  retry_limit;
+    char     dxcall[PORTA_CALLSIGN_MAX + 1];
+} porta_queue_entry_event_t;
+
+size_t porta_proto_encode_queue_entry(const porta_queue_entry_event_t *q,
+                                      uint8_t *out, size_t out_cap);
+bool porta_proto_parse_queue_entry(const porta_frame_t *f, porta_queue_entry_event_t *out);
+
+// SLOT_STATE is global scalars, not any one queue entry's: `slot_parity` is
+// the *next* slot boundary (0=even, 1=odd), and `resolved_offset_hz` is what
+// the next CQ/beacon transmission would use -- an established QSO's own
+// offset already lives on its QsoContext and travels in QUEUE_ENTRY instead.
+typedef struct {
+    uint32_t epoch_secs;
+    uint8_t  slot_parity;
+    uint8_t  beacon_mode;        // BeaconMode wire value: 0=OFF, 1=EVEN, 2=ODD
+    uint16_t resolved_offset_hz;
+} porta_slot_state_event_t;
+
+size_t porta_proto_encode_slot_state(const porta_slot_state_event_t *s,
+                                     uint8_t *out, size_t out_cap);
+bool porta_proto_parse_slot_state(const porta_frame_t *f, porta_slot_state_event_t *out);
 
 // --- ACTION payloads -----------------------------------------------------
 // ACTION is the other namespace: payload[0] is the verb, the rest is
@@ -220,6 +279,9 @@ typedef enum {
     PORTA_ACT_TX_CANCEL = 0x03,  // abort in-flight / clear armed TX
     PORTA_ACT_CONNECT   = 0x04,  // start UAC + CAT sync (STATUS key 2)
     PORTA_ACT_TUNE      = 0x05,  // payload: u8 on (STATUS key 4)
+    PORTA_ACT_BEACON       = 0x06,  // payload: u8 mode (STATUS key 1's 3-way cycle)
+    PORTA_ACT_QUEUE_CANCEL = 0x07,  // payload: u16 entry_id (not a list index)
+    PORTA_ACT_QUEUE_REPLY  = 0x08,  // payload: u32 decode_id
 } porta_action_verb_t;
 
 // The browser is the clock source in a headless build: it is the only device
@@ -248,6 +310,22 @@ bool porta_proto_parse_connect(const porta_frame_t *f);
 // Tune: verb + u8 on (1 = TX tone, 0 = RX).
 size_t porta_proto_encode_tune(bool on, uint8_t *out, size_t out_cap);
 bool porta_proto_parse_tune(const porta_frame_t *f, bool *on_out);
+
+// Beacon: verb + u8 mode. `mode` is BeaconMode's own wire value
+// (0=OFF/1=EVEN/2=ODD, main.cpp's STATUS-key-1 cycle), so the browser sends
+// back exactly the value it displayed, no translation either side.
+size_t porta_proto_encode_beacon(uint8_t mode, uint8_t *out, size_t out_cap);
+bool porta_proto_parse_beacon(const porta_frame_t *f, uint8_t *mode_out);
+
+// Queue cancel: verb + u16 entry_id. See porta_queue_entry_event_t above for
+// why this is an id and not a queue position.
+size_t porta_proto_encode_queue_cancel(uint16_t entry_id, uint8_t *out, size_t out_cap);
+bool porta_proto_parse_queue_cancel(const porta_frame_t *f, uint16_t *entry_id_out);
+
+// Queue reply: verb + u32 decode_id, naming a decode the browser was shown
+// rather than re-sending its text.
+size_t porta_proto_encode_queue_reply(uint32_t decode_id, uint8_t *out, size_t out_cap);
+bool porta_proto_parse_queue_reply(const porta_frame_t *f, uint32_t *decode_id_out);
 
 size_t porta_proto_encode_ack(uint8_t verb, uint8_t *out, size_t out_cap);
 
@@ -282,6 +360,64 @@ size_t porta_proto_encode_config_value(const char *key, const char *value,
 bool porta_proto_parse_config_get(const porta_frame_t *f, char *key_out);
 bool porta_proto_parse_config_set(const porta_frame_t *f, char *key_out, char *value_out);
 bool porta_proto_parse_config_value(const porta_frame_t *f, char *key_out, char *value_out);
+
+// --- FILE_LIST / FILE_READ / FILE_DATA payloads ---------------------------
+// FILE_LIST and FILE_READ (sidekick -> host) request one page -- skip/take,
+// the same shape main/storage/qso_browse.h's QsoBrowsePager already uses --
+// reusing that pager instead of inventing wire-level pagination a second
+// time. The reply is zero or more FILE_DATA frames, one row each (so a short
+// buffer can never leave a row half-written), followed by ACK/NAK carrying
+// the request's own message type as verb -- the same "burst then ACK" shape
+// CONFIG_GET-all already established. Fewer rows than `take` arriving before
+// the ACK means end of list/file; the caller pages further with a higher
+// `skip`, exactly like the pager's own `has_next`.
+//
+// FILE_READ ships *parsed* QSO rows (QsoLogEntry), never raw ADIF bytes --
+// ADIF is verbose text and the parser already exists and is host-tested
+// (qso_browse_pager_feed); re-parsing it in JavaScript would cost wire
+// budget and correctness for nothing.
+
+typedef enum {
+    PORTA_FILE_LIST_QSO_DAILY = 0x01,  // matches FileListKind::QsoDaily
+} porta_file_list_kind_t;
+
+typedef enum {
+    PORTA_FILE_DATA_NAME  = 0x01,  // one FILE_LIST row: a day-file name
+    PORTA_FILE_DATA_ENTRY = 0x02,  // one FILE_READ row: one parsed QSO
+} porta_file_data_kind_t;
+
+#define PORTA_FILENAME_MAX 32u
+#define PORTA_BAND_MAX 8u
+
+size_t porta_proto_encode_file_list_req(uint8_t kind, uint16_t skip, uint8_t take,
+                                        uint8_t *out, size_t out_cap);
+bool porta_proto_parse_file_list_req(const porta_frame_t *f, uint8_t *kind_out,
+                                     uint16_t *skip_out, uint8_t *take_out);
+
+// `filename_out` must hold PORTA_FILENAME_MAX + 1 bytes.
+size_t porta_proto_encode_file_read_req(const char *filename, uint16_t skip, uint8_t take,
+                                        uint8_t *out, size_t out_cap);
+bool porta_proto_parse_file_read_req(const porta_frame_t *f, char *filename_out,
+                                     uint16_t *skip_out, uint8_t *take_out);
+
+// `name_out` must hold PORTA_FILENAME_MAX + 1 bytes.
+size_t porta_proto_encode_file_name_row(const char *name, uint8_t *out, size_t out_cap);
+bool porta_proto_parse_file_name_row(const porta_frame_t *f, char *name_out);
+
+// time_on is "HH:MM" (qso_browse.cpp's own width -- "??:??" when unknown).
+// rst_sent/rst_rcvd use -99 for "no report", the same sentinel
+// QsoContext::snr_tx/snr_rx already use, rather than a separate has-flag.
+typedef struct {
+    char    time_on[6];
+    char    band[PORTA_BAND_MAX + 1];
+    char    call[PORTA_CALLSIGN_MAX + 1];
+    int8_t  rst_sent;
+    int8_t  rst_rcvd;
+} porta_qso_entry_row_t;
+
+size_t porta_proto_encode_file_entry_row(const porta_qso_entry_row_t *e,
+                                         uint8_t *out, size_t out_cap);
+bool porta_proto_parse_file_entry_row(const porta_frame_t *f, porta_qso_entry_row_t *out);
 
 #ifdef __cplusplus
 }

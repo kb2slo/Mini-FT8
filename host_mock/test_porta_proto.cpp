@@ -345,6 +345,7 @@ static void test_decode_event()
     porta_decode_event_t in = {};
     std::snprintf(in.text, sizeof(in.text), "CQ DX W1AW FN31");
     in.epoch_secs = 1789012345u;
+    in.decode_id = 424242u;    // non-zero, to catch a field that silently reads as zero
     in.snr = -21;              // negative, to catch an unsigned round-trip
     in.offset_hz = 2750;       // above 2047, to catch a truncated width
     in.dt_centis = -145;       // negative, likewise
@@ -358,6 +359,7 @@ static void test_decode_event()
         porta_decode_event_t out;
         check(porta_proto_parse_decode(&got[0], &out), "decode event parses");
         check(std::string(out.text) == "CQ DX W1AW FN31", "text round-trips");
+        check(out.decode_id == 424242u, "decode_id round-trips");
         check(out.snr == -21, "negative SNR round-trips");
         check(out.offset_hz == 2750, "offset above 2047 round-trips");
         check(out.dt_centis == -145, "negative dt round-trips");
@@ -376,6 +378,90 @@ static void test_decode_event()
     stub.payload[0] = PORTA_EVT_DECODE;
     porta_decode_event_t out;
     check(!porta_proto_parse_decode(&stub, &out), "a short decode event is rejected");
+}
+
+// QUEUE_ENTRY reports one autoseq context. entry_id is the load-bearing field:
+// it must survive independently of state/retry/dxcall, since QUEUE_CANCEL
+// addresses by this id rather than by list position (the queue re-sorts by
+// priority, so a position is not safe to cancel by).
+static void test_queue_entry_event()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    porta_queue_entry_event_t in = {};
+    in.epoch_secs = 1789012345u;
+    in.entry_id = 4242;
+    in.state = 1;            // REPLYING
+    in.retry_count = 2;
+    in.retry_limit = 5;
+    std::snprintf(in.dxcall, sizeof(in.dxcall), "KB2SLO/P");  // exercise a portable suffix
+
+    size_t n = porta_proto_encode_queue_entry(&in, buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "queue_entry event decodes");
+    if (got.size() == 1) {
+        porta_queue_entry_event_t out;
+        check(porta_proto_parse_queue_entry(&got[0], &out), "queue_entry event parses");
+        check(out.entry_id == 4242, "entry_id round-trips");
+        check(out.state == 1, "state round-trips");
+        check(out.retry_count == 2 && out.retry_limit == 5, "retry counters round-trip");
+        check(std::string(out.dxcall) == "KB2SLO/P", "dxcall with a portable suffix round-trips");
+
+        porta_decode_event_t dec;
+        check(!porta_proto_parse_decode(&got[0], &dec), "a queue_entry event is not a decode event");
+    }
+
+    // IDLE (state 6) is the removal signal, not a separate flag -- must round
+    // trip like any other state rather than being special-cased away.
+    porta_decoder_init(&d);
+    in.state = 6;
+    n = porta_proto_encode_queue_entry(&in, buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    if (got.size() == 1) {
+        porta_queue_entry_event_t out;
+        check(porta_proto_parse_queue_entry(&got[0], &out) && out.state == 6,
+              "IDLE state round-trips like any other -- it is the removal signal");
+    }
+
+    // A dxcall_len claiming more bytes than the frame actually carries must be
+    // rejected rather than read past the payload.
+    porta_frame_t stub = {};
+    stub.type = PORTA_MSG_EVENT;
+    stub.len = 11;  // fixed part only
+    stub.payload[0] = PORTA_EVT_QUEUE_ENTRY;
+    stub.payload[10] = 5;  // claims a 5-byte dxcall that is not there
+    porta_queue_entry_event_t out;
+    check(!porta_proto_parse_queue_entry(&stub, &out), "a truncated dxcall is rejected");
+}
+
+static void test_slot_state_event()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    porta_slot_state_event_t in = {};
+    in.epoch_secs = 1789012345u;
+    in.slot_parity = 1;
+    in.beacon_mode = 2;  // ODD
+    in.resolved_offset_hz = 1834;
+
+    size_t n = porta_proto_encode_slot_state(&in, buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "slot_state event decodes");
+    if (got.size() == 1) {
+        porta_slot_state_event_t out;
+        check(porta_proto_parse_slot_state(&got[0], &out), "slot_state event parses");
+        check(out.slot_parity == 1, "slot_parity round-trips");
+        check(out.beacon_mode == 2, "beacon_mode round-trips");
+        check(out.resolved_offset_hz == 1834, "resolved_offset_hz round-trips");
+
+        porta_queue_entry_event_t qe;
+        check(!porta_proto_parse_queue_entry(&got[0], &qe),
+              "a slot_state event is not a queue_entry event");
+    }
 }
 
 // ACTION is the control direction, and the first thing to cross it is the
@@ -489,6 +575,63 @@ static void test_action_connect_and_tune()
     }
 }
 
+static void test_action_beacon()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    // Mode is BeaconMode's own wire value (0=OFF/1=EVEN/2=ODD) -- pin all
+    // three so a translation slip in either direction shows up here rather
+    // than as a beacon that starts on the wrong parity in the field.
+    for (uint8_t mode = 0; mode <= 2; ++mode) {
+        porta_decoder_init(&d);
+        size_t n = porta_proto_encode_beacon(mode, buf, sizeof(buf));
+        auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+        check(got.size() == 1 && got[0].len == 2, "beacon is verb + mode");
+        if (got.size() == 1) {
+            uint8_t out = 99;
+            check(porta_proto_parse_beacon(&got[0], &out) && out == mode,
+                  "beacon mode round-trips");
+        }
+    }
+
+    porta_decoder_init(&d);
+    size_t n = porta_proto_encode_beacon(1, buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    if (got.size() == 1) {
+        check(!porta_proto_parse_tune(&got[0], nullptr), "beacon is not tune");
+    }
+}
+
+static void test_action_queue_cancel_and_reply()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    size_t n = porta_proto_encode_queue_cancel(4242, buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1 && got[0].len == 3, "queue_cancel is verb + u16 entry_id");
+    if (got.size() == 1) {
+        uint16_t id = 0;
+        check(porta_proto_parse_queue_cancel(&got[0], &id) && id == 4242,
+              "queue_cancel entry_id round-trips");
+        check(!porta_proto_parse_beacon(&got[0], nullptr), "queue_cancel is not beacon");
+    }
+
+    porta_decoder_init(&d);
+    n = porta_proto_encode_queue_reply(0xDEADBEEFu, buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1 && got[0].len == 5, "queue_reply is verb + u32 decode_id");
+    if (got.size() == 1) {
+        uint32_t id = 0;
+        check(porta_proto_parse_queue_reply(&got[0], &id) && id == 0xDEADBEEFu,
+              "queue_reply decode_id round-trips, including the high bit");
+        check(!porta_proto_parse_queue_cancel(&got[0], nullptr), "queue_reply is not queue_cancel");
+    }
+}
+
 static void test_ack_and_nak()
 {
     porta_decoder_t d;
@@ -570,6 +713,108 @@ static void test_config_kv()
           "set refuses null value");
 }
 
+// FILE_LIST / FILE_READ page like main/storage/qso_browse.h's QsoBrowsePager
+// (skip/take), and FILE_DATA carries one row per frame -- a NAME row for
+// FILE_LIST, an ENTRY row for FILE_READ, discriminated by the same
+// first-payload-byte pattern EVENT and ACTION already use.
+static void test_file_list_and_read_requests()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    size_t n = porta_proto_encode_file_list_req(PORTA_FILE_LIST_QSO_DAILY, 3, 6, buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "file_list request encodes");
+    if (got.size() == 1) {
+        uint8_t kind = 0; uint16_t skip = 0; uint8_t take = 0;
+        check(porta_proto_parse_file_list_req(&got[0], &kind, &skip, &take),
+              "file_list request parses");
+        check(kind == PORTA_FILE_LIST_QSO_DAILY, "kind round-trips");
+        check(skip == 3 && take == 6, "skip/take round-trip");
+    }
+
+    porta_decoder_init(&d);
+    n = porta_proto_encode_file_read_req("20260914.adi", 12, 6, buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "file_read request encodes");
+    if (got.size() == 1) {
+        char name[PORTA_FILENAME_MAX + 1] = {};
+        uint16_t skip = 0; uint8_t take = 0;
+        check(porta_proto_parse_file_read_req(&got[0], name, &skip, &take),
+              "file_read request parses");
+        check(std::string(name) == "20260914.adi", "filename round-trips");
+        check(skip == 12 && take == 6, "file_read skip/take round-trip");
+    }
+
+    check(porta_proto_encode_file_read_req("", 0, 6, buf, sizeof(buf)) == 0,
+          "file_read refuses an empty filename");
+    check(porta_proto_encode_file_read_req(nullptr, 0, 6, buf, sizeof(buf)) == 0,
+          "file_read refuses a null filename");
+}
+
+static void test_file_data_rows()
+{
+    porta_decoder_t d;
+    porta_decoder_init(&d);
+    uint8_t buf[PORTA_PROTO_MAX_FRAME];
+
+    size_t n = porta_proto_encode_file_name_row("20260914.adi", buf, sizeof(buf));
+    auto got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "file_name row encodes");
+    if (got.size() == 1) {
+        char name[PORTA_FILENAME_MAX + 1] = {};
+        check(porta_proto_parse_file_name_row(&got[0], name), "file_name row parses");
+        check(std::string(name) == "20260914.adi", "name round-trips");
+
+        porta_qso_entry_row_t entry;
+        check(!porta_proto_parse_file_entry_row(&got[0], &entry),
+              "a name row is not an entry row");
+    }
+
+    porta_qso_entry_row_t in = {};
+    std::snprintf(in.time_on, sizeof(in.time_on), "19:04");
+    std::snprintf(in.band, sizeof(in.band), "20m");
+    std::snprintf(in.call, sizeof(in.call), "W1ABC");
+    in.rst_sent = 3;
+    in.rst_rcvd = -11;
+
+    porta_decoder_init(&d);
+    n = porta_proto_encode_file_entry_row(&in, buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    check(got.size() == 1, "file_entry row encodes");
+    if (got.size() == 1) {
+        porta_qso_entry_row_t out;
+        check(porta_proto_parse_file_entry_row(&got[0], &out), "file_entry row parses");
+        check(std::string(out.time_on) == "19:04", "time_on round-trips");
+        check(std::string(out.band) == "20m", "band round-trips");
+        check(std::string(out.call) == "W1ABC", "call round-trips");
+        check(out.rst_sent == 3 && out.rst_rcvd == -11, "rst values round-trip, including negative");
+    }
+
+    // No report uses -99, the same sentinel QsoContext::snr_tx/snr_rx already
+    // use -- must survive round-trip like any other value, not be special-cased.
+    porta_decoder_init(&d);
+    in.rst_sent = -99;
+    in.rst_rcvd = -99;
+    n = porta_proto_encode_file_entry_row(&in, buf, sizeof(buf));
+    got = run(&d, std::vector<uint8_t>(buf, buf + n));
+    if (got.size() == 1) {
+        porta_qso_entry_row_t out;
+        check(porta_proto_parse_file_entry_row(&got[0], &out) &&
+              out.rst_sent == -99 && out.rst_rcvd == -99,
+              "the no-report sentinel round-trips");
+    }
+
+    // qso_browse.cpp always yields "HH:MM" or "??:??" -- a caller passing
+    // anything else is a programming error, not a wire condition, and must
+    // be refused at encode rather than silently truncated or padded.
+    porta_qso_entry_row_t bad_time = in;
+    std::snprintf(bad_time.time_on, sizeof(bad_time.time_on), "1");
+    check(porta_proto_encode_file_entry_row(&bad_time, buf, sizeof(buf)) == 0,
+          "encode refuses a malformed time_on");
+}
+
 int main()
 {
     test_round_trip();
@@ -586,11 +831,17 @@ int main()
     test_log_event();
     test_unset_clock_round_trips();
     test_decode_event();
+    test_queue_entry_event();
+    test_slot_state_event();
     test_action_set_clock();
     test_action_tx_free_and_cancel();
     test_action_connect_and_tune();
+    test_action_beacon();
+    test_action_queue_cancel_and_reply();
     test_ack_and_nak();
     test_config_kv();
+    test_file_list_and_read_requests();
+    test_file_data_rows();
 
     if (g_fail) {
         std::printf("FAILED: %d check(s)\n", g_fail);
