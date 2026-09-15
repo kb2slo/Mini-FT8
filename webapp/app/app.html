@@ -53,7 +53,8 @@ button:disabled{opacity:.45}
 .dot.bad{background:#ef4444}
 #clockDotWrap{cursor:pointer}
 #opConnRow button{font-size:.85rem}
-#beaconBtn{width:100%;margin-top:.6rem;text-align:left}
+#opBeaconRow{display:flex;justify-content:space-between;align-items:center;margin-top:.6rem;font-size:.85rem}
+#beaconSel{width:auto;margin-top:0;padding:.25rem .4rem;font-size:.8rem;font-family:inherit}
 
 /* ---- operate: TX HUD ---- */
 #opTxHud{padding:.6rem 1rem;border-bottom:1px solid color-mix(in srgb, GrayText 30%, transparent);background:color-mix(in srgb, #ef4444 8%, transparent)}
@@ -138,7 +139,14 @@ button:disabled{opacity:.45}
         <button id=opConnect type=button disabled>Connect</button>
         <button id=opTune type=button disabled>Tune: Off</button>
       </div>
-      <button id=beaconBtn type=button disabled>Beacon: —</button>
+      <div id=opBeaconRow>
+        <span id=beaconCqName>Beacon: —</span>
+        <select id=beaconSel disabled>
+          <option value=0>Off</option>
+          <option value=1>Even</option>
+          <option value=2>Odd</option>
+        </select>
+      </div>
       <div id=opLive><select id=opBandSel disabled></select><span id=opOffset>TX: —</span></div>
     </div>
 
@@ -278,7 +286,6 @@ var FIELDS = [
   'skiptx1','autoseq_max_retry','rxtx_log'
 ];
 var CQ_TYPE_NAMES = ['CQ', 'SOTA', 'POTA', 'QRP', 'FD', 'FreeText'];
-var BEACON_NAMES = ['Off', 'Even', 'Odd'];
 // AutoseqState wire values (main/autoseq.h). 6 = IDLE = remove from display.
 var QUEUE_STATE_NAMES = ['CALLING', 'REPLYING', 'REPORT', 'ROGER REPORT', 'ROGERS', 'SIGNOFF'];
 
@@ -623,7 +630,7 @@ function enableWrites(on) {
   document.getElementById('save').disabled = !on;
   document.getElementById('opConnect').disabled = !on;
   document.getElementById('opTune').disabled = !on;
-  document.getElementById('beaconBtn').disabled = !on;
+  document.getElementById('beaconSel').disabled = !on;
   document.getElementById('opBandSel').disabled = !on;
 }
 
@@ -688,12 +695,15 @@ setInterval(renderCountdown, 250);
 var slotState = null; // last SLOT_STATE event: {sp, bm, hz}
 
 function renderBeacon() {
-  var btn = document.getElementById('beaconBtn');
   var mode = slotState ? slotState.bm : 0;
   var cqName = CQ_TYPE_NAMES[parseInt(lastCfg.cq_type, 10)] || 'CQ';
-  btn.textContent = (mode && mode > 0)
-    ? ('Beacon: ' + cqName + ' · ' + BEACON_NAMES[mode] + ' (tap to change)')
-    : 'Beacon: Off (tap to start)';
+  document.getElementById('beaconCqName').textContent = 'Beacon: ' + cqName;
+  var sel = document.getElementById('beaconSel');
+  // Don't stomp a selection the operator is mid-pick on -- the poll tick
+  // that drives this can land between opening the dropdown and choosing.
+  if (document.activeElement !== sel) {
+    sel.value = String(mode);
+  }
   // 0 means "nothing pending" (main.cpp's porta_queue_state_tick sends it
   // when g_pending_tx_valid is false) -- not a real offset, so it must not
   // pass a != null check the way it would.
@@ -701,9 +711,9 @@ function renderBeacon() {
     'TX: ' + (slotState && slotState.hz > 0 ? (slotState.hz + ' Hz') : '—');
 }
 
-document.getElementById('beaconBtn').onclick = function () {
-  var next = ((slotState ? slotState.bm : 0) + 1) % 3;
-  radioPost('/api/beacon', String(next), 'Beacon…')
+document.getElementById('beaconSel').onchange = function () {
+  var sel = this;
+  radioPost('/api/beacon', sel.value, 'Beacon…')
     .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
 
