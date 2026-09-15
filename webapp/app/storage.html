@@ -1,0 +1,88 @@
+<!doctype html>
+<meta name=viewport content='width=device-width,initial-scale=1'>
+<title>Mini-FT8 Storage</title>
+<!--
+  General-purpose localStorage browser, linked from Settings. Not part of
+  the app's own data flow -- app.html never loads this file, this is purely
+  for looking at what app.html has cached (minift8_state_v1,
+  minift8_callsign_grids_v1, and anything future code adds) without opening
+  devtools. Same origin as app.html, so it sees the same storage.
+-->
+<style>
+:root{color-scheme:light dark}
+body{font-family:system-ui;margin:0;padding:0 0 2rem;line-height:1.4;background:Canvas;color:CanvasText}
+.wrap{max-width:36rem;margin:0 auto;padding:0 1rem}
+h1{font-size:1.15rem;margin:1rem 0 .25rem}
+.sub{font-size:.8rem;color:GrayText;margin-bottom:1rem}
+.toolbar{display:flex;gap:.6rem;margin-bottom:1rem}
+button{padding:.4rem .7rem;font-size:.85rem;background:ButtonFace;color:ButtonText;border:1px solid GrayText;border-radius:.4rem}
+.entry{border-top:1px solid color-mix(in srgb, GrayText 25%, transparent);padding:.6rem 0}
+.key{display:flex;justify-content:space-between;align-items:center;gap:.5rem;font-family:ui-monospace,monospace;font-weight:700;font-size:.85rem;word-break:break-all}
+.size{font-weight:400;color:GrayText;font-size:.75rem;white-space:nowrap}
+.del{font-size:.75rem;padding:.2rem .5rem;color:#b91c1c;white-space:nowrap}
+pre{margin:.4rem 0 0;padding:.5rem;background:Field;color:FieldText;border-radius:.4rem;font-size:.75rem;overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:16rem;overflow-y:auto}
+.empty{color:GrayText;font-size:.85rem;padding:1rem 0}
+a{color:#1d4ed8}
+</style>
+
+<div class=wrap>
+  <h1>localStorage</h1>
+  <div class=sub id=origin></div>
+  <div class=toolbar>
+    <button id=refresh type=button>Refresh</button>
+    <button id=clearAll type=button>Clear all</button>
+  </div>
+  <div id=list></div>
+  <p><a href=/app.html>&larr; Back to app</a></p>
+</div>
+
+<script>
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+function render() {
+  document.getElementById('origin').textContent = location.origin;
+  var list = document.getElementById('list');
+  var keys;
+  try {
+    keys = Object.keys(localStorage).sort();
+  } catch (e) {
+    list.innerHTML = '<p class=empty>localStorage unavailable (' + esc(String(e && e.message || e)) + ')</p>';
+    return;
+  }
+  if (!keys.length) {
+    list.innerHTML = '<p class=empty>empty</p>';
+    return;
+  }
+  list.innerHTML = keys.map(function (k) {
+    var raw = localStorage.getItem(k) || '';
+    var pretty = raw;
+    try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch (e) { /* not JSON, show raw */ }
+    return '<div class=entry>' +
+      '<div class=key><span>' + esc(k) + '</span>' +
+        '<span class=size>' + raw.length + ' B <button class=del data-k="' + esc(k) + '">Delete</button></span>' +
+      '</div>' +
+      '<pre>' + esc(pretty) + '</pre>' +
+    '</div>';
+  }).join('');
+  list.querySelectorAll('.del').forEach(function (btn) {
+    btn.onclick = function () {
+      localStorage.removeItem(btn.getAttribute('data-k'));
+      render();
+    };
+  });
+}
+
+document.getElementById('refresh').onclick = render;
+document.getElementById('clearAll').onclick = function () {
+  if (confirm('Clear all localStorage for ' + location.origin + '? This cannot be undone.')) {
+    localStorage.clear();
+    render();
+  }
+};
+
+render();
+</script>

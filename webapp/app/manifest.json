@@ -3,13 +3,18 @@
   "assets": [
     {
       "path": "app.html",
-      "sha256": "3fa8d3bcd1a059b8340df33a98cb7669496d02894e199ef856d14684a0d8bc72",
-      "size": 71928
+      "sha256": "051523a62c49325a0f4086a40a6054855c0dcba397d41617e387ec8a4f74d7a1",
+      "size": 78710
     },
     {
       "path": "installed.html",
       "sha256": "1adaaf5cb2ae0bfd5d33abd1ebdfbc6b419b61241bed9bc0980c4e6dbff3c154",
       "size": 196
+    },
+    {
+      "path": "storage.html",
+      "sha256": "e5435f2c00ba5d894c5137058e11fc211f55b4617daf2261bd0200240a0087dd",
+      "size": 3496
     }
   ]
 }
