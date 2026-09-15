@@ -144,6 +144,11 @@ int main()
     expect_true(station_key_known("band0"), "band0 known");
     expect_true(station_key_known("ft4_band3"), "ft4_band3 known");
     expect_true(!station_key_known("beacon"), "beacon not a CONFIG key");
+    expect_true(!station_key_known("streaming"), "live streaming is GET-only");
+    expect_true(!station_key_known("cat_ready"), "live cat_ready is GET-only");
+    expect_true(!station_key_known("tune"), "live tune is GET-only");
+    expect_true(!station_key_known("band_name"), "live band_name is GET-only");
+    expect_true(!station_key_known("freq_khz"), "live freq_khz is GET-only");
     expect_true(!station_key_known(""), "empty unknown");
     printf("PASS: station parse/serialize\n");
     return 0;

@@ -218,6 +218,8 @@ typedef enum {
     PORTA_ACT_SET_CLOCK = 0x01,  // epoch seconds + milliseconds
     PORTA_ACT_TX_FREE   = 0x02,  // free-text one-shot for the next matching slot
     PORTA_ACT_TX_CANCEL = 0x03,  // abort in-flight / clear armed TX
+    PORTA_ACT_CONNECT   = 0x04,  // start UAC + CAT sync (STATUS key 2)
+    PORTA_ACT_TUNE      = 0x05,  // payload: u8 on (STATUS key 4)
 } porta_action_verb_t;
 
 // The browser is the clock source in a headless build: it is the only device
@@ -238,6 +240,14 @@ bool porta_proto_parse_tx_free(const porta_frame_t *f, char *text_out);
 // Cancel: verb only.
 size_t porta_proto_encode_tx_cancel(uint8_t *out, size_t out_cap);
 bool porta_proto_parse_tx_cancel(const porta_frame_t *f);
+
+// Connect: verb only — same as STATUS → 2 (start RX audio + CAT sync).
+size_t porta_proto_encode_connect(uint8_t *out, size_t out_cap);
+bool porta_proto_parse_connect(const porta_frame_t *f);
+
+// Tune: verb + u8 on (1 = TX tone, 0 = RX).
+size_t porta_proto_encode_tune(bool on, uint8_t *out, size_t out_cap);
+bool porta_proto_parse_tune(const porta_frame_t *f, bool *on_out);
 
 size_t porta_proto_encode_ack(uint8_t verb, uint8_t *out, size_t out_cap);
 

@@ -9,10 +9,12 @@ label{display:block;font-size:.8rem;color:#666;margin-top:.6rem}
 input,select{width:100%;box-sizing:border-box;padding:.45rem;font-size:1rem;margin-top:.15rem}
 button{width:100%;padding:.7rem;font-size:1rem;margin-top:.8rem}
 #m{color:#666;font-size:.85rem;min-height:1.2em;margin-top:.5rem}
+#live{font-size:.9rem;margin:.4rem 0 .2rem;color:#222}
 nav{font-size:.9rem;margin-top:1.2rem}
 a{color:#06c}
 .row{display:flex;gap:.5rem}
 .row>*{flex:1}
+.row button{margin-top:.5rem}
 </style>
 
 <h1>Mini-FT8</h1>
@@ -40,6 +42,12 @@ a{color:#06c}
 
 <section>
   <h2>Radio</h2>
+  <p id=live>Audio: — · CAT: — · Tune: — · Band: —</p>
+  <div class=row>
+    <button id=connect type=button disabled>Connect</button>
+    <button id=tune_on type=button disabled>Tune on</button>
+    <button id=tune_off type=button disabled>Tune off</button>
+  </div>
   <div class=row>
     <label>Offset Hz <input id=offset type=number></label>
     <label>Offset src
@@ -52,7 +60,7 @@ a{color:#06c}
   </div>
   <label>Radio profile (saved int) <input id=radio type=number></label>
   <label>Active bands <input id=active_bands autocomplete=off></label>
-  <label>Band select index <input id=band_sel type=number></label>
+  <label>Band <select id=band_sel></select></label>
   <label>Protocol
     <select id=protocol_mode>
       <option value=FT8>FT8</option>
@@ -88,6 +96,14 @@ a{color:#06c}
 <script src=/pairing.js></script>
 <script>
 var m = document.getElementById('m');
+var live = document.getElementById('live');
+// Index order matches ADV g_bands[] (main.cpp). Names are fixed; freqs come from config.
+var BANDS = [
+  {i: 0, name: '160m', n: 160}, {i: 1, name: '80m', n: 80}, {i: 2, name: '60m', n: 60},
+  {i: 3, name: '40m', n: 40}, {i: 4, name: '30m', n: 30}, {i: 5, name: '20m', n: 20},
+  {i: 6, name: '17m', n: 17}, {i: 7, name: '15m', n: 15}, {i: 8, name: '12m', n: 12},
+  {i: 9, name: '10m', n: 10}, {i: 10, name: '6m', n: 6}, {i: 11, name: '2m', n: 2}
+];
 var FIELDS = [
   'call','grid','cq_type','cq_ft','free_text','comment1','ignore_prefixes',
   'offset','offset_src','radio','active_bands','band_sel','protocol_mode',
@@ -96,7 +112,64 @@ var FIELDS = [
 
 function setMsg(t) { m.textContent = t; }
 
+function yn(v) {
+  return (v === '1' || v === 1 || v === true || v === 'true') ? 'yes' : 'no';
+}
+
+function bandFreq(cfg, idx) {
+  var k = 'band' + idx;
+  var fk = 'ft4_band' + idx;
+  if (cfg[k] !== undefined && cfg[k] !== null && cfg[k] !== '') return String(cfg[k]);
+  if (cfg[fk] !== undefined && cfg[fk] !== null && cfg[fk] !== '') return String(cfg[fk]);
+  return '';
+}
+
+function fillBandSelect(cfg) {
+  var sel = document.getElementById('band_sel');
+  var want = {};
+  var any = false;
+  String(cfg.active_bands || '').split(/[\s,;\/]+/).forEach(function (t) {
+    var n = parseInt(t, 10);
+    if (n > 0) { want[n] = true; any = true; }
+  });
+  var rows = [];
+  BANDS.forEach(function (b) {
+    if (any && !want[b.n]) return;
+    var freq = bandFreq(cfg, b.i);
+    rows.push({ i: b.i, label: b.name + (freq ? (' · ' + freq + ' kHz') : '') });
+  });
+  if (!rows.length) {
+    BANDS.forEach(function (b) {
+      var freq = bandFreq(cfg, b.i);
+      rows.push({ i: b.i, label: b.name + (freq ? (' · ' + freq + ' kHz') : '') });
+    });
+  }
+  var cur = String(cfg.band_sel !== undefined && cfg.band_sel !== null ? cfg.band_sel : '');
+  sel.innerHTML = '';
+  rows.forEach(function (r) {
+    var opt = document.createElement('option');
+    opt.value = String(r.i);
+    opt.textContent = r.label;
+    sel.appendChild(opt);
+  });
+  if (cur !== '') sel.value = cur;
+  if (sel.value !== cur && rows.length) sel.selectedIndex = 0;
+}
+
+function setLive(cfg) {
+  var band = cfg.band_name || '—';
+  if (cfg.freq_khz !== undefined && cfg.freq_khz !== null && cfg.freq_khz !== '') {
+    band += ' ' + cfg.freq_khz + ' kHz';
+  }
+  live.textContent =
+    'Audio: ' + yn(cfg.streaming) +
+    ' · CAT: ' + yn(cfg.cat_ready) +
+    ' · Tune: ' + yn(cfg.tune) +
+    ' · Band: ' + band;
+}
+
 function setForm(cfg) {
+  fillBandSelect(cfg);
   FIELDS.forEach(function (k) {
     var el = document.getElementById(k);
     if (!el) return;
@@ -104,9 +177,14 @@ function setForm(cfg) {
       el.value = (cfg.protocol_mode === 'FT4') ? 'FT4' : 'FT8';
       return;
     }
+    if (k === 'band_sel') return; // filled above
     if (cfg[k] === undefined || cfg[k] === null) return;
     el.value = String(cfg[k]);
   });
+  if (cfg.band_sel !== undefined && cfg.band_sel !== null) {
+    document.getElementById('band_sel').value = String(cfg.band_sel);
+  }
+  setLive(cfg);
 }
 
 function formBody() {
@@ -137,7 +215,7 @@ async function loadConfig() {
       throw new Error(cfg.why || 'config failed');
     }
     setForm(cfg);
-    var n = Object;
+    var n = 0;
     for (var k in cfg) { if (Object.prototype.hasOwnProperty.call(cfg, k)) n++; }
     if (n === 0) {
       setMsg('ADV returned empty config — is Port A linked?');
@@ -202,9 +280,36 @@ async function syncClock() {
   setMsg(j.ok ? 'Clock synced.' : ('Clock: ' + (j.why || 'failed')));
 }
 
+async function radioPost(path, body, busyMsg) {
+  if (!MiniFT8Pairing.getToken()) {
+    setMsg('Press the sidekick button to pair first.');
+    MiniFT8Pairing.needsReauth();
+    return;
+  }
+  setMsg(busyMsg);
+  var opts = { method: 'POST' };
+  if (body !== undefined) opts.body = body;
+  var r = await MiniFT8Pairing.authFetch(path, opts);
+  if (r.status == 401) {
+    MiniFT8Pairing.needsReauth();
+    setMsg('Press the sidekick button to pair');
+    return;
+  }
+  var j = await r.json().catch(function () { return {}; });
+  if (!r.ok || j.ok === false) {
+    setMsg((busyMsg.replace(/\.\.\.$/, '')) + ' failed: ' + (j.why || r.status));
+    return;
+  }
+  setMsg(busyMsg.replace(/\.\.\.$/, '') + ' ok.');
+  await loadConfig();
+}
+
 function enableWrites(on) {
   document.getElementById('save').disabled = !on;
   document.getElementById('clock').disabled = !on;
+  document.getElementById('connect').disabled = !on;
+  document.getElementById('tune_on').disabled = !on;
+  document.getElementById('tune_off').disabled = !on;
 }
 
 MiniFT8Pairing.boot({
@@ -221,6 +326,18 @@ document.getElementById('save').onclick = function () {
 };
 document.getElementById('clock').onclick = function () {
   syncClock().catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+};
+document.getElementById('connect').onclick = function () {
+  radioPost('/api/radio/connect', undefined, 'Connecting…')
+    .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+};
+document.getElementById('tune_on').onclick = function () {
+  radioPost('/api/radio/tune', '1', 'Tune on…')
+    .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+};
+document.getElementById('tune_off').onclick = function () {
+  radioPost('/api/radio/tune', '0', 'Tune off…')
+    .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
 
 loadConfig().catch(function () { /* setMsg already */ });

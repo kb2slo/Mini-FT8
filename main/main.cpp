@@ -645,6 +645,7 @@ static void consume_cdc_initial_sync();
 // Non-static: un-staticked for core_api.cpp's set_band RPC (0f71de1);
 // core_api is gone (B30). Re-static when the extern audit lands.
 bool sync_radio_to_current_band(const char* reason);
+static void begin_usb_host_mode();
 static void menu_flash_tick();
 static void rx_flash_tick();
 static std::string g_last_reply_text;
@@ -4531,7 +4532,15 @@ size_t porta_host_config_snapshot(char* out, size_t out_cap) {
   }
   StationSettings s;
   station_fill_from_globals(&s);
-  const std::string text = station_serialize(s);
+  std::string text = station_serialize(s);
+  // Live radio state for the phone UI — GET-only (station_key_known rejects SET).
+  char live[96];
+  const int freq_khz = (int)(g_bands[g_band_sel].freq + 0.5f);
+  snprintf(live, sizeof(live),
+           "streaming=%d\ncat_ready=%d\ntune=%d\nband_name=%s\nfreq_khz=%d\n",
+           audio_source_is_streaming() ? 1 : 0, radio_control_ready() ? 1 : 0,
+           g_tune ? 1 : 0, g_bands[g_band_sel].name, freq_khz);
+  text += live;
   if (text.size() + 1 > out_cap) {
     return 0;
   }
@@ -4559,6 +4568,40 @@ const char* porta_host_config_set(const char* key, const char* value) {
   rebuild_active_bands();
   rebuild_ignore_prefixes();
   save_station_data();
+  // Headless has no STATUS exit to flush CAT — push VFO on band-ish keys.
+  if (strcmp(key, "band_sel") == 0 || strcmp(key, "active_bands") == 0 ||
+      strncmp(key, "band", 4) == 0 || strncmp(key, "ft4_band", 8) == 0) {
+    sync_radio_to_current_band("porta config");
+  }
+  return nullptr;
+}
+
+const char* porta_host_connect(void) {
+  if (board_power_halted()) {
+    return "battery halt";
+  }
+  begin_usb_host_mode();
+  return nullptr;
+}
+
+const char* porta_host_tune(bool on) {
+  if (on && !radio_control_ready()) {
+    return "CAT not ready";
+  }
+  g_tune = on;
+  if (radio_control_ready()) {
+    int freq_hz = (int)(g_bands[g_band_sel].freq * 1000.0f);
+    int tune_hz = (g_offset_src == OffsetSrc::CURSOR) ? g_offset_hz : 1500;
+    if (radio_control_set_tune(g_tune, freq_hz, tune_hz) != ESP_OK) {
+      return "CAT tune failed";
+    }
+    debug_log_line(g_tune ? "CAT tune: TX" : "CAT tune: RX");
+  } else {
+    debug_log_line("CAT tune: off (no CAT)");
+  }
+  if (ui_mode == UIMode::STATUS) {
+    draw_status_view();
+  }
   return nullptr;
 }
 

@@ -24,6 +24,9 @@ void porta_host_tx_cancel(void);
 size_t porta_host_config_snapshot(char* out, size_t out_cap);
 // Apply one Station.txt key and persist. nullptr on success, else a short reason.
 const char* porta_host_config_set(const char* key, const char* value);
+// STATUS → 2 / → 4 equivalents for the companion.
+const char* porta_host_connect(void);
+const char* porta_host_tune(bool on);
 #include "porta_proto.h"
 #include "sidekick_flasher.h"
 
@@ -211,6 +214,33 @@ void handle_action(const porta_frame_t& f) {
     }
     porta_host_tx_cancel();
     enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+    return;
+  }
+  case PORTA_ACT_CONNECT: {
+    if (!porta_proto_parse_connect(&f)) {
+      enqueue(buf, porta_proto_encode_nak(verb, "malformed", buf, sizeof(buf)));
+      return;
+    }
+    const char* why = porta_host_connect();
+    if (why) {
+      enqueue(buf, porta_proto_encode_nak(verb, why, buf, sizeof(buf)));
+    } else {
+      enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+    }
+    return;
+  }
+  case PORTA_ACT_TUNE: {
+    bool on = false;
+    if (!porta_proto_parse_tune(&f, &on)) {
+      enqueue(buf, porta_proto_encode_nak(verb, "malformed", buf, sizeof(buf)));
+      return;
+    }
+    const char* why = porta_host_tune(on);
+    if (why) {
+      enqueue(buf, porta_proto_encode_nak(verb, why, buf, sizeof(buf)));
+    } else {
+      enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+    }
     return;
   }
   default:
