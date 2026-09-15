@@ -96,6 +96,8 @@ button:disabled{opacity:.45}
 .day{padding:.6rem 1rem .2rem;font-size:.75rem;font-weight:700;color:GrayText;display:flex;justify-content:space-between;align-items:baseline;gap:.5rem}
 .dlink{font-weight:400;color:#1d4ed8;text-decoration:none}
 .dlink:active{opacity:.6}
+#logToolbar{display:flex;justify-content:space-between;align-items:center;padding:.6rem 1rem;font-size:.85rem;border-bottom:1px solid color-mix(in srgb, GrayText 30%, transparent)}
+.dlink-danger{color:#b91c1c}
 .frow{padding:.5rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent)}
 .frow-main{display:flex;justify-content:space-between;align-items:center}
 .frow .call{font-family:ui-monospace,monospace;font-weight:700}
@@ -181,6 +183,10 @@ button:disabled{opacity:.45}
        walks logFiles transparently: file boundaries are an implementation
        detail, not something the operator navigates. -->
   <section id=view-log hidden>
+    <div id=logToolbar>
+      <a id=logDownloadAll class=dlink href=#>Download full ADI</a>
+      <a id=logClearAll class="dlink dlink-danger" href=#>Clear all ADI files</a>
+    </div>
     <div id=logList></div>
     <div id=logMore hidden><button id=logMoreBtn type=button>Load older QSOs</button></div>
   </section>
@@ -1241,39 +1247,102 @@ function buildAdifRecord(q, dateStr) {
 // Loops /api/log/entries past whatever page size the Log tab itself has
 // loaded so far -- the visible list may only hold the first screenful of a
 // long day, and a download has to carry all of it, not just what's rendered.
+// Chrome (and others) silently append .txt to a download whose extension it
+// doesn't recognize, if the Blob's MIME type is text/* -- a generic binary
+// type sidesteps that guess entirely. The name is always forced to
+// lowercase .adi regardless of source casing: this device's own file list
+// reports names like "20260915.ADI" (uppercase -- main.cpp itself always
+// writes lowercase, so something else on the path uppercases it; separate
+// from this bug and not chased here, since forcing the extension makes it
+// moot for the one thing the operator actually sees, the saved filename).
+function triggerAdifDownload(baseName, text) {
+  var blob = new Blob([text], { type: 'application/octet-stream' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = baseName.replace(/\.[^.]*$/, '') + '.adi';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Loops /api/log/entries past whatever page size it returns, for one file.
+async function fetchAllEntries(file) {
+  var rows = [];
+  var skip = 0;
+  while (true) {
+    var r = await fetch('/api/log/entries?file=' + encodeURIComponent(file) +
+                        '&skip=' + skip + '&take=50', { cache: 'no-store' });
+    var j = await r.json();
+    if (!j.ok) throw new Error(j.why || 'entries failed');
+    var page = j.entries || [];
+    rows = rows.concat(page);
+    skip += page.length;
+    if (page.length < 50) break;
+  }
+  return rows;
+}
+
 async function downloadDayAdif(file, linkEl) {
   var origText = linkEl.textContent;
   linkEl.textContent = 'Preparing…';
   try {
     var dateStr = file.slice(0, 8);
-    var rows = [];
-    var skip = 0;
-    while (true) {
-      var r = await fetch('/api/log/entries?file=' + encodeURIComponent(file) +
-                          '&skip=' + skip + '&take=50', { cache: 'no-store' });
-      var j = await r.json();
-      if (!j.ok) throw new Error(j.why || 'entries failed');
-      var page = j.entries || [];
-      rows = rows.concat(page);
-      skip += page.length;
-      if (page.length < 50) break;
-    }
+    var rows = await fetchAllEntries(file);
     var text = 'ADIF EXPORT\n<eoh>\n' +
               rows.map(function (q) { return buildAdifRecord(q, dateStr); }).join('');
-    var blob = new Blob([text], { type: 'text/plain' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = file;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    triggerAdifDownload(file, text);
   } catch (e) {
     setMsg(String(e && e.message ? e.message : e));
   } finally {
     linkEl.textContent = origText;
   }
+}
+
+// Independent of logFiles/logFilesSkip (the lazy-loading Log-tab state) --
+// walks its own cursor through every day file rather than reusing whatever
+// the visible list has paged through so far, so this is correct whether or
+// not the operator has scrolled the tab at all.
+async function downloadAllAdif(linkEl) {
+  var origText = linkEl.textContent;
+  try {
+    var files = [];
+    var skip = 0;
+    while (true) {
+      var r = await fetch('/api/log/files?skip=' + skip + '&take=30', { cache: 'no-store' });
+      var j = await r.json();
+      if (!j.ok) throw new Error(j.why || 'file list failed');
+      var page = j.files || [];
+      files = files.concat(page);
+      skip += page.length;
+      if (page.length < 30) break;
+    }
+    var parts = [];
+    for (var i = 0; i < files.length; i++) {
+      linkEl.textContent = 'Preparing… ' + (i + 1) + '/' + files.length;
+      var file = files[i];
+      var dateStr = file.slice(0, 8);
+      var rows = await fetchAllEntries(file);
+      rows.forEach(function (q) { parts.push(buildAdifRecord(q, dateStr)); });
+    }
+    triggerAdifDownload('mini-ft8-log', 'ADIF EXPORT\n<eoh>\n' + parts.join(''));
+  } catch (e) {
+    setMsg(String(e && e.message ? e.message : e));
+  } finally {
+    linkEl.textContent = origText;
+  }
+}
+
+// No ADV/sidekick mechanism exists to delete a log file today -- FILE_LIST/
+// FILE_READ (RFC 0004 §11) are read-only by design (porta_proto.h's own
+// comment on the FILE_DATA messages), and nothing exposes storage_service.h's
+// storage_file_remove() over Port A. Adding that is a real, separate
+// protocol change (new ACTION verb, ADV dispatch, sidekick relay route) --
+// not something to wire silently under an operator-requested UI stub, and
+// genuinely destructive besides. Stub only, per instruction.
+function clearAllAdif() {
+  setMsg('Clear all ADI files: not implemented yet.');
 }
 
 // Fetches the next page of day filenames the first time (or another page
@@ -1332,6 +1401,14 @@ async function loadMoreLog() {
   }
 }
 document.getElementById('logMoreBtn').onclick = function () { loadMoreLog(); };
+document.getElementById('logDownloadAll').onclick = function (ev) {
+  ev.preventDefault();
+  downloadAllAdif(this);
+};
+document.getElementById('logClearAll').onclick = function (ev) {
+  ev.preventDefault();
+  clearAllAdif();
+};
 
 // ensureLogFiles() only ever looks *past* the end of what it has fetched
 // (older files); a file newer than logFiles[0] -- the ADV's day rollover at
