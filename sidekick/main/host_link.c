@@ -67,13 +67,14 @@ typedef enum {
     ENTRY_DECODE = 1,
     ENTRY_QUEUE_ENTRY = 2,  // I28d, RFC 0004 §11
     ENTRY_SLOT_STATE = 3,
+    ENTRY_TX_HUD = 4,       // I28d, RFC 0004 §11
 } entry_kind_t;
 
 typedef struct {
     uint32_t seq;
     uint32_t epoch_secs;   // host's clock at the moment of the event, 0 if unset
     entry_kind_t kind;
-    char     text[PORTA_EVENT_TEXT_MAX + 1];  // LOG, DECODE
+    char     text[PORTA_EVENT_TEXT_MAX + 1];  // LOG, DECODE, TX_HUD
     int8_t   snr;                             // DECODE
     uint16_t offset_hz;                       // DECODE; SLOT_STATE's resolved_offset_hz
     int16_t  dt_centis;                       // DECODE
@@ -88,6 +89,12 @@ typedef struct {
     char     dxcall[PORTA_CALLSIGN_MAX + 1];  // QUEUE_ENTRY
     uint8_t  slot_parity;                     // SLOT_STATE
     uint8_t  beacon_mode;                     // SLOT_STATE
+    bool     tx_active;                       // TX_HUD
+    bool     tx_aborted;                      // TX_HUD
+    bool     tx_writes_blocked;               // TX_HUD
+    int16_t  tx_power_dw;                     // TX_HUD, deciwatts
+    int16_t  tx_swr_c;                        // TX_HUD, SWR * 100
+    int8_t   tx_battery_pct;                  // TX_HUD
 } entry_t;
 
 static entry_t s_ring[RING_LEN];
@@ -194,6 +201,15 @@ static esp_err_t get_events(httpd_req_t *req)
                          "\"sp\":%u,\"bm\":%u,\"hz\":%u}",
                          first ? "" : ",", e.seq, e.epoch_secs, e.slot_parity, e.beacon_mode,
                          e.offset_hz);
+            break;
+        case ENTRY_TX_HUD:
+            n = snprintf(row, sizeof(row),
+                         "%s{\"s\":%" PRIu32 ",\"t\":%" PRIu32 ",\"d\":4,"
+                         "\"active\":%d,\"aborted\":%d,\"wrblk\":%d,"
+                         "\"pw\":%d,\"swr\":%d,\"batt\":%d,\"x\":\"%s\"}",
+                         first ? "" : ",", e.seq, e.epoch_secs,
+                         e.tx_active ? 1 : 0, e.tx_aborted ? 1 : 0, e.tx_writes_blocked ? 1 : 0,
+                         e.tx_power_dw, e.tx_swr_c, e.tx_battery_pct, esc);
             break;
         case ENTRY_LOG:
         default:
@@ -858,6 +874,7 @@ static void porta_rx_task(void *arg)
     porta_decode_event_t ev;
     porta_queue_entry_event_t qe;
     porta_slot_state_event_t ss;
+    porta_tx_hud_event_t hud;
     char file_name[PORTA_FILENAME_MAX + 1];
     porta_qso_entry_row_t qrow;
     uint32_t reported_crc = 0;
@@ -906,6 +923,17 @@ static void porta_rx_task(void *arg)
                 e.slot_parity = ss.slot_parity;
                 e.beacon_mode = ss.beacon_mode;
                 e.offset_hz = ss.resolved_offset_hz;
+                ring_push(&e);
+            } else if (porta_proto_parse_tx_hud(&frame, &hud)) {
+                e.kind = ENTRY_TX_HUD;
+                e.epoch_secs = hud.epoch_secs;
+                e.tx_active = hud.active;
+                e.tx_aborted = hud.aborted;
+                e.tx_writes_blocked = hud.writes_blocked;
+                e.tx_power_dw = hud.power_dw;
+                e.tx_swr_c = hud.swr_c;
+                e.tx_battery_pct = hud.battery_pct;
+                strncpy(e.text, hud.text, sizeof(e.text) - 1);
                 ring_push(&e);
             } else if (porta_proto_parse_file_name_row(&frame, file_name)) {
                 file_list_json_add(file_name);

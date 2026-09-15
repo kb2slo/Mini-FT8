@@ -82,6 +82,12 @@ typedef struct {
 
 // Global state
 static uac_stream_state_t s_state = UAC_STATE_IDLE;
+// rtc_now_ms() at the last real USB audio frame (see uac_last_rx_ms()).
+// Written only from stream_uac_task; read from the main loop for the phone
+// UI's "audio actually flowing" indicator -- a single int64_t write/read is
+// atomic enough on this target without a lock, same reasoning as the other
+// volatile scalars in this file.
+static volatile int64_t s_last_rx_ms = 0;
 static QueueHandle_t s_event_queue = NULL;
 static uac_host_device_handle_t s_mic_handle = NULL;
 static cdc_acm_dev_hdl_t s_cdc_handle = NULL;
@@ -906,6 +912,7 @@ static int uac_read_ft8_samples(void* ctx, float* out, int max_samples) {
         int num_frames = bytes_read / frame_bytes;
         if (num_frames == 0) continue;
 
+        s_last_rx_ms = rtc_now_ms();
         return uac_pcm_to_ft8_samples(&s_resample_state, usb_buffer,
                                       (int)bytes_read, out,
                                       s_format.bit_resolution,
@@ -930,6 +937,10 @@ static void uac_on_block_processed(void* ctx) {
 
 bool uac_is_streaming(void) {
     return s_state == UAC_STATE_STREAMING && s_mic_handle != NULL;
+}
+
+int64_t uac_last_rx_ms(void) {
+    return s_last_rx_ms;
 }
 
 // Wait up to ~1 s for the host to come up, reporting how long it took so a

@@ -664,6 +664,7 @@ static void file_list_tick();
 static void qso_draw_page();
 static void porta_file_read_tick();
 static void porta_queue_state_tick();
+static void porta_tx_hud_tick();
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter = -1);
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd);
@@ -1451,6 +1452,56 @@ static void draw_tx_hud(bool force) {
     s_mid_hud_logged = false;
   }
   s_was_tx = g_tx_active;
+}
+
+// Mirrors draw_tx_hud() onto Port A (I28d, RFC 0004 §11) so app.html's
+// Operate screen can show the same message/power/SWR/battery the on-device
+// banner does. Independent tick rather than a call from inside draw_tx_hud()
+// itself: that function is UI-only (guarded by ui_mode == RX) and this must
+// keep working headless. Reads radio_control_get_tx_power_swr()'s cached
+// value rather than polling it again -- draw_tx_hud() already polls on the
+// same ~500 ms cadence whenever the on-device UI is live, and a second,
+// independent poll timer would just double the CAT traffic during TX for no
+// gain. board_power_read() is a local cache read, not a bus transaction, so
+// reading it again here costs nothing.
+static void porta_tx_hud_tick() {
+  static uint32_t s_last_ms = 0;
+  static bool s_last_active = false;
+
+  const bool visible = tx_hud_visible();
+  if (!visible && !s_last_active) return;  // nothing showing, nothing changed
+
+  const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+  if (visible && (now_ms - s_last_ms < 500)) return;
+
+  if (!visible) {
+    // Falling edge: tell the browser to hide its panel, exactly once, rather
+    // than making it guess from a timeout.
+    s_last_active = false;
+    porta_emit_tx_hud(false, false, false, "", -1.f, -1.f, -1);
+    return;
+  }
+  s_last_ms = now_ms;
+  s_last_active = true;
+
+  const bool aborted = g_tx_abort_hud && !g_tx_active;
+  const char* tx_text = "";
+  if (aborted && g_tx_abort_text[0]) {
+    tx_text = g_tx_abort_text;
+  } else if (g_pending_tx_valid && !g_pending_tx.text.empty()) {
+    tx_text = g_pending_tx.text.c_str();
+  }
+
+  board_power_status_t ps = {};
+  (void)board_power_read(&ps);
+
+  float power_w = -1.f, swr = -1.f;
+  if (!aborted) {
+    (void)radio_control_get_tx_power_swr(&power_w, &swr);
+  }
+
+  porta_emit_tx_hud(true, aborted, ps.writes_blocked, tx_text, power_w, swr,
+                    ps.valid ? ps.percent : -1);
 }
 
 static void draw_rx_screen(int flash_index = -1) {
@@ -4774,12 +4825,24 @@ size_t porta_host_config_snapshot(char* out, size_t out_cap) {
   station_fill_from_globals(&s);
   std::string text = station_serialize(s);
   // Live radio state for the phone UI — GET-only (station_key_known rejects SET).
-  char live[96];
+  // audio_rx is deliberately stricter than "streaming": streaming can stay
+  // latched true past a real dropout (the UAC state machine has no watchdog
+  // of its own), so audio_rx also requires a real frame within the last
+  // couple of seconds -- the phone's "audio active" indicator should mean
+  // audio actually arrived recently, not merely that the pipe is open.
+  const int64_t kAudioRxFreshMs = 2000;
+  const bool audio_rx = audio_source_is_streaming() &&
+      (rtc_now_ms() - audio_source_last_rx_ms()) < kAudioRxFreshMs;
+  const char* clock_src = rtc_time_source_suffix();
+  if (*clock_src == ' ') ++clock_src;  // trim the on-screen suffix's leading space
+  char live[176];
   const int freq_khz = (int)(g_bands[g_band_sel].freq + 0.5f);
   snprintf(live, sizeof(live),
-           "streaming=%d\ncat_ready=%d\ntune=%d\nband_name=%s\nfreq_khz=%d\n",
+           "streaming=%d\ncat_ready=%d\ntune=%d\nband_name=%s\nfreq_khz=%d\n"
+           "audio_rx=%d\nclock_set=%d\nclock_source=%s\n",
            audio_source_is_streaming() ? 1 : 0, radio_control_ready() ? 1 : 0,
-           g_tune ? 1 : 0, g_bands[g_band_sel].name, freq_khz);
+           g_tune ? 1 : 0, g_bands[g_band_sel].name, freq_khz,
+           audio_rx ? 1 : 0, rtc_valid ? 1 : 0, clock_src);
   text += live;
   if (text.size() + 1 > out_cap) {
     return 0;
@@ -5397,6 +5460,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     file_list_tick();
     porta_file_read_tick();
     porta_queue_state_tick();
+    porta_tx_hud_tick();
     cts_ble_poll();
     if (g_tx_active) {
       cts_ble_abort();

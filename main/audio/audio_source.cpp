@@ -39,3 +39,7 @@ void audio_source_stop(void) {
 bool audio_source_is_streaming(void) {
     return uac_is_streaming();
 }
+
+int64_t audio_source_last_rx_ms(void) {
+    return uac_last_rx_ms();
+}
