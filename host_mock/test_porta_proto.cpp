@@ -491,6 +491,7 @@ static void test_tx_hud_event()
         check(out.swr_c == 135, "swr_c round-trips");
         check(out.battery_pct == 87, "battery_pct round-trips");
         check(std::string(out.text) == "CQ KB2SLO FN30", "text round-trips");
+        check(std::string(out.reason).empty(), "reason empty when not aborted");
 
         porta_slot_state_event_t ss;
         check(!porta_proto_parse_slot_state(&got[0], &ss),
@@ -499,6 +500,8 @@ static void test_tx_hud_event()
 
     // -1 sentinels (unread power/SWR/battery) must survive the cast through
     // uint16_t/uint8_t on the wire and back, same as rst_sent/rst_rcvd's -99.
+    // The abort reason must survive alongside the message text -- both are
+    // real fields now, not one hardcoded client-side.
     porta_tx_hud_event_t unknown = {};
     unknown.active = false;
     unknown.aborted = true;
@@ -506,6 +509,8 @@ static void test_tx_hud_event()
     unknown.power_dw = -1;
     unknown.swr_c = -1;
     unknown.battery_pct = -1;
+    std::snprintf(unknown.reason, sizeof(unknown.reason), "low battery");
+    std::snprintf(unknown.text, sizeof(unknown.text), "CQ KB2SLO FN30");
     porta_decoder_init(&d);
     n = porta_proto_encode_tx_hud(&unknown, buf, sizeof(buf));
     got = run(&d, std::vector<uint8_t>(buf, buf + n));
@@ -514,8 +519,9 @@ static void test_tx_hud_event()
         check(porta_proto_parse_tx_hud(&got[0], &out) &&
               !out.active && out.aborted && out.writes_blocked &&
               out.power_dw == -1 && out.swr_c == -1 && out.battery_pct == -1 &&
-              std::string(out.text).empty(),
-              "unknown sentinels and an inactive/aborted banner round-trip");
+              std::string(out.reason) == "low battery" &&
+              std::string(out.text) == "CQ KB2SLO FN30",
+              "unknown sentinels, abort reason, and text round-trip together");
     }
 }
 

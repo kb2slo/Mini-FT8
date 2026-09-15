@@ -3,8 +3,8 @@
   "assets": [
     {
       "path": "app.html",
-      "sha256": "0a7c2c52b7ad73143b0a825499d2068b9b27d89f90c7bc65fb77b1b88cc79645",
-      "size": 44303
+      "sha256": "ca8ddfcf69363886fa138d829bcf5eb6f179ad6d30ab3d3829047cd2c628794a",
+      "size": 44718
     },
     {
       "path": "installed.html",

@@ -494,7 +494,8 @@ void porta_emit_slot_state(uint8_t slot_parity, uint8_t beacon_mode,
 }
 
 void porta_emit_tx_hud(bool active, bool aborted, bool writes_blocked,
-                       const char* text, float power_w, float swr, int battery_pct) {
+                       const char* text, float power_w, float swr, int battery_pct,
+                       const char* reason) {
   if (!s_running) return;
   porta_tx_hud_event_t h = {};
   h.epoch_secs = host_epoch_secs();
@@ -506,6 +507,9 @@ void porta_emit_tx_hud(bool active, bool aborted, bool writes_blocked,
   h.battery_pct = (int8_t)(battery_pct < -1 ? -1 : (battery_pct > 127 ? 127 : battery_pct));
   if (text) {
     strncpy(h.text, text, sizeof(h.text) - 1);
+  }
+  if (reason) {
+    strncpy(h.reason, reason, sizeof(h.reason) - 1);
   }
   uint8_t buf[PORTA_PROTO_MAX_FRAME];
   const size_t n = porta_proto_encode_tx_hud(&h, buf, sizeof(buf));

@@ -276,6 +276,7 @@ bool porta_proto_parse_slot_state(const porta_frame_t *f, porta_slot_state_event
 // the post-abort linger window) -- the browser hides its panel the instant
 // an event arrives with this false, rather than guessing from a timeout.
 #define PORTA_TX_HUD_TEXT_MAX PORTA_EVENT_TEXT_MAX
+#define PORTA_TX_HUD_REASON_MAX 24u
 
 typedef struct {
     uint32_t epoch_secs;
@@ -285,6 +286,11 @@ typedef struct {
     int16_t  power_dw;      // deciwatts (power_w * 10), -1 = unknown
     int16_t  swr_c;         // SWR * 100, -1 = unknown
     int8_t   battery_pct;   // -1 = unknown
+    char     reason[PORTA_TX_HUD_REASON_MAX + 1];  // why `aborted`, e.g. "low battery";
+                                                    // empty when not aborted -- sourced from
+                                                    // the actual abort site, not guessed
+                                                    // client-side, so a future second abort
+                                                    // reason shows up as itself
     char     text[PORTA_TX_HUD_TEXT_MAX + 1];
 } porta_tx_hud_event_t;
 
