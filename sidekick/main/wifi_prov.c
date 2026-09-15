@@ -736,6 +736,13 @@ static void start_ap(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+    // Modem sleep (the default) is a known trigger for CCMP replay-detection
+    // and block-ack churn on some APs/clients -- the radio goes quiet between
+    // beacons, and the wake transition can desync replay-counter tracking.
+    // This board has no battery reason to sleep the radio (USB/ADV powered),
+    // so there is no cost to paying for reliability instead. Must come after
+    // esp_wifi_start(), not esp_wifi_init() -- the driver requires it.
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     s_join_active = false;
     s_ap_active = true;
@@ -775,6 +782,9 @@ static bool try_join(const char *ssid, const char *pass)
     // the wait below sat forever with nothing in the log after "Joining".
     s_join_active = true;
     ESP_ERROR_CHECK(esp_wifi_start());
+    // See the AP path's comment above -- same fix, station side. This is the
+    // mode a field sidekick actually runs in day to day.
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
     ESP_LOGI(TAG, "Joining '%s'...", ssid);
     EventBits_t bits = xEventGroupWaitBits(s_events, BIT_GOT_IP | BIT_JOIN_FAIL,
