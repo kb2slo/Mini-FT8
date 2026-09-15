@@ -19,6 +19,8 @@ struct QsoLogEntry {
     int rst_rcvd = 0;
     bool has_rst_sent = false;
     int rst_sent = 0;
+    std::string freq;  // raw ADIF <freq> in MHz, e.g. "14.074"; empty if absent
+    std::string grid;  // <gridsquare>, empty if absent
 };
 
 enum class QsoBrowsePageView { Default, Alternate };

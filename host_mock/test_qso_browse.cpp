@@ -75,7 +75,17 @@ int main()
     expect_str(pager.entries[0].band, "20m", "band from freq");
     expect_true(pager.entries[0].has_rst_sent && pager.entries[0].rst_sent == -10, "rst sent");
     expect_true(pager.entries[0].has_rst_rcvd && pager.entries[0].rst_rcvd == -8, "rst rcvd");
+    expect_str(pager.entries[0].grid, "FN42", "grid parsed");
+    expect_str(pager.entries[0].freq, "14.074", "raw freq kept");
     expect_true(!pager.has_next, "no next on one qso");
+
+    const std::string rec_no_grid =
+        "<call:5>K1ABC <mode:3>FT8<qso_date:8>20260819 "
+        "<time_on:6>153000 <freq:6>14.074 <station_callsign:6>KB2SLO <eor>";
+    QsoBrowsePager pager2;
+    qso_browse_pager_reset(&pager2, 0, 6);
+    qso_browse_pager_feed(&pager2, rec_no_grid, bands, 2);
+    expect_str(pager2.entries[0].grid, "", "grid empty when absent");
 
     qso_browse_format_entry_lines(pager.entries, QsoBrowsePageView::Default, &lines);
     expect_true(lines[0].find("15:30") != std::string::npos, "default has time");

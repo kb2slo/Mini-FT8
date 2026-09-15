@@ -122,6 +122,7 @@ bool parse_record_line(const std::string& line,
     std::string call = field_after_tag(line, s_lower, "call:");
     std::string time_on = field_after_tag(line, s_lower, "time_on:");
     std::string freq = field_after_tag(line, s_lower, "freq:");
+    const std::string grid = field_after_tag(line, s_lower, "gridsquare:");
     const std::string rst_rcvd_raw = field_after_tag(line, s_lower, "rst_rcvd:");
     const std::string rst_sent_raw = field_after_tag(line, s_lower, "rst_sent:");
     std::string band = freq;
@@ -151,6 +152,8 @@ bool parse_record_line(const std::string& line,
     out->call = call;
     out->has_rst_rcvd = parse_rst(rst_rcvd_raw, &out->rst_rcvd);
     out->has_rst_sent = parse_rst(rst_sent_raw, &out->rst_sent);
+    out->freq = freq;
+    out->grid = grid;
     return true;
 }
 
