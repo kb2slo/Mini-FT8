@@ -1,6 +1,6 @@
 # RFC 0004: Headless Mini-FT8 — the phone is the UI, the sidekick is a peripheral
 
-* **Status:** Draft. Design agreed in chat 2026-09-10; I28a protocol and I28b pairing are in tree (field proof still owed). **Storage model amended 2026-09-13** (§3/§4): the web root is a LittleFS partition, hydrated from firmware embed, not an empty blob filled only by POST. Supersedes nothing; extends [RFC 0001](0001-ble-companion.md) §5.0/§5.2d, which established WiFi-plus-browser as the phone path and moved sidekick updates from a PORTA push to an HTTPS pull.
+* **Status:** Draft. Design agreed in chat 2026-09-10; I28a protocol and I28b pairing are in tree (field proof still owed). **Storage model amended 2026-09-13** (§3/§4): the web root is a LittleFS partition, hydrated from firmware embed, not an empty blob filled only by POST. Supersedes nothing; extends [RFC 0001](0001-ble-companion.md) §5.0/§5.2d, which established WiFi-plus-browser as the phone path and moved sidekick updates from a PORTA push to an HTTPS pull. **§11 extended 2026-09-14** (Log's day-file model and third-party sync, a shared offline/online info-expand pattern, and the phone-grid map handoff) — a wireframe design pass ahead of the next I28d slice, same day as the screen-model lock.
 * **Author / Lead:** Jeff Kalikstein, KB2SLO
 * **Covers:** where the web application lives, how it is delivered and trusted, how the browser reaches the radio, and what crosses the sidekick-to-main link.
 * **Does not cover:** the ESP32-P4 port itself ([I27](../ROADMAP.md), gated on B26), the decode pipeline, or anything about the ADV's existing screen and keyboard — which this design must not depend on and does not remove.
@@ -362,7 +362,17 @@ better on flaky WiFi than a WebSocket — but this deserves its own argument, no
 `key_len` + key + value bytes. Empty key on GET means the whole Station.txt surface; SET/VALUE require a
 key. ACK/NAK for SET and end-of-GET-all reuse `PORTA_MSG_ACK`/`NAK` with verb = the CONFIG message type.
 HTTP: open `GET /api/config` (JSON object), token-guarded `PUT /api/config` (Station.txt lines). Entry app
-asset is `app.html`.
+asset is `app.html`. GET-all also includes live keys (`streaming`, `cat_ready`, `tune`, `band_name`,
+`freq_khz`) that `station_key_known` refuses on SET. Band-ish CONFIG_SET pushes CAT via
+`sync_radio_to_current_band` (headless has no STATUS exit).
+
+**CONNECT / TUNE (I28d, 2026-09-14).** ACTION verbs `PORTA_ACT_CONNECT` (0x04, verb-only) and
+`PORTA_ACT_TUNE` (0x05, `u8 on`) mirror STATUS keys 2 and 4. HTTP: token-guarded
+`POST /api/radio/connect` and `POST /api/radio/tune` (body `0`/`1`).
+
+**The remaining verbs are driven by the screens, not chosen here.** §11 fixes the screen model first and
+derives what it needs of this link — a structured status event, decode identity for tap-to-queue, beacon
+parity, and queue cancel by entry.
 
 ## 7. Who may key the transmitter
 
@@ -481,7 +491,7 @@ Roadmap rows, sequenced. The protocol gates everything else.
 | Transport trial | [B47](../ROADMAP.md) — bench-prove ESP32-S3 as an I2C slave, and bus recovery after a live cable yank. Parallel; must not block. |
 | Control API + pairing | The API surface and the token (§6, §7). **Before the partition row**, because the token is what keeps the bundle POST from being an open write into a partition the device then serves code from. §4's signing chain used to hold this slot and is now rejected outright. |
 | Web FS + bootstrap | LittleFS at the 1.9 MB tail; hydrate from firmware embed; FS is the sole served origin; token-guarded phone-relayed POST with stage/verify/promote; force re-hydrate recovery; per-asset digests; NVS bundle-host URL; version pairing (§3, §4). |
-| The application | The web app, plus a PSKReporter Worker that filters rather than relays. QRZ is called directly from the browser (§8). |
+| The application | The web app, plus a PSKReporter Worker that filters rather than relays. QRZ is called directly from the browser (§8). Screen model, and what it requires of the protocol: §11. |
 
 ## 10. Risks
 
@@ -496,3 +506,231 @@ Roadmap rows, sequenced. The protocol gates everything else.
 | The bundle host drops its CORS header | Would break the relay outright and silently (§4). Observed behaviour, not policy, same as QRZ in §8. Bounded by host-independence: the base URL lives in NVS, so moving to a provider that cooperates is a config change. |
 | QRZ stops sending its CORS header | Measured open on 2026-09-10, but that is observation, not policy (§8). The application treats a refused QRZ lookup as a missing optional service, and the PSKReporter Worker is the fallback path if it has to carry QRZ too. |
 | Two browsers, one transmitter | Named and unresolved (§7). |
+
+## 11. The application's screens
+
+**Decided 2026-09-14, after surveying WSJT-X, FT8CN, iFTx and the standalone touchscreen builds
+(DX-FT8 / Pocket FT8 / sBitx). The survey's result was not the one expected.** A phone FT8 UI has four
+questions to settle — how the TX offset is chosen, how calling and answering are sequenced, how a QSO in
+progress is represented, and how the screens divide. **Mini-FT8's existing paradigm already answers the
+first three, and answers them better than the reference apps do**, leaving only the fourth genuinely
+open. So this section is mostly a record of what *not* to import. It
+sits next to §6 in spirit rather than in numbering — the screens decide the verbs, which is why the
+design pass ran before I28d's autoseq slice rather than after it.
+
+Appended rather than inserted because §3, §4, §6 and §7 are cited from code comments, `partitions.csv`,
+host tests and the roadmap; renumbering would churn all of them for a section ordering.
+
+### No waterfall, because `offset_src` already replaced its job
+
+In all three reference applications the waterfall's primary *control* role is picking the TX audio
+offset: shift-click in WSJT-X, tap the waterfall in FT8CN, tap to set TX in iFTx. Mini-FT8 does not ask
+the operator that question at all — `resolve_tx_offset()` takes Random (fresh roll in 500–2500 Hz per
+transmission), RX (answer on the caller's own offset, except for CQ) or Fixed.
+
+**Random is better than tapping a gap, not a cheap substitute for it.** A tapped gap was clear when the
+slot was decoded, which is up to fifteen seconds stale, and every operator looking at the same waterfall
+taps the same visible gaps. Re-rolling per transmission decorrelates our offset from both, costs no
+screen area, and needs no interaction on a phone — where fat-finger frequency picking is worst. It is
+also why we do not inherit FT8CN's landscape requirement, whose own reviewer wanted an 8-inch tablet
+largely to fit waterfall beside decodes.
+
+Constraint and preference happen to agree here: §6 budgets a couple of hundred bytes per second, and
+spectrum data for a waterfall is a different order of magnitude, so it could not be afforded even if it
+were wanted.
+
+What we give up is the visual "how busy is the band" read. If that is ever missed, the cheap answer is
+occupancy derived from the offsets decode events already carry, shown numerically — not a spectrum.
+**Reopen if** field operation shows repeated collisions that per-TX re-rolling does not avoid.
+
+### Not a mode machine, because beacon plus the priority queue already sequences
+
+iFTx exposes Listen / Reply / Call / Exchange as a segmented control, and WSJT-X splits Band Activity
+from Rx Frequency into two panes. Both exist to answer "am I calling or answering", because the
+application has to be told. Autoseq already knows: the queue sorts
+`IDLE > SIGNOFF > ROGERS > ROGER_REPORT > REPORT > REPLYING > CALLING`, so every live QSO outranks a CQ,
+and a CQ is short-lived — one transmission, then `tick()` pops it (`AUTOSEQ_ARCHITECTURE.md`).
+
+So the operator turns the beacon on with a parity and the machine interleaves; replies take priority
+without anyone choosing. **There is therefore no mode control on the operate screen, and no mode the
+operator can be in the wrong one of.** EVEN/ODD is the one genuinely Mini-FT8-specific control, because
+it decides which half of the cycle we occupy.
+
+### The queue is a set of concurrent QSOs, not a conversation
+
+iFTx's Exchange mode shows *the* contact — one status line, singular. Autoseq holds up to 120 contexts,
+sorted by state, with an inactive zone that preserves metadata across retry exhaustion so a patient DX
+can reactivate a dormant QSO minutes later (`AUTOSEQ_INACTIVE_QUEUE.md`). A single "current QSO" panel
+would actively misrepresent that state. The queue is a first-class region of the screen, not a detail
+of the decode list.
+
+### Screens
+
+| Screen | Contents |
+| --- | --- |
+| **Operate** (default, `app.html`) | Three stacked regions: state header, queue, decode stream. |
+| **Log** | QSO browse, backed by the ADV's files (needs `FILE_*`, §6). |
+| **Settings** | Station identity, `offset_src`, bands, radio profile, protocol — today's form. |
+| *(later)* PSKReporter | The only genuine new destination among the enrichments (§8). |
+
+**The phone's contribution is collapsing, not extending.** The ADV splits stream, queue and live state
+across RX, TX and STATUS because 240×135 forces it. A phone shows all three at once, which is the actual
+opportunity — and it is a smaller change to §6 than a mode machine would have been. Growth is by
+destination, never by feature: **QRZ is not a screen**, it is per-callsign data that expands on a decode
+or log row.
+
+The state header carries what STATUS shows plus what only the phone can show comfortably: slot countdown
+and parity, beacon state, band and frequency, CAT and audio liveness, and the resolved TX offset.
+
+### Log: one view, many day files
+
+The ADV keeps one ADIF file per UTC day — a good on-device shape (bounded file size, a natural rotation
+boundary) but not a concept the UI should expose. §11 already ruled out a view-per-feature; a day-file
+picker would be exactly that, a second navigational axis layered onto a screen this RFC just collapsed to
+one. So: **one continuous scrolling QSO list, file boundaries invisible**, with day-section dividers
+("Today", "Sep 13", ...) rather than a picker, and **lazy-load backward by day** — the current day's file
+fetches on open, an older day fetches only when the operator scrolls into it.
+
+This is not just tidiness. §6 budgets a couple of hundred bytes per second; pulling every day file on
+every `/log` open does not fit that budget, and the file-per-day boundary already on disk is exactly the
+natural pagination unit, so a `FILE_LIST` plus `FILE_GET(day)` pair replaces "dump the whole log" for
+free — see §6 below.
+
+**Open:** search. Filtering what is already loaded is the cheap default for first ship. Full-history
+search needs either on-device grep across day files or an app-side index built as days stream in, and
+neither is designed yet — a protocol decision to make deliberately, not one to back into.
+
+### Log sync, and where "already synced" lives
+
+§2's inversion holds here unchanged: the sidekick never talks to QRZ; the browser does, with the
+operator's own credentials, exactly as §8 already has it for direct QRZ lookups. Sync is therefore a
+**Log-screen action**, not a device feature — read QSOs off the device log (the day-file API above), let
+the browser push new ones to QRZ, and, later, to whichever of eQSL / LoTW / Cloudlog / Wavelog the
+operator uses (named because a comparable project already ships all four — see the QMX panadapter watch
+in [ROADMAP.md](../ROADMAP.md)).
+
+That raises a question §8 never had to answer: **where does "already synced" live?** The device's log is
+an offline ADIF file with no concept of upload status, and nothing on it should learn about QRZ. The only
+place that can hold sync state is the browser — **`localStorage`, the same honest-limit shape as §7's
+pairing token**: lost on cleared storage or a new device, with no server-side record to reconcile against.
+Unlike the pairing token, losing it has a real consequence — it risks re-uploading QSOs a destination
+already has. **Not decided:** whether that risk is acceptable, resting on the destination's own dedup
+(most logbook services dedupe on call/band/mode/date-time), or whether the app needs its own
+reconciliation pass. That is a policy decision belonging in its own write-up before the sync action is
+built, recorded here so it is not invented silently in code later.
+
+What *is* settled is the shape: a small per-destination status chip on each QSO row (filled = synced,
+outline = not) and a "Sync N new" action scoped to unsynced rows, sized to hold more than one destination
+per row without a new screen — the Screens table's rule that growth here is "by destination, never by
+feature" extends past QRZ/PSKReporter to logging destinations too.
+
+### Rich info: offline-derived vs. online-enriched
+
+The Screens table already states the shape for QRZ — "not a screen, it is per-callsign data that expands
+on a decode or log row." Grid squares deserve the same split, made explicit: **offline-derived** facts
+(DXCC/country and CQ/ITU zone from the callsign prefix, distance/bearing from grid arithmetic) are pure
+computation with no protocol dependency, so they render on tap with no wait. **Online-enriched** facts
+(QRZ bio, photo, place name) are optional, fetched only when reachable, and fail legible exactly as §8
+already requires of QRZ. One shared expand-on-tap component carries both, reused wherever a callsign or
+grid appears — a decode row, a queue entry, a QSO row — rather than a bespoke treatment per screen. This
+is a UI-pattern decision, not a new §8 destination, so it does not reopen §9's sequencing: the online half
+still waits behind whatever enrichment work reaches it.
+
+### Grid square from the phone, and why it needs a second origin
+
+The operator's grid square is a manually-edited field today, same as every reference app. Auto-filling it
+from the phone's own location looks like a browser-API question; it is actually the same one §3 already
+paid for and declined to solve. `navigator.geolocation` is gated on a **secure context**, and
+`http://minift8.local` is deliberately not one — a fact that holds regardless of whether the phone has
+internet at that moment, because the browser refuses the API on the origin's scheme alone. §3 already
+named this loss ("losing geolocation is the one that stings... the price of not owning a certificate")
+without a way around it. There is one, but it is not the obvious one.
+
+**An iframe does not work, and the reason is worth recording because it is not obvious.** The Secure
+Contexts spec walks the whole ancestor chain, not just the document calling the API: an HTTPS iframe
+nested inside `http://minift8.local` is still not a secure context, because its parent is not. Google's or
+Apple's own "locate me" code, run inside such an iframe, is denied exactly like our own code would be.
+Only a real top-level navigation reaches a genuinely secure context — embedding cannot fake one.
+
+**The fix reuses infrastructure §4 already paid for, instead of adding new infrastructure.** The bundle
+host (`kb2slo.github.io` today) already carries a publicly-trusted certificate, for the unrelated reason
+that §4's host requirement #1 needs one to serve the app bundle over HTTPS. A page hosted there is already
+inside a valid secure context, so it can call `navigator.geolocation` without the sidekick ever owning a
+certificate of its own. **Settings' "Set from map" therefore does a full top-level navigation out to that
+page and a redirect back carrying the result** — not a fetch, not an iframe. §2's "the sidekick never
+speaks TLS" is untouched: the device is not a party to this exchange at all. The phone leaves it, gets a
+fix, and comes back.
+
+```mermaid
+flowchart LR
+    s1["Settings<br/>Set from map"] -- "top-level navigation<br/>(not fetch, not iframe)" --> s2["Handoff page<br/>bundle host, HTTPS"]
+    s2 -- "navigator.geolocation<br/>real secure context" --> s3["Auto-locate,<br/>drag to correct"]
+    s3 -- "redirect back<br/>with the resulting grid" --> s4["Settings<br/>grid field filled"]
+```
+
+That page auto-locates on open and drops a pin; the operator can drag to correct it before confirming —
+auto by default, manual as the fallback in the same screen, which matters near a grid-square boundary or
+with GPS jitter and indoor multipath. Geolocation permission is granted per origin, so once the operator
+allows it on the handoff page's origin the first time, later uses do not re-prompt.
+
+**Open:** the tile provider. Google Maps' JS API needs an API key, and referrer-restricting a key to a
+page whose referrer is always the same LAN-local hostname is awkward. Leaning OpenStreetMap/Leaflet — no
+key, no vendor dependency — in the same spirit as §8's discipline of not adding infrastructure before it
+is measured necessary, but not yet decided.
+
+**Scope flag, separate from the design above.** [ROADMAP.md](../ROADMAP.md)'s I28d row locked
+*"GPS-as-primary time/grid... out of this ship (phone clock + edited grid cover QSO)"* on 2026-09-14. That
+line was written about the ADV's own GPS module; whether the operator's reasoning there — manual grid is
+good enough for first ship — extends to this phone-GPS path too is a roadmap-scope call, not a design one.
+This section describes how the feature would work if and when it is built, not that it is in I28d.
+
+### What this requires of §6, which is why the design pass came first
+
+* **A structured status event.** Per-entry autoseq state, retry counter and dxcall, plus slot parity,
+  beacon state and resolved offset. Log lines cannot carry this; the queue region is unbuildable without
+  it, and nothing else in I28d needs a new event type this badly.
+* **Decode identity.** Tap-to-queue must name a decode, so a reply references an event rather than
+  re-parsing rendered text on the phone.
+* **Beacon as an ACTION carrying parity**, matching STATUS key `1`'s three-way cycle.
+* **Queue cancel by entry**, which is what makes the queue region a control rather than a readout.
+* **`FILE_LIST` + `FILE_GET(day)` for Log.** Paginated by the day-file boundary already on disk, not a
+  bulk dump — see the Log subsection above.
+
+### Borrowed deliberately
+
+* **FT8CN's slot-timing affordance.** It transmits in the current cycle if you swipe within 2.5 s of
+  cycle start and the next cycle otherwise. The lesson is not the threshold but that the operator must be
+  able to see *which slot a tap lands in*, so the countdown belongs next to the tap target.
+* **iFTx's worked-before colouring** on CQ rows — green for new, red for worked. Cheap for us because the
+  ADV owns the log, which is also why it must be computed there and not in the browser.
+* **WSJT-X's two information needs** — "everything on the band" versus "what concerns me" — kept as
+  emphasis within one stream rather than as two panes or two modes.
+
+### Rejected
+
+| Imported idea | Why not |
+| --- | --- |
+| Waterfall | `offset_src` already does its control job better on a phone, and §6 cannot afford spectrum. |
+| Mode control (Listen / Call / Exchange) | Autoseq's priority queue sequences without being told; a mode would add an error state that does not currently exist. |
+| A view per feature | FT8CN's own review says there is too much going on for a phone, and mid-QSO tab-switching runs against a 15-second clock. |
+| Single "current QSO" panel | Misrepresents a 120-entry concurrent queue. |
+| Modifier-key interactions | The Hinson operating guide's standing complaint about WSJT-X; there are no modifiers on a phone anyway. |
+
+### Open
+
+* Whether the decode stream needs explicit filtering (CQ-only, addressed-to-me) or whether emphasis is
+  enough. Related to [I1](../ROADMAP.md), which is sort/filter on the ADV side.
+* Whether the queue region is scrollable on the operate screen or truncates to the active zone with the
+  inactive zone behind disclosure. 120 entries is a lot of phone.
+* B37's beacon time limit is the one beacon change the phone makes natural — "beaconing 1h23m, stop at
+  2h" is a phone control and an awkward Cardputer one. Not in this ship; recorded so the screen leaves
+  room for it.
+* Nav pattern: a bottom tab bar (Operate/Log/Settings) was sketched in the wireframe pass and drew no
+  objection, but §11 does not specify navigation and today's `app.html` uses a top text-link nav instead
+  — not yet a decision.
+* Sync-status persistence and dedup policy for QRZ (and later destinations) — see the Log sync subsection
+  above. `localStorage` only, same honest-limit shape as §7's token; whether that is sufficient or needs a
+  reconciliation pass against the destination is undecided.
+* Cross-day log search — first ship scoped to loaded days only (see the Log subsection above); whether
+  full-history search needs on-device grep or an app-side index is a protocol decision, not yet made.
+* Map tile provider for the grid-from-map handoff — leaning OpenStreetMap/Leaflet, not decided.
