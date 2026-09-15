@@ -27,6 +27,11 @@ const char* porta_host_config_set(const char* key, const char* value);
 // STATUS → 2 / → 4 equivalents for the companion.
 const char* porta_host_connect(void);
 const char* porta_host_tune(bool on);
+// STATUS key-1's three-way cycle, applied immediately rather than staged.
+const char* porta_host_beacon(uint8_t mode);
+// Cancel/reply by the stable ids QUEUE_ENTRY and EVENT DECODE hand out.
+const char* porta_host_queue_cancel(uint16_t entry_id);
+const char* porta_host_queue_reply(uint32_t decode_id);
 #include "porta_proto.h"
 #include "sidekick_flasher.h"
 
@@ -243,6 +248,48 @@ void handle_action(const porta_frame_t& f) {
     }
     return;
   }
+  case PORTA_ACT_BEACON: {
+    uint8_t mode = 0;
+    if (!porta_proto_parse_beacon(&f, &mode)) {
+      enqueue(buf, porta_proto_encode_nak(verb, "malformed", buf, sizeof(buf)));
+      return;
+    }
+    const char* why = porta_host_beacon(mode);
+    if (why) {
+      enqueue(buf, porta_proto_encode_nak(verb, why, buf, sizeof(buf)));
+    } else {
+      enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+    }
+    return;
+  }
+  case PORTA_ACT_QUEUE_CANCEL: {
+    uint16_t entry_id = 0;
+    if (!porta_proto_parse_queue_cancel(&f, &entry_id)) {
+      enqueue(buf, porta_proto_encode_nak(verb, "malformed", buf, sizeof(buf)));
+      return;
+    }
+    const char* why = porta_host_queue_cancel(entry_id);
+    if (why) {
+      enqueue(buf, porta_proto_encode_nak(verb, why, buf, sizeof(buf)));
+    } else {
+      enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+    }
+    return;
+  }
+  case PORTA_ACT_QUEUE_REPLY: {
+    uint32_t decode_id = 0;
+    if (!porta_proto_parse_queue_reply(&f, &decode_id)) {
+      enqueue(buf, porta_proto_encode_nak(verb, "malformed", buf, sizeof(buf)));
+      return;
+    }
+    const char* why = porta_host_queue_reply(decode_id);
+    if (why) {
+      enqueue(buf, porta_proto_encode_nak(verb, why, buf, sizeof(buf)));
+    } else {
+      enqueue(buf, porta_proto_encode_ack(verb, buf, sizeof(buf)));
+    }
+    return;
+  }
   default:
     enqueue(buf, porta_proto_encode_nak(verb, "unknown action", buf, sizeof(buf)));
     return;
@@ -349,11 +396,12 @@ void porta_emit_log(const char* text) {
   enqueue(buf, n);
 }
 
-void porta_emit_decode(const char* text, int snr, int offset_hz, float dt_s,
-                       bool is_cq, bool is_to_me, bool is_recent_qso) {
+void porta_emit_decode(uint32_t decode_id, const char* text, int snr, int offset_hz,
+                       float dt_s, bool is_cq, bool is_to_me, bool is_recent_qso) {
   if (!s_running || !text) return;
   porta_decode_event_t ev = {};
   ev.epoch_secs = host_epoch_secs();
+  ev.decode_id = decode_id;
   strncpy(ev.text, text, sizeof(ev.text) - 1);
   // Clamped rather than cast: an out-of-range value should read as an extreme,
   // not wrap round to a plausible-looking wrong one.
