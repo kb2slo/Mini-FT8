@@ -756,7 +756,32 @@ function renderTxHud() {
 
 // ===================== Operate: queue =====================
 
-var queue = {}; // entry_id -> {dxcall, state, retry_count, retry_limit}
+var queue = {}; // entry_id -> {dxcall, state, retry_count, retry_limit, lastSeenMs}
+
+// Safety net against a lost IDLE (RFC 0004 §11's removal signal): /api/events
+// is a bounded 64-entry ring shared by every event type (decodes, slot_state,
+// TX HUD, queue), and porta_queue_state_tick() re-sends QUEUE_ENTRY for every
+// still-active id every single second whether or not it changed -- so the
+// ring can wrap in well under a minute from steady 1Hz churn alone, with
+// nothing decoding at all. A browser that misses one poll (backgrounded tab,
+// a slow WiFi hiccup) can have its `since` cursor skip past a wrapped IDLE
+// with no way to detect the gap (the server clamps silently, host_link.c),
+// leaving a "cq"/CALLING ghost in `queue` forever since nothing ever tells it
+// to remove one. But the server's own re-send-every-tick behavior means an
+// entry still genuinely active is *reconfirmed* every ~1s regardless -- so
+// anything not reconfirmed for a few ticks is gone, IDLE or not.
+var QUEUE_STALE_MS = 4000;
+function sweepStaleQueue() {
+  var now = Date.now();
+  var changed = false;
+  Object.keys(queue).forEach(function (id) {
+    if (now - queue[id].lastSeenMs > QUEUE_STALE_MS) {
+      delete queue[id];
+      changed = true;
+    }
+  });
+  return changed;
+}
 
 function renderQueue() {
   var ids = Object.keys(queue).sort(function (a, b) { return queue[b].state - queue[a].state; });
@@ -867,7 +892,8 @@ function applyEvent(e) {
     if (e.st === 6) {
       delete queue[e.eid]; // IDLE is the removal signal (RFC 0004 §11)
     } else {
-      queue[e.eid] = { dxcall: e.x, state: e.st, retry_count: e.rc, retry_limit: e.rl };
+      queue[e.eid] = { dxcall: e.x, state: e.st, retry_count: e.rc, retry_limit: e.rl,
+                       lastSeenMs: Date.now() };
     }
   } else if (e.d === 3) {
     slotState = { sp: e.sp, bm: e.bm, hz: e.hz };
@@ -881,7 +907,8 @@ async function pollEvents() {
   try {
     var r = await fetch('/api/events?since=' + evSeq, { cache: 'no-store' });
     var j = await r.json();
-    if (j.events && j.events.length) {
+    var gotEvents = j.events && j.events.length;
+    if (gotEvents) {
       pendingDecodes = [];
       j.events.forEach(applyEvent);
       if (pendingDecodes.length) {
@@ -890,10 +917,15 @@ async function pollEvents() {
         decodeSlots.unshift(pendingDecodes);
         if (decodeSlots.length > DECODE_SLOTS_MAX) decodeSlots.length = DECODE_SLOTS_MAX;
       }
-      renderQueue();
       renderDecodes();
       renderBeacon();
       renderTxHud();
+    }
+    // Runs every tick, not just when this poll carried events -- a quiet
+    // poll (nothing new) is exactly when a previously-missed IDLE needs to
+    // still be caught by the staleness sweep.
+    if (sweepStaleQueue() || gotEvents) {
+      renderQueue();
     }
     evSeq = j.seq;
   } catch (e) { /* next tick */ }
