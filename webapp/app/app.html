@@ -80,9 +80,11 @@ button:disabled{opacity:.45}
 /* ---- operate: decode stream ---- */
 #opDecodes{padding-bottom:.5rem}
 #opDecodes .hd{padding:.6rem 1rem .2rem;font-size:.7rem;color:GrayText;text-transform:uppercase;letter-spacing:.04em}
-.drow{padding:.4rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent);cursor:pointer}
+.drow{padding:.4rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent)}
 .drow .meta{font-family:ui-monospace,monospace;font-size:.7rem;color:GrayText;display:flex;justify-content:space-between}
-.drow .txt{font-size:.85rem;margin-top:.1rem}
+.drow-body{display:flex;align-items:flex-start;gap:.5rem;margin-top:.1rem}
+.replyBtn{flex:none;font-size:.7rem;padding:.15rem .5rem;background:ButtonFace;color:ButtonText;border:1px solid GrayText;border-radius:.3rem}
+.drow .txt{font-size:.85rem}
 /* Same precedence as ui.cpp's draw_rx_line(): to_me red, else recent_qso gray,
    else cq green, else default text color. */
 .drow .txt.c-me{color:#ff0000;font-weight:700}
@@ -202,7 +204,7 @@ button:disabled{opacity:.45}
     </div>
 
     <div id=opDecodes>
-      <div class=hd>Decodes &middot; tap to reply</div>
+      <div class=hd>Decodes &middot; tap a callsign for info</div>
       <div id=opDecodeRows></div>
     </div>
   </section>
@@ -1159,13 +1161,17 @@ function renderDecodes() {
       // carry a grid themselves. '' whenever the sender is unclear or was
       // never seen sending a grid.
       var senderCall = extractSenderCall(d.x);
+      var allCalls = extractAllCallsigns(d.x);
       var theirGrid = senderCall && callsignGridCache[senderCall];
       var distBearing = theirGrid ? fmtDistBearing(lastCfg.grid, theirGrid) : '';
       return '<div class=drow data-id="' + d.id + '">' +
         '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
         (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
-        '<div class="txt ' + decodeColorClass(d) + '">' + highlightCallInText(d.x, senderCall) +
-        (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
+        '<div class=drow-body>' +
+          '<button type=button class=replyBtn data-id="' + d.id + '">Reply</button>' +
+          '<div class="txt ' + decodeColorClass(d) + '">' + highlightCallInText(d.x, allCalls) +
+          (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
+        '</div>' +
         (distBearing ? '<div class=ddist>' + esc(theirGrid) + ' · ' + esc(distBearing) + '</div>' : '') +
         '</div>';
     }).join('');
@@ -1176,8 +1182,9 @@ function renderDecodes() {
       showCallInfo(el.getAttribute('data-call'));
     };
   });
-  rows.querySelectorAll('.drow').forEach(function (el) {
-    el.onclick = function () {
+  rows.querySelectorAll('.replyBtn').forEach(function (el) {
+    el.onclick = function (ev) {
+      ev.stopPropagation();
       radioPost('/api/queue/reply', el.getAttribute('data-id'), 'Queueing…')
         .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
     };
@@ -1267,6 +1274,10 @@ var logFileLoadedCount = {}; // filename -> rows already loaded for it, persists
 var logGroupEls = {};        // filename -> its <div class=daygroup> DOM container, so
                              // appending new rows to a file lands in that file's own
                              // section regardless of what's been loaded after it
+var logEntriesByCall = {};  // callsign -> [{file,time,band,freq,rst_sent,rst_rcvd}], built
+                             // up in appendLogRows() as the Log tab pages through day
+                             // files -- only covers what's been loaded so far this
+                             // session, not necessarily the whole log (see showCallInfo)
 var logDone = false;         // every file drained, nothing left anywhere
 var logLoading = false;
 var logRefreshing = false;
@@ -1425,6 +1436,24 @@ function extractSenderCall(text) {
   return looksLikeCallsign(sender) ? sender : '';
 }
 
+// Every callsign token in a decode's own text, not just the sender --
+// "<ADDRESSEE> <SENDER> ..." names two stations, and both should be
+// clickable. A "CQ ..." line only ever names one (its tokens[0] is the CQ
+// keyword, not a station), so extractSenderCall's own result is already
+// complete there.
+function extractAllCallsigns(text) {
+  if (!text) return [];
+  var tokens = text.trim().toUpperCase().split(/\s+/).map(function (t) {
+    return t.replace(/^<|>$/g, '');
+  });
+  if (tokens.length < 2) return [];
+  var out = [];
+  if (tokens[0] !== 'CQ' && looksLikeCallsign(tokens[0])) out.push(tokens[0]);
+  var sender = extractSenderCall(text);
+  if (sender && out.indexOf(sender) === -1) out.push(sender);
+  return out;
+}
+
 function learnCallsignGrid(text) {
   if (!text) return;
   var tokens = text.trim().toUpperCase().split(/\s+/);
@@ -1438,18 +1467,19 @@ function learnCallsignGrid(text) {
 }
 
 // ---- Callsign info modal (Operate + QSOs) ----
-// Wraps just the sender token within a decode's own text in a clickable
-// span, rather than making the whole row open the modal -- .drow already
-// has a full-row tap-to-reply, and this has to coexist with it (the
-// callink's own click handler stops propagation so tapping the callsign
-// doesn't also queue a reply). Every other token is still individually
-// escaped same as before, so this can't reopen the class of hole esc()
-// exists to close.
-function highlightCallInText(text, call) {
-  if (!call) return esc(text);
+// Wraps every callsign token (from extractAllCallsigns -- sender and, when
+// present, addressee) within a decode's own text in its own clickable span.
+// Reply is now its own button (see renderDecodes()), so this no longer has
+// to coexist with a full-row click handler. Every other token is still
+// individually escaped same as before, so this can't reopen the class of
+// hole esc() exists to close.
+function highlightCallInText(text, calls) {
+  if (!calls || !calls.length) return esc(text);
   return text.split(/(\s+)/).map(function (tok) {
     var bare = tok.replace(/^<|>$/g, '').toUpperCase();
-    return bare === call ? '<span class=callink data-call="' + esc(call) + '">' + esc(tok) + '</span>' : esc(tok);
+    return calls.indexOf(bare) !== -1
+      ? '<span class=callink data-call="' + esc(bare) + '">' + esc(tok) + '</span>'
+      : esc(tok);
   }).join('');
 }
 
@@ -1464,8 +1494,10 @@ function highlightCallInText(text, call) {
 // next iteration, not this one.
 function showCallInfo(call) {
   if (!call) return;
+  call = call.toUpperCase();
   var grid = callsignGridCache[call];
   var distBearing = (grid && lastCfg.grid) ? fmtDistBearing(lastCfg.grid, grid) : '';
+  var qsoHist = logEntriesByCall[call] || [];
   var heard = [];
   decodeSlots.forEach(function (slot) {
     slot.forEach(function (d) {
@@ -1480,8 +1512,19 @@ function showCallInfo(call) {
   body += '<div class=ci-row><div class=ci-label>Grid square</div>' +
     (grid
       ? esc(grid) + (distBearing ? ' · ' + esc(distBearing) : '') +
-        ' <span style="color:GrayText;font-size:.75rem">(cached, not authoritative)</span>'
+        ' <span style="color:GrayText;font-size:.75rem">(cached)</span>'
       : 'Not seen sending a grid yet this session') +
+    '</div>';
+  body += '<div class=ci-row><div class=ci-label>QSOs in log (' + qsoHist.length + ')</div>' +
+    (qsoHist.length
+      ? qsoHist.slice(0, 6).map(function (q) {
+          return '<div class=ci-heard>' + esc(dayLabel(q.file).replace(' (Today)', '')) +
+            (q.time ? ' ' + esc(q.time) : '') + (q.band ? ' · ' + esc(q.band) : '') +
+            (q.freq ? ' · ' + esc(q.freq) + ' MHz' : '') +
+            ' · ' + fmtRst(q.rst_sent) + '/' + fmtRst(q.rst_rcvd) + '</div>';
+        }).join('') +
+        ' <span style="color:GrayText;font-size:.75rem">(only what the Log tab has loaded so far)</span>'
+      : 'No QSOs with this callsign in the loaded log') +
     '</div>';
   body += '<div class=ci-row><div class=ci-label>Heard this session (' + heard.length + ')</div>' +
     (heard.length
@@ -1571,6 +1614,12 @@ function appendLogRows(file, rows, prependGroup) {
     var callEl = row.querySelector('.callink');
     if (callEl) {
       callEl.onclick = function () { showCallInfo(callEl.getAttribute('data-call')); };
+    }
+    var callKey = (q.call || '').toUpperCase();
+    if (callKey) {
+      if (!logEntriesByCall[callKey]) logEntriesByCall[callKey] = [];
+      logEntriesByCall[callKey].push({ file: file, time: q.time, band: q.band, freq: q.freq,
+                                       rst_sent: q.rst_sent, rst_rcvd: q.rst_rcvd });
     }
   });
 }
