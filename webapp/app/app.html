@@ -1,96 +1,218 @@
 <!doctype html>
 <meta name=viewport content='width=device-width,initial-scale=1'>
 <title>Mini-FT8</title>
+<!--
+  Entry asset for the installed app (RFC 0004 §11). Three screens behind one
+  bottom tab bar: Operate (default) collapses what the ADV's 240x135 splits
+  across RX/TX/STATUS; Log browses the day files over the async FILE_LIST/
+  FILE_READ relay; Settings is the station-config form this page used to be
+  on its own before I28d's screen model landed.
+
+  All three share one /api/events poll (RFC 0004 §6 -- the same polled shape
+  as the ADV's own Port A link) and one /api/config fetch. Settings' form
+  fields are only ever written by loadConfig() at boot or right after an
+  explicit action (save/connect/tune/clock) -- never by the periodic poll,
+  which would stomp on an in-progress edit. Operate's live header is the
+  opposite: refreshed on every poll tick, never touches the form.
+-->
 <style>
-body{font-family:system-ui;margin:1rem auto;max-width:26rem;padding:0 1rem;line-height:1.35}
-h1{font-size:1.25rem;margin:0 0 .5rem}
-h2{font-size:1rem;margin:1.4rem 0 .5rem;color:#333}
-label{display:block;font-size:.8rem;color:#666;margin-top:.6rem}
-input,select{width:100%;box-sizing:border-box;padding:.45rem;font-size:1rem;margin-top:.15rem}
-button{width:100%;padding:.7rem;font-size:1rem;margin-top:.8rem}
-#m{color:#666;font-size:.85rem;min-height:1.2em;margin-top:.5rem}
-#live{font-size:.9rem;margin:.4rem 0 .2rem;color:#222}
-nav{font-size:.9rem;margin-top:1.2rem}
-a{color:#06c}
+:root{color-scheme:light dark}
+body{font-family:system-ui;margin:0;padding:0 0 3.75rem;line-height:1.35;background:Canvas;color:CanvasText}
+h1{font-size:1.15rem;margin:0}
+h2{font-size:.95rem;margin:1.1rem 0 .5rem;color:GrayText}
+label{display:block;font-size:.8rem;color:GrayText;margin-top:.6rem}
+input,select{width:100%;box-sizing:border-box;padding:.45rem;font-size:1rem;margin-top:.15rem;background:Field;color:FieldText}
+button{padding:.6rem;font-size:.95rem;background:ButtonFace;color:ButtonText;border:1px solid GrayText;border-radius:.4rem}
+button:disabled{opacity:.45}
+.wrap{max-width:26rem;margin:0 auto;padding:0 1rem}
+#m{color:GrayText;font-size:.85rem;min-height:1.2em;margin:.5rem 0}
 .row{display:flex;gap:.5rem}
 .row>*{flex:1}
 .row button{margin-top:.5rem}
+[hidden]{display:none!important}
+
+/* ---- tab bar ---- */
+#tabbar{position:fixed;left:0;right:0;bottom:0;display:flex;border-top:1px solid GrayText;background:Canvas}
+#tabbar button{flex:1;border:0;border-radius:0;background:transparent;padding:.5rem 0 .6rem;font-size:.7rem;display:flex;flex-direction:column;align-items:center;gap:.15rem;color:GrayText}
+#tabbar button.on{color:CanvasText;font-weight:700}
+#tabbar svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+/* ---- operate: state header ---- */
+#opHeader{padding:.75rem 1rem;border-bottom:1px solid color-mix(in srgb, GrayText 30%, transparent)}
+#opHeader .top{display:flex;justify-content:space-between;align-items:flex-end}
+#countdown{font-family:ui-monospace,monospace;font-size:1.9rem;font-weight:700;line-height:1}
+#slotSub{font-size:.7rem;color:GrayText}
+.pill{display:inline-block;font-size:.7rem;font-weight:700;padding:.15rem .5rem;border-radius:999px}
+.pill-parity{background:#dbeafe;color:#1e3a8a}
+.pill-beacon-on{background:#dcfce7;color:#14532d}
+.pill-beacon-off{background:color-mix(in srgb, GrayText 20%, transparent);color:GrayText}
+#opLive{display:flex;justify-content:space-between;font-family:ui-monospace,monospace;font-size:.75rem;color:GrayText;margin-top:.6rem}
+#opDots{display:flex;gap:.9rem;margin-top:.4rem;font-size:.7rem;color:GrayText}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:.3rem;background:GrayText}
+.dot.up{background:#22c55e}
+#beaconBtn{width:100%;margin-top:.6rem;text-align:left}
+
+/* ---- operate: queue ---- */
+#opQueue{border-bottom:1px solid color-mix(in srgb, GrayText 30%, transparent);max-height:11rem;overflow-y:auto}
+#opQueue .hd{padding:.6rem 1rem .2rem;font-size:.7rem;color:GrayText;text-transform:uppercase;letter-spacing:.04em}
+.qrow{display:flex;align-items:center;gap:.5rem;padding:.4rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent)}
+.qrow .call{font-family:ui-monospace,monospace;font-weight:700;flex:1}
+.qrow .retry{font-size:.7rem;color:GrayText;display:block}
+.qstate{font-size:.65rem;font-weight:700;padding:.15rem .4rem;border-radius:.3rem;white-space:nowrap}
+.qs-0{background:#dbeafe;color:#1e3a8a}                    /* CALLING */
+.qs-1,.qs-2,.qs-3{background:#fef3c7;color:#78350f}          /* REPLYING/REPORT/ROGER_REPORT */
+.qs-4,.qs-5{background:#dcfce7;color:#14532d}                /* ROGERS/SIGNOFF */
+.qcancel{background:transparent;border:0;color:GrayText;font-size:1rem;padding:0 .2rem}
+#opQueueEmpty{padding:.6rem 1rem;font-size:.8rem;color:GrayText}
+
+/* ---- operate: decode stream ---- */
+#opDecodes{padding-bottom:.5rem}
+#opDecodes .hd{padding:.6rem 1rem .2rem;font-size:.7rem;color:GrayText;text-transform:uppercase;letter-spacing:.04em}
+.drow{padding:.4rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent);cursor:pointer}
+.drow .meta{font-family:ui-monospace,monospace;font-size:.7rem;color:GrayText;display:flex;justify-content:space-between}
+.drow .txt{font-size:.85rem;margin-top:.1rem}
+.drow .txt.strong{font-weight:700}
+.drow .me{font-size:.65rem;font-weight:700;color:#1d4ed8;border:1px solid #93c5fd;border-radius:.3rem;padding:0 .3rem;margin-left:.3rem}
+
+/* ---- log ---- */
+#logList{padding-bottom:.5rem}
+.day{padding:.6rem 1rem .2rem;font-size:.75rem;font-weight:700;color:GrayText}
+.frow{padding:.5rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent);display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+.frow .call{font-family:ui-monospace,monospace;font-weight:700}
+.frow .sub{font-size:.7rem;color:GrayText}
+#logMore{padding:.7rem 1rem;text-align:center;color:GrayText;font-size:.8rem}
 </style>
 
-<h1>Mini-FT8</h1>
-<p id=m>Loading…</p>
+<div class=wrap>
+  <h1>Mini-FT8</h1>
+  <p id=m>Loading…</p>
 
-<section>
-  <h2>Station</h2>
-  <label>Call <input id=call autocomplete=off spellcheck=false></label>
-  <label>Grid <input id=grid autocomplete=off spellcheck=false></label>
-  <label>CQ type
-    <select id=cq_type>
-      <option value=0>CQ</option>
-      <option value=1>SOTA</option>
-      <option value=2>POTA</option>
-      <option value=3>QRP</option>
-      <option value=4>FD</option>
-      <option value=5>FreeText</option>
-    </select>
-  </label>
-  <label>CQ / exchange text <input id=cq_ft autocomplete=off></label>
-  <label>Free-text field <input id=free_text autocomplete=off></label>
-  <label>Comment <input id=comment1 autocomplete=off></label>
-  <label>Ignore prefixes <input id=ignore_prefixes autocomplete=off></label>
-</section>
+  <!-- ================= OPERATE ================= -->
+  <section id=view-operate>
+    <div id=opHeader>
+      <div class=top>
+        <div>
+          <div id=countdown>—</div>
+          <div id=slotSub>—</div>
+        </div>
+        <span id=parityPill class="pill pill-parity">—</span>
+      </div>
+      <button id=beaconBtn type=button disabled>Beacon: —</button>
+      <div id=opLive><span id=opBandFreq>Band: —</span><span id=opOffset>TX: —</span></div>
+      <div id=opDots>
+        <span><span id=dotCat class=dot></span>CAT</span>
+        <span><span id=dotAudio class=dot></span>Audio</span>
+      </div>
+    </div>
 
-<section>
-  <h2>Radio</h2>
-  <p id=live>Audio: — · CAT: — · Tune: — · Band: —</p>
-  <div class=row>
-    <button id=connect type=button disabled>Connect</button>
-    <button id=tune_on type=button disabled>Tune on</button>
-    <button id=tune_off type=button disabled>Tune off</button>
-  </div>
-  <div class=row>
-    <label>Offset Hz <input id=offset type=number></label>
-    <label>Offset src
-      <select id=offset_src>
-        <option value=0>Random</option>
-        <option value=1>RX</option>
-        <option value=2>Fixed</option>
-      </select>
-    </label>
-  </div>
-  <label>Radio profile (saved int) <input id=radio type=number></label>
-  <label>Active bands <input id=active_bands autocomplete=off></label>
-  <label>Band <select id=band_sel></select></label>
-  <label>Protocol
-    <select id=protocol_mode>
-      <option value=FT8>FT8</option>
-      <option value=FT4>FT4</option>
-    </select>
-  </label>
-  <div class=row>
-    <label>Skip TX1
-      <select id=skiptx1>
-        <option value=0>Off</option>
-        <option value=1>On</option>
-      </select>
-    </label>
-    <label>Max retry <input id=autoseq_max_retry type=number min=0></label>
-  </div>
-  <label>RxTx log
-    <select id=rxtx_log>
-      <option value=0>Off</option>
-      <option value=1>On</option>
-    </select>
-  </label>
-</section>
+    <div id=opQueue>
+      <div class=hd>Queue</div>
+      <div id=opQueueEmpty>No active QSOs</div>
+      <div id=opQueueRows></div>
+    </div>
 
-<button id=save type=button disabled>Save station</button>
-<button id=clock type=button disabled>Sync clock from phone</button>
+    <div id=opDecodes>
+      <div class=hd>Decodes &middot; tap to reply</div>
+      <div id=opDecodeRows></div>
+    </div>
+  </section>
 
-<nav>
-  <a href=/log>Live log</a> ·
-  <a href=/update>Install / update</a> ·
-  <a href=/>Status</a>
+  <!-- ================= LOG ================= -->
+  <section id=view-log hidden>
+    <div id=logList></div>
+    <div id=logMore hidden><button id=logMoreBtn type=button>Load older days</button></div>
+  </section>
+
+  <!-- ================= SETTINGS ================= -->
+  <section id=view-settings hidden>
+    <section>
+      <h2>Station</h2>
+      <label>Call <input id=call autocomplete=off spellcheck=false></label>
+      <label>Grid <input id=grid autocomplete=off spellcheck=false></label>
+      <label>CQ type
+        <select id=cq_type>
+          <option value=0>CQ</option>
+          <option value=1>SOTA</option>
+          <option value=2>POTA</option>
+          <option value=3>QRP</option>
+          <option value=4>FD</option>
+          <option value=5>FreeText</option>
+        </select>
+      </label>
+      <label>CQ / exchange text <input id=cq_ft autocomplete=off></label>
+      <label>Free-text field <input id=free_text autocomplete=off></label>
+      <label>Comment <input id=comment1 autocomplete=off></label>
+      <label>Ignore prefixes <input id=ignore_prefixes autocomplete=off></label>
+    </section>
+
+    <section>
+      <h2>Radio</h2>
+      <p id=live>Audio: — · CAT: — · Tune: — · Band: —</p>
+      <div class=row>
+        <button id=connect type=button disabled>Connect</button>
+        <button id=tune_on type=button disabled>Tune on</button>
+        <button id=tune_off type=button disabled>Tune off</button>
+      </div>
+      <div class=row>
+        <label>Offset Hz <input id=offset type=number></label>
+        <label>Offset src
+          <select id=offset_src>
+            <option value=0>Random</option>
+            <option value=1>RX</option>
+            <option value=2>Fixed</option>
+          </select>
+        </label>
+      </div>
+      <label>Radio profile (saved int) <input id=radio type=number></label>
+      <label>Active bands <input id=active_bands autocomplete=off></label>
+      <label>Band <select id=band_sel></select></label>
+      <label>Protocol
+        <select id=protocol_mode>
+          <option value=FT8>FT8</option>
+          <option value=FT4>FT4</option>
+        </select>
+      </label>
+      <div class=row>
+        <label>Skip TX1
+          <select id=skiptx1>
+            <option value=0>Off</option>
+            <option value=1>On</option>
+          </select>
+        </label>
+        <label>Max retry <input id=autoseq_max_retry type=number min=0></label>
+      </div>
+      <label>RxTx log
+        <select id=rxtx_log>
+          <option value=0>Off</option>
+          <option value=1>On</option>
+        </select>
+      </label>
+    </section>
+
+    <button id=save type=button disabled style="width:100%">Save station</button>
+    <button id=clock type=button disabled style="width:100%">Sync clock from phone</button>
+
+    <nav style="font-size:.85rem;margin:1rem 0">
+      <a href=/log>Raw ADV log</a> ·
+      <a href=/update>Install / update</a> ·
+      <a href=/>Status</a>
+    </nav>
+  </section>
+</div>
+
+<nav id=tabbar>
+  <button type=button data-view=operate class=on>
+    <svg viewBox="0 0 24 24"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>
+    Operate
+  </button>
+  <button type=button data-view=log>
+    <svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>
+    Log
+  </button>
+  <button type=button data-view=settings>
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1 1.55V21a2 2 0 01-4 0v-.09A1.7 1.7 0 009 19.4a1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.7 1.7 0 004.6 15a1.7 1.7 0 00-1.55-1H3a2 2 0 010-4h.09A1.7 1.7 0 004.6 9a1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06A1.7 1.7 0 009 4.6a1.7 1.7 0 001-1.55V3a2 2 0 014 0v.09A1.7 1.7 0 0015 4.6a1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06A1.7 1.7 0 0019.4 9a1.7 1.7 0 001.55 1H21a2 2 0 010 4h-.09a1.7 1.7 0 00-1.55 1z"/></svg>
+    Settings
+  </button>
 </nav>
 
 <script src=/pairing.js></script>
@@ -109,12 +231,45 @@ var FIELDS = [
   'offset','offset_src','radio','active_bands','band_sel','protocol_mode',
   'skiptx1','autoseq_max_retry','rxtx_log'
 ];
+var CQ_TYPE_NAMES = ['CQ', 'SOTA', 'POTA', 'QRP', 'FD', 'FreeText'];
+var BEACON_NAMES = ['Off', 'Even', 'Odd'];
+// AutoseqState wire values (main/autoseq.h). 6 = IDLE = remove from display.
+var QUEUE_STATE_NAMES = ['CALLING', 'REPLYING', 'REPORT', 'ROGER REPORT', 'ROGERS', 'SIGNOFF'];
 
 function setMsg(t) { m.textContent = t; }
 
 function yn(v) {
   return (v === '1' || v === 1 || v === true || v === 'true') ? 'yes' : 'no';
 }
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+// ===================== tabs =====================
+
+var VIEWS = ['operate', 'log', 'settings'];
+var currentView = 'operate';
+
+function showView(name) {
+  currentView = name;
+  VIEWS.forEach(function (v) {
+    document.getElementById('view-' + v).hidden = (v !== name);
+  });
+  document.querySelectorAll('#tabbar button').forEach(function (b) {
+    b.classList.toggle('on', b.getAttribute('data-view') === name);
+  });
+  if (name === 'log' && !logLoadedOnce) { loadLogFiles(); }
+}
+document.querySelectorAll('#tabbar button').forEach(function (b) {
+  b.onclick = function () { showView(b.getAttribute('data-view')); };
+});
+
+// ===================== config (shared: Operate live header + Settings form) =====================
+
+var lastCfg = {};
 
 function bandFreq(cfg, idx) {
   var k = 'band' + idx;
@@ -156,6 +311,8 @@ function fillBandSelect(cfg) {
   if (sel.value !== cur && rows.length) sel.selectedIndex = 0;
 }
 
+// Settings' own live line (kept for that screen); Operate has its own header
+// below fed by the same cfg object, applyOperateLive().
 function setLive(cfg) {
   var band = cfg.band_name || '—';
   if (cfg.freq_khz !== undefined && cfg.freq_khz !== null && cfg.freq_khz !== '') {
@@ -202,6 +359,19 @@ function formBody() {
   return lines.join('\n');
 }
 
+// Operate's header: band/freq, CAT/audio dots, cq_type (for the beacon
+// label). Safe to call on every poll tick -- never touches Settings' inputs.
+function applyOperateLive(cfg) {
+  var band = cfg.band_name || '—';
+  if (cfg.freq_khz !== undefined && cfg.freq_khz !== null && cfg.freq_khz !== '') {
+    band += ' · ' + cfg.freq_khz + ' kHz';
+  }
+  document.getElementById('opBandFreq').textContent = 'Band: ' + band;
+  document.getElementById('dotCat').classList.toggle('up', yn(cfg.cat_ready) === 'yes');
+  document.getElementById('dotAudio').classList.toggle('up', yn(cfg.streaming) === 'yes');
+  renderBeacon();
+}
+
 async function loadConfig() {
   setMsg('Loading config from ADV…');
   var ac = new AbortController();
@@ -214,7 +384,9 @@ async function loadConfig() {
     if (cfg.ok === false) {
       throw new Error(cfg.why || 'config failed');
     }
+    lastCfg = cfg;
     setForm(cfg);
+    applyOperateLive(cfg);
     var n = 0;
     for (var k in cfg) { if (Object.prototype.hasOwnProperty.call(cfg, k)) n++; }
     if (n === 0) {
@@ -232,6 +404,18 @@ async function loadConfig() {
     setMsg(msg);
     throw e;
   }
+}
+
+// Periodic, Operate-only refresh: live header fields alone, never the form.
+async function pollLiveStatus() {
+  try {
+    var r = await fetch('/api/config', { cache: 'no-store' });
+    if (!r.ok) return;
+    var cfg = await r.json();
+    if (cfg.ok === false) return;
+    lastCfg = cfg;
+    applyOperateLive(cfg);
+  } catch (e) { /* next tick */ }
 }
 
 async function saveConfig() {
@@ -310,16 +494,8 @@ function enableWrites(on) {
   document.getElementById('connect').disabled = !on;
   document.getElementById('tune_on').disabled = !on;
   document.getElementById('tune_off').disabled = !on;
+  document.getElementById('beaconBtn').disabled = !on;
 }
-
-MiniFT8Pairing.boot({
-  status: m,
-  onPaired: function () {
-    enableWrites(true);
-    setMsg('Paired — edit and save');
-  }
-});
-if (MiniFT8Pairing.getToken()) enableWrites(true);
 
 document.getElementById('save').onclick = function () {
   saveConfig().catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
@@ -340,5 +516,235 @@ document.getElementById('tune_off').onclick = function () {
     .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
 };
 
+// ===================== Operate: countdown + parity (client clock, no wire dependency) =====================
+
+var PROTO_PERIOD_MS = { FT8: 15000, FT4: 7500 };
+
+function periodMs() {
+  return PROTO_PERIOD_MS[(lastCfg.protocol_mode === 'FT4') ? 'FT4' : 'FT8'];
+}
+
+function renderCountdown() {
+  var p = periodMs();
+  var now = Date.now();
+  var intoSlot = now % p;
+  var parity = Math.floor(now / p) % 2;
+  var secsLeft = Math.ceil((p - intoSlot) / 1000);
+  document.getElementById('countdown').textContent = secsLeft + 's';
+  document.getElementById('slotSub').textContent = 'to TX · ' + (parity ? 'ODD' : 'EVEN') + ' slot';
+  var pill = document.getElementById('parityPill');
+  pill.textContent = parity ? 'ODD' : 'EVEN';
+}
+setInterval(renderCountdown, 250);
+
+// ===================== Operate: beacon =====================
+
+var slotState = null; // last SLOT_STATE event: {sp, bm, hz}
+
+function renderBeacon() {
+  var btn = document.getElementById('beaconBtn');
+  var mode = slotState ? slotState.bm : 0;
+  var cqName = CQ_TYPE_NAMES[parseInt(lastCfg.cq_type, 10)] || 'CQ';
+  btn.textContent = (mode && mode > 0)
+    ? ('Beacon: ' + cqName + ' · ' + BEACON_NAMES[mode] + ' (tap to change)')
+    : 'Beacon: Off (tap to start)';
+  // 0 means "nothing pending" (main.cpp's porta_queue_state_tick sends it
+  // when g_pending_tx_valid is false) -- not a real offset, so it must not
+  // pass a != null check the way it would.
+  document.getElementById('opOffset').textContent =
+    'TX: ' + (slotState && slotState.hz > 0 ? (slotState.hz + ' Hz') : '—');
+}
+
+document.getElementById('beaconBtn').onclick = function () {
+  var next = ((slotState ? slotState.bm : 0) + 1) % 3;
+  radioPost('/api/beacon', String(next), 'Beacon…')
+    .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+};
+
+// ===================== Operate: queue =====================
+
+var queue = {}; // entry_id -> {dxcall, state, retry_count, retry_limit}
+
+function renderQueue() {
+  var ids = Object.keys(queue).sort(function (a, b) { return queue[b].state - queue[a].state; });
+  var rows = document.getElementById('opQueueRows');
+  document.getElementById('opQueueEmpty').hidden = ids.length > 0;
+  rows.innerHTML = ids.map(function (id) {
+    var q = queue[id];
+    return '<div class=qrow>' +
+      '<div><span class=call>' + esc(q.dxcall) + '</span>' +
+      '<span class=retry>retry ' + q.retry_count + '/' + q.retry_limit + '</span></div>' +
+      '<span class="qstate qs-' + q.state + '">' + esc(QUEUE_STATE_NAMES[q.state] || '?') + '</span>' +
+      '<button type=button class=qcancel data-id="' + id + '">&times;</button>' +
+      '</div>';
+  }).join('');
+  rows.querySelectorAll('.qcancel').forEach(function (b) {
+    b.onclick = function () {
+      radioPost('/api/queue/cancel', b.getAttribute('data-id'), 'Cancel…')
+        .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+    };
+  });
+}
+
+// ===================== Operate: decode stream =====================
+
+var decodes = []; // newest first, capped
+
+function renderDecodes() {
+  var rows = document.getElementById('opDecodeRows');
+  rows.innerHTML = decodes.map(function (d) {
+    return '<div class=drow data-id="' + d.id + '">' +
+      '<div class=meta><span>' + d.hhmmss + '</span><span>' + d.hz + ' Hz</span><span>' +
+      (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
+      '<div class="txt' + (d.me ? ' strong' : '') + '">' + esc(d.x) +
+      (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
+      '</div>';
+  }).join('');
+  rows.querySelectorAll('.drow').forEach(function (el) {
+    el.onclick = function () {
+      radioPost('/api/queue/reply', el.getAttribute('data-id'), 'Queueing…')
+        .catch(function (e) { setMsg(String(e && e.message ? e.message : e)); });
+    };
+  });
+}
+
+function hhmmss(t) {
+  if (!t) return '--:--:--';
+  return new Date(t * 1000).toISOString().substr(11, 8);
+}
+
+// ===================== Operate: event poll =====================
+// Same polled /api/events?since= shape as /log's viewer (RFC 0004 §6):
+// a poll cannot wedge the server the way a long-lived stream could.
+
+var evSeq = 0;
+
+function applyEvent(e) {
+  if (e.d === 1) {
+    decodes.unshift({ id: e.id, hhmmss: hhmmss(e.t), hz: e.hz, snr: e.snr, x: e.x, me: !!e.me });
+    if (decodes.length > 80) decodes.length = 80;
+  } else if (e.d === 2) {
+    if (e.st === 6) {
+      delete queue[e.eid]; // IDLE is the removal signal (RFC 0004 §11)
+    } else {
+      queue[e.eid] = { dxcall: e.x, state: e.st, retry_count: e.rc, retry_limit: e.rl };
+    }
+  } else if (e.d === 3) {
+    slotState = { sp: e.sp, bm: e.bm, hz: e.hz };
+  }
+}
+
+async function pollEvents() {
+  try {
+    var r = await fetch('/api/events?since=' + evSeq, { cache: 'no-store' });
+    var j = await r.json();
+    if (j.events && j.events.length) {
+      j.events.forEach(applyEvent);
+      renderQueue();
+      renderDecodes();
+      renderBeacon();
+    }
+    evSeq = j.seq;
+  } catch (e) { /* next tick */ }
+}
+
+// ===================== Log =====================
+
+var logLoadedOnce = false;
+var logSkip = 0;
+var LOG_PAGE = 10;
+
+function dayLabel(name) {
+  // name is "YYYYMMDD.adi" (qso_browse.cpp / file_list.cpp). Today gets a
+  // friendlier label; anything else reads as-is -- no client-side date math
+  // worth the edge cases for a first pass.
+  var y = name.slice(0, 4), mo = name.slice(4, 6), d = name.slice(6, 8);
+  var today = new Date();
+  var todayStr = today.getUTCFullYear() + String(today.getUTCMonth() + 1).padStart(2, '0') +
+                String(today.getUTCDate()).padStart(2, '0');
+  return (name.slice(0, 8) === todayStr) ? 'Today' : (mo + '-' + d + '-' + y);
+}
+
+function fmtRst(v) {
+  return (v === -99 || v == null) ? '—' : (v > 0 ? '+' + v : String(v));
+}
+
+async function loadLogFiles() {
+  logLoadedOnce = true;
+  logSkip = 0;
+  document.getElementById('logList').innerHTML = '<p style="padding:0 1rem;color:GrayText">Loading…</p>';
+  await loadMoreLogFiles();
+}
+
+async function loadMoreLogFiles() {
+  var list = document.getElementById('logList');
+  try {
+    var r = await fetch('/api/log/files?skip=' + logSkip + '&take=' + LOG_PAGE, { cache: 'no-store' });
+    var j = await r.json();
+    if (logSkip === 0) list.innerHTML = '';
+    if (!j.ok) {
+      list.innerHTML = '<p style="padding:0 1rem;color:GrayText">' + esc(j.why || 'load failed') + '</p>';
+      return;
+    }
+    var files = j.files || [];
+    files.forEach(function (name) {
+      var day = document.createElement('div');
+      day.innerHTML = '<div class=day>' + esc(dayLabel(name)) + '</div>' +
+        '<div class=frow data-file="' + esc(name) + '"><span class=call>' + esc(name) +
+        '</span><span class=sub>tap to browse</span></div>' +
+        '<div class=entries hidden></div>';
+      list.appendChild(day);
+      day.querySelector('.frow').onclick = function () { toggleLogEntries(name, day.querySelector('.entries')); };
+    });
+    document.getElementById('logMore').hidden = files.length < LOG_PAGE;
+    logSkip += files.length;
+  } catch (e) {
+    list.innerHTML = '<p style="padding:0 1rem;color:GrayText">no reply from sidekick</p>';
+  }
+}
+document.getElementById('logMoreBtn').onclick = function () { loadMoreLogFiles(); };
+
+async function toggleLogEntries(file, el) {
+  if (!el.hidden) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML = '<p style="padding:.3rem 1rem;color:GrayText">Loading…</p>';
+  try {
+    var r = await fetch('/api/log/entries?file=' + encodeURIComponent(file) + '&take=30', { cache: 'no-store' });
+    var j = await r.json();
+    if (!j.ok) { el.innerHTML = '<p style="padding:.3rem 1rem;color:GrayText">' + esc(j.why || 'load failed') + '</p>'; return; }
+    var rows = j.entries || [];
+    if (!rows.length) { el.innerHTML = '<p style="padding:.3rem 1rem;color:GrayText">No QSOs</p>'; return; }
+    el.innerHTML = rows.map(function (q) {
+      return '<div class=frow style="cursor:default"><span class=call>' + esc(q.call) +
+        '</span><span class=sub>' + esc(q.time) + ' · ' + esc(q.band) + ' · ' +
+        fmtRst(q.rst_sent) + '/' + fmtRst(q.rst_rcvd) + '</span></div>';
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<p style="padding:.3rem 1rem;color:GrayText">no reply from sidekick</p>';
+  }
+}
+
+// ===================== boot =====================
+
+MiniFT8Pairing.boot({
+  status: m,
+  onPaired: function () {
+    enableWrites(true);
+    setMsg('Paired — edit and save');
+  }
+});
+if (MiniFT8Pairing.getToken()) enableWrites(true);
+
 loadConfig().catch(function () { /* setMsg already */ });
+renderCountdown();
+renderBeacon();
+renderQueue();
+renderDecodes();
+
+function tick() {
+  pollEvents();
+  pollLiveStatus();
+  setTimeout(tick, 1000);
+}
+tick();
 </script>
