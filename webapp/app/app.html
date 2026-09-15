@@ -704,6 +704,7 @@ async function loadConfig() {
       throw new Error(cfg.why || 'config failed');
     }
     lastCfg = cfg;
+    saveStateCache();
     setForm(cfg);
     applyOperateLive(cfg);
     var n = 0;
@@ -733,6 +734,7 @@ async function pollLiveStatus() {
     var cfg = await r.json();
     if (cfg.ok === false) return;
     lastCfg = cfg;
+    saveStateCache();
     applyOperateLive(cfg);
   } catch (e) { /* next tick */ }
   // Gated internally (paired + backoff timer), so this is a no-op almost
@@ -1172,10 +1174,12 @@ async function pollEvents() {
     // Runs every tick, not just when this poll carried events -- a quiet
     // poll (nothing new) is exactly when a previously-missed IDLE needs to
     // still be caught by the staleness sweep.
-    if (sweepStaleQueue() || gotEvents) {
+    var queueChanged = sweepStaleQueue();
+    if (queueChanged || gotEvents) {
       renderQueue();
     }
     evSeq = j.seq;
+    if (gotEvents || queueChanged) saveStateCache();
   } catch (e) { /* next tick */ }
 }
 
@@ -1621,6 +1625,43 @@ MiniFT8Pairing.boot({
 if (MiniFT8Pairing.getToken()) {
   enableWrites(true);
   autoSyncClock(false);
+}
+
+// Seeds every live-state variable from localStorage before the first real
+// fetch/poll lands, so a reload or a fresh desk_push doesn't flash blank/
+// "Loading..." for state the browser already knows -- operator-requested,
+// prompted by trying the new "reload available" banner for the first time.
+// Never a substitute for the wire: loadConfig()/pollEvents() below overwrite
+// all of this within about a second regardless, and decode slots already
+// carry their own date/time header, so a stale cached slot reads as exactly
+// what it is (old) rather than pretending to be fresh. saveStateCache() is
+// called after every place these variables actually change -- loadConfig(),
+// pollLiveStatus(), pollEvents() -- not on a separate timer.
+var STATE_CACHE_KEY = 'minift8_state_v1';
+function saveStateCache() {
+  try {
+    localStorage.setItem(STATE_CACHE_KEY, JSON.stringify({
+      lastCfg: lastCfg, queue: queue, decodeSlots: decodeSlots,
+      slotState: slotState, txHud: txHud
+    }));
+  } catch (e) { /* private browsing, quota, or unavailable -- no seed next time */ }
+}
+function loadStateCache() {
+  try {
+    var raw = localStorage.getItem(STATE_CACHE_KEY);
+    if (!raw) return;
+    var s = JSON.parse(raw);
+    if (s.lastCfg) lastCfg = s.lastCfg;
+    if (s.queue) queue = s.queue;
+    if (s.decodeSlots) decodeSlots = s.decodeSlots;
+    if (s.slotState) slotState = s.slotState;
+    if (s.txHud) txHud = s.txHud;
+  } catch (e) { /* corrupt or unavailable -- boot normally, no seed */ }
+}
+loadStateCache();
+if (Object.keys(lastCfg).length) {
+  setForm(lastCfg);
+  applyOperateLive(lastCfg);
 }
 
 loadConfig().catch(function () { /* setMsg already */ });
