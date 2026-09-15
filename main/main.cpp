@@ -663,6 +663,7 @@ static void qso_load_entries_tick();
 static void file_list_tick();
 static void qso_draw_page();
 static void porta_file_read_tick();
+static void porta_queue_state_tick();
 
 static void log_rxtx_line(char dir, int snr, int offset_hz, const std::string& text, int repeat_counter = -1);
 static bool log_adif_entry(const std::string& dxcall, const std::string& dxgrid, int rst_sent, int rst_rcvd);
@@ -1003,6 +1004,55 @@ static void porta_file_read_tick() {
     porta_emit_file_entry(row);
   }
   porta_emit_ack(PORTA_MSG_FILE_READ);
+}
+
+// Periodic QUEUE_ENTRY/SLOT_STATE broadcast (I28d, RFC 0004 §11), once a
+// second -- the same cadence decodes already arrive at. One mechanism
+// serves two needs at once: a freshly-connected browser sees today's queue
+// within a tick with no separate "give me a snapshot" request, and an
+// already-connected one stays current with no per-field change-tracking.
+// The one thing that does need tracking is an entry *leaving* the active
+// zone -- IDLE (state 6) is the removal signal a browser acts on, and the
+// host has nothing left to be IDLE about once a context is gone, so the
+// previous tick's id list is diffed against this one to emit that.
+//
+// Active zone only, not the inactive zone AUTOSEQ_MAX_QUEUE's 30 also
+// covers -- watching a live QSO never needs a dormant, retry-exhausted
+// context, and RFC 0004 §11 leaves whether the inactive zone gets its own
+// disclosure as still open.
+static void porta_queue_state_tick() {
+  static uint32_t s_last_ms = 0;
+  static uint16_t s_last_active_ids[AUTOSEQ_MAX_QUEUE];
+  static int s_last_active_count = 0;
+
+  uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+  if (now_ms - s_last_ms < 1000) return;
+  s_last_ms = now_ms;
+
+  uint16_t current_ids[AUTOSEQ_MAX_QUEUE];
+  int n = autoseq_active_count();
+  for (int i = 0; i < n; ++i) {
+    QsoContext ctx;
+    if (!autoseq_get_active_context(i, &ctx)) continue;
+    current_ids[i] = ctx.entry_id;
+    porta_emit_queue_entry(ctx.entry_id, (uint8_t)ctx.state,
+                           (uint8_t)ctx.retry_counter, (uint8_t)ctx.retry_limit,
+                           ctx.dxcall.c_str());
+  }
+  for (int i = 0; i < s_last_active_count; ++i) {
+    bool still_here = false;
+    for (int j = 0; j < n; ++j) {
+      if (current_ids[j] == s_last_active_ids[i]) { still_here = true; break; }
+    }
+    if (!still_here) {
+      porta_emit_queue_entry(s_last_active_ids[i], 6 /* IDLE: removal signal */, 0, 0, "");
+    }
+  }
+  memcpy(s_last_active_ids, current_ids, sizeof(uint16_t) * (size_t)n);
+  s_last_active_count = n;
+
+  porta_emit_slot_state((uint8_t)(g_target_slot_parity & 1), (uint8_t)g_beacon,
+                        (uint16_t)(g_pending_tx_valid ? g_pending_tx.offset_hz : 0));
 }
 
 static void qso_draw_page() {
@@ -5334,6 +5384,7 @@ autoseq_set_cabrillo_fd_callback(log_cabrillo_fd_entry);
     qso_load_entries_tick();
     file_list_tick();
     porta_file_read_tick();
+    porta_queue_state_tick();
     cts_ble_poll();
     if (g_tx_active) {
       cts_ble_abort();
