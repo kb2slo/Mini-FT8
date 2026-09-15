@@ -1050,10 +1050,19 @@ function fmtDt(dt) {
 // DECODE event carries no wall-clock field, and the phone's own clock is
 // already this app's source of truth elsewhere (countdown, TX HUD, clock
 // sync). UTC to match ADIF/the Log tab's own day labels.
-function fmtSlotTime(ts) {
+function fmtSlotDateTime(ts) {
   var d = new Date(ts);
   var pad = function (n) { return String(n).padStart(2, '0'); };
-  return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + 'z';
+  return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()) + ' ' +
+        pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + 'z';
+}
+
+// freq_khz is a whole-kHz integer on the wire (main.cpp's CONFIG snapshot);
+// MHz display wants the usual 3 decimals (7074 -> "7.074").
+function fmtSlotFreqMHz(khzStr) {
+  var khz = parseInt(khzStr, 10);
+  if (!khz) return '';
+  return (khz / 1000).toFixed(3);
 }
 
 // Mirrors main/decode_sort.h exactly (decode_sort_group/decode_sort_cmp):
@@ -1087,9 +1096,12 @@ function renderDecodes() {
   var rows = document.getElementById('opDecodeRows');
   rows.innerHTML = decodeSlots.map(function (slot, i) {
     var divider = i > 0 ? '<div class=dslotdiv></div>' : '';
-    var header = '<div class=day>' + fmtSlotTime(slot.ts) +
-      (slot.band ? ' · ' + esc(slot.band) : '') +
-      (slot.freqKhz ? ' · ' + esc(slot.freqKhz) + ' kHz' : '') + '</div>';
+    // .day's own flex/space-between (Log's day dividers use the same class)
+    // puts band+frequency left, date/time right, with no extra CSS needed.
+    var freqMHz = fmtSlotFreqMHz(slot.freqKhz);
+    var header = '<div class=day><span>' +
+      esc(slot.band || '') + (freqMHz ? ' · ' + freqMHz + ' MHz' : '') +
+      '</span><span>' + fmtSlotDateTime(slot.ts) + '</span></div>';
     return divider + header + slot.map(function (d) {
       return '<div class=drow data-id="' + d.id + '">' +
         '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
