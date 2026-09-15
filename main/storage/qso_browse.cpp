@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,22 @@ std::string field_after_tag(const std::string& s, const std::string& s_lower, co
     if (gt == std::string::npos) {
         return "";
     }
+    // ADIF gives an explicit byte length right after the tag's colon (and
+    // optionally a data-type char after a second colon) -- honor it when
+    // present. `comment` is free text and routinely contains spaces
+    // ("nice sigs, tnx QSO"); the space/bracket fallback below would
+    // truncate at the first one. Fields that never contain a space (call,
+    // grid, freq, time_on, rst_sent/rcvd) behave identically either way.
+    const size_t len_start = p + 1 + std::strlen(tag);
+    if (len_start < gt) {
+        char* end_ptr = nullptr;
+        const long declared_len = std::strtol(s.c_str() + len_start, &end_ptr, 10);
+        if (end_ptr != s.c_str() + len_start && declared_len >= 0 &&
+            gt + 1 + static_cast<size_t>(declared_len) <= s.size()) {
+            return s.substr(gt + 1, static_cast<size_t>(declared_len));
+        }
+    }
+
     size_t end = s.size();
     const size_t end_space = s.find(' ', gt + 1);
     const size_t end_tag = s.find('<', gt + 1);
@@ -123,6 +140,8 @@ bool parse_record_line(const std::string& line,
     std::string time_on = field_after_tag(line, s_lower, "time_on:");
     std::string freq = field_after_tag(line, s_lower, "freq:");
     const std::string grid = field_after_tag(line, s_lower, "gridsquare:");
+    const std::string my_grid = field_after_tag(line, s_lower, "my_gridsquare:");
+    const std::string comment = field_after_tag(line, s_lower, "comment:");
     const std::string rst_rcvd_raw = field_after_tag(line, s_lower, "rst_rcvd:");
     const std::string rst_sent_raw = field_after_tag(line, s_lower, "rst_sent:");
     std::string band = freq;
@@ -154,6 +173,8 @@ bool parse_record_line(const std::string& line,
     out->has_rst_sent = parse_rst(rst_sent_raw, &out->rst_sent);
     out->freq = freq;
     out->grid = grid;
+    out->my_grid = my_grid;
+    out->comment = comment;
     return true;
 }
 

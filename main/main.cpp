@@ -1004,6 +1004,8 @@ static void porta_file_read_tick() {
     row.rst_rcvd = (int8_t)(e.has_rst_rcvd ? e.rst_rcvd : -99);
     std::snprintf(row.grid, sizeof(row.grid), "%s", e.grid.c_str());
     std::snprintf(row.freq, sizeof(row.freq), "%s", e.freq.c_str());
+    std::snprintf(row.my_grid, sizeof(row.my_grid), "%s", e.my_grid.c_str());
+    std::snprintf(row.comment, sizeof(row.comment), "%s", e.comment.c_str());
     porta_emit_file_entry(row);
   }
   porta_emit_ack(PORTA_MSG_FILE_READ);

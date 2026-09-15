@@ -367,16 +367,23 @@ static void file_entries_json_add(const porta_qso_entry_row_t *e)
     char esc_call[PORTA_CALLSIGN_MAX * 6 + 1];
     char esc_grid[PORTA_GRID_MAX * 6 + 1];
     char esc_freq[PORTA_FREQ_MAX * 6 + 1];
+    char esc_my_grid[PORTA_GRID_MAX * 6 + 1];
+    char esc_comment[PORTA_COMMENT_MAX * 6 + 1];
     json_escape(e->band, esc_band, sizeof(esc_band));
     json_escape(e->call, esc_call, sizeof(esc_call));
     json_escape(e->grid, esc_grid, sizeof(esc_grid));
     json_escape(e->freq, esc_freq, sizeof(esc_freq));
-    char piece[sizeof(esc_band) + sizeof(esc_call) + sizeof(esc_grid) + sizeof(esc_freq) + 96];
+    json_escape(e->my_grid, esc_my_grid, sizeof(esc_my_grid));
+    json_escape(e->comment, esc_comment, sizeof(esc_comment));
+    char piece[sizeof(esc_band) + sizeof(esc_call) + sizeof(esc_grid) + sizeof(esc_freq) +
+              sizeof(esc_my_grid) + sizeof(esc_comment) + 128];
     const int n = snprintf(piece, sizeof(piece),
                            "%s{\"time\":\"%s\",\"band\":\"%s\",\"call\":\"%s\","
-                           "\"rst_sent\":%d,\"rst_rcvd\":%d,\"grid\":\"%s\",\"freq\":\"%s\"}",
+                           "\"rst_sent\":%d,\"rst_rcvd\":%d,\"grid\":\"%s\",\"freq\":\"%s\","
+                           "\"my_grid\":\"%s\",\"comment\":\"%s\"}",
                            s_file_entries_json_first ? "" : ",", e->time_on, esc_band,
-                           esc_call, e->rst_sent, e->rst_rcvd, esc_grid, esc_freq);
+                           esc_call, e->rst_sent, e->rst_rcvd, esc_grid, esc_freq,
+                           esc_my_grid, esc_comment);
     if (n <= 0 || s_file_entries_json_len + (size_t)n + 3 >= FILE_ENTRIES_JSON_MAX) {
         return;
     }

@@ -19,8 +19,10 @@ struct QsoLogEntry {
     int rst_rcvd = 0;
     bool has_rst_sent = false;
     int rst_sent = 0;
-    std::string freq;  // raw ADIF <freq> in MHz, e.g. "14.074"; empty if absent
-    std::string grid;  // <gridsquare>, empty if absent
+    std::string freq;     // raw ADIF <freq> in MHz, e.g. "14.074"; empty if absent
+    std::string grid;     // <gridsquare> (their grid), empty if absent
+    std::string my_grid;  // <my_gridsquare> (own grid at the time), empty if absent
+    std::string comment;  // <comment>, empty if absent
 };
 
 enum class QsoBrowsePageView { Default, Alternate };

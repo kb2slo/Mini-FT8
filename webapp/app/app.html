@@ -89,14 +89,19 @@ button:disabled{opacity:.45}
 .drow .txt.c-recent{color:#787878}
 .drow .txt.c-cq{color:#00c800}
 .drow .me{font-size:.65rem;font-weight:700;color:#1d4ed8;border:1px solid #93c5fd;border-radius:.3rem;padding:0 .3rem;margin-left:.3rem}
+.dslotdiv{border-top:2px dashed color-mix(in srgb, GrayText 45%, transparent);margin:.35rem 1rem}
 
 /* ---- log ---- */
 #logList{padding-bottom:.5rem}
 .day{padding:.6rem 1rem .2rem;font-size:.75rem;font-weight:700;color:GrayText}
-.frow{padding:.5rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent);display:flex;justify-content:space-between;align-items:center}
+.frow{padding:.5rem 1rem;border-top:1px solid color-mix(in srgb, GrayText 15%, transparent)}
+.frow-main{display:flex;justify-content:space-between;align-items:center}
 .frow .call{font-family:ui-monospace,monospace;font-weight:700}
 .frow .grid{font-size:.65rem;font-weight:700;color:#1d4ed8;border:1px solid #93c5fd;border-radius:.3rem;padding:0 .3rem;margin-left:.3rem}
 .frow .sub{font-size:.7rem;color:GrayText;text-align:right}
+.frow-extra{margin-top:.25rem;font-size:.7rem;color:GrayText;display:flex;flex-wrap:wrap;gap:.6rem}
+.frow-extra .degrid{font-family:ui-monospace,monospace;font-weight:700}
+.frow-extra .comment{font-style:italic;overflow-wrap:anywhere}
 #logMore{padding:.7rem 1rem;text-align:center;color:GrayText;font-size:.8rem}
 </style>
 
@@ -636,7 +641,21 @@ function periodMs() {
   return PROTO_PERIOD_MS[(lastCfg.protocol_mode === 'FT4') ? 'FT4' : 'FT8'];
 }
 
+// The countdown only means something once slots are actually being decoded
+// -- CAT ready and real audio flowing (see applyOperateLive()'s audio_rx
+// note). Otherwise it just ticks off the phone's own clock against nothing.
+function radioLive() {
+  return yn(lastCfg.cat_ready) === 'yes' && yn(lastCfg.audio_rx) === 'yes';
+}
+
 function renderCountdown() {
+  var pill = document.getElementById('parityPill');
+  if (!radioLive()) {
+    document.getElementById('countdown').textContent = '—';
+    document.getElementById('slotSub').textContent = 'Connect radio + audio to see slot timing';
+    pill.textContent = '—';
+    return;
+  }
   var p = periodMs();
   var now = Date.now();
   var intoSlot = now % p;
@@ -644,7 +663,6 @@ function renderCountdown() {
   var secsLeft = Math.ceil((p - intoSlot) / 1000);
   document.getElementById('countdown').textContent = secsLeft + 's';
   document.getElementById('slotSub').textContent = 'to TX · ' + (parity ? 'ODD' : 'EVEN') + ' slot';
-  var pill = document.getElementById('parityPill');
   pill.textContent = parity ? 'ODD' : 'EVEN';
 }
 setInterval(renderCountdown, 250);
@@ -698,7 +716,7 @@ function renderTxHud() {
     if (txHud.pw > -1) parts.push((txHud.pw / 10).toFixed(1) + 'W');
     if (txHud.swr > -1) parts.push('SWR ' + (txHud.swr / 100).toFixed(2));
   }
-  if (txHud.batt > -1) parts.push(txHud.batt + '%');
+  if (txHud.batt > -1) parts.push(txHud.batt + '% ' + (txHud.batt <= 20 ? '🪫' : '🔋'));
   document.getElementById('opTxHudMeta').textContent = txHud.aborted
     ? 'TX ABORTED (low battery)'
     : (parts.length ? parts.join(' · ') : '—');
@@ -731,7 +749,13 @@ function renderQueue() {
 
 // ===================== Operate: decode stream =====================
 
-var decodes = []; // newest batch first; within a batch, decode_sort.h order
+// Array of slot batches, newest first, each already decode_sort.h-ordered
+// within itself. One batch per poll tick that carried new decodes -- see
+// decodeSortGroup()'s comment -- capped to the last DECODE_SLOTS_MAX slots
+// rather than a flat row count, so the operator reads slot-by-slot instead
+// of an undifferentiated scroll.
+var decodeSlots = [];
+var DECODE_SLOTS_MAX = 3;
 
 function fmtDt(dt) {
   return (dt > 0 ? '+' : '') + dt.toFixed(1);
@@ -766,13 +790,16 @@ function decodeColorClass(d) {
 
 function renderDecodes() {
   var rows = document.getElementById('opDecodeRows');
-  rows.innerHTML = decodes.map(function (d) {
-    return '<div class=drow data-id="' + d.id + '">' +
-      '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
-      (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
-      '<div class="txt ' + decodeColorClass(d) + '">' + esc(d.x) +
-      (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
-      '</div>';
+  rows.innerHTML = decodeSlots.map(function (slot, i) {
+    var divider = i > 0 ? '<div class=dslotdiv></div>' : '';
+    return divider + slot.map(function (d) {
+      return '<div class=drow data-id="' + d.id + '">' +
+        '<div class=meta><span>DT ' + fmtDt(d.dt) + '</span><span>' + d.hz + ' Hz</span><span>' +
+        (d.snr > 0 ? '+' : '') + d.snr + ' dB</span></div>' +
+        '<div class="txt ' + decodeColorClass(d) + '">' + esc(d.x) +
+        (d.me ? '<span class=me>&rarr; ME</span>' : '') + '</div>' +
+        '</div>';
+    }).join('');
   }).join('');
   rows.querySelectorAll('.drow').forEach(function (el) {
     el.onclick = function () {
@@ -816,8 +843,8 @@ async function pollEvents() {
       j.events.forEach(applyEvent);
       if (pendingDecodes.length) {
         pendingDecodes.sort(decodeSortCmp);
-        decodes = pendingDecodes.concat(decodes);
-        if (decodes.length > 80) decodes.length = 80;
+        decodeSlots.unshift(pendingDecodes);
+        if (decodeSlots.length > DECODE_SLOTS_MAX) decodeSlots.length = DECODE_SLOTS_MAX;
       }
       renderQueue();
       renderDecodes();
@@ -840,15 +867,25 @@ var logLoadedOnce = false;
 var logFiles = [];           // known day filenames, newest first
 var logFilesSkip = 0;        // pagination cursor into the file listing itself
 var logFilesExhausted = false;
-var logFileIdx = 0;          // logFiles[] index of the file currently draining
-var logEntrySkip = 0;        // pagination cursor within logFiles[logFileIdx]
-var logLastFile = null;      // last file a divider was drawn for
+var logFileIdx = 0;          // logFiles[] index of the file loadMoreLog() is draining
+var logFileLoadedCount = {}; // filename -> rows already loaded for it, persists across
+                             // logFileIdx moving on -- refreshLogHead() below needs to
+                             // keep polling today's file (logFiles[0]) for new QSOs
+                             // appended after we've moved on to older days
+var logGroupEls = {};        // filename -> its <div class=daygroup> DOM container, so
+                             // appending new rows to a file lands in that file's own
+                             // section regardless of what's been loaded after it
 var logDone = false;         // every file drained, nothing left anywhere
 var logLoading = false;
+var logRefreshing = false;
 var logRenderedAny = false;
 
 var LOG_ENTRY_FETCH = 10;    // rows per /api/log/entries call
 var LOG_ENTRY_GOAL = 15;     // rows to append per loadMoreLog() batch
+var LOG_REFRESH_MS = 8000;   // how often to check today's file for new QSOs while the
+                             // Log tab is open -- a QSO just logged should show up
+                             // without a page reload, but this stays modest given this
+                             // session's earlier finding about steady polling and WiFi
 
 function dayLabel(name) {
   // name is "YYYYMMDD.adi" (qso_browse.cpp / file_list.cpp). Today gets a
@@ -865,26 +902,42 @@ function fmtRst(v) {
   return (v === -99 || v == null) ? '—' : (v > 0 ? '+' + v : String(v));
 }
 
+// Appends to `file`'s own persistent container rather than the end of
+// #logList, so a later call for a file that already has rows (either
+// loadMoreLog() continuing to page through it, or refreshLogHead() finding
+// new QSOs logged since) lands them in the right place regardless of what
+// has been appended after it in the meantime.
 function appendLogRows(file, rows) {
   var list = document.getElementById('logList');
   if (!logRenderedAny) list.innerHTML = ''; // clear the "Loading…" placeholder
-  if (file !== logLastFile) {
+  var group = logGroupEls[file];
+  if (!group) {
+    group = document.createElement('div');
+    group.className = 'daygroup';
     var day = document.createElement('div');
     day.className = 'day';
     day.textContent = dayLabel(file);
-    list.appendChild(day);
-    logLastFile = file;
+    group.appendChild(day);
+    list.appendChild(group);
+    logGroupEls[file] = group;
   }
   rows.forEach(function (q) {
     var row = document.createElement('div');
     row.className = 'frow';
     row.innerHTML =
-      '<div><span class=call>' + esc(q.call) + '</span>' +
-      (q.grid ? '<span class=grid>' + esc(q.grid) + '</span>' : '') + '</div>' +
-      '<span class=sub>' + esc(q.time) + ' · ' + esc(q.band) +
-      (q.freq ? ' · ' + esc(q.freq) + ' MHz' : '') + ' · ' +
-      fmtRst(q.rst_sent) + '/' + fmtRst(q.rst_rcvd) + '</span>';
-    list.appendChild(row);
+      '<div class=frow-main>' +
+        '<div><span class=call>' + esc(q.call) + '</span>' +
+        (q.grid ? '<span class=grid>' + esc(q.grid) + '</span>' : '') + '</div>' +
+        '<span class=sub>' + esc(q.time) + ' · ' + esc(q.band) +
+        (q.freq ? ' · ' + esc(q.freq) + ' MHz' : '') + ' · ' +
+        fmtRst(q.rst_sent) + '/' + fmtRst(q.rst_rcvd) + '</span>' +
+      '</div>' +
+      ((q.my_grid || q.comment) ?
+        '<div class=frow-extra>' +
+          (q.my_grid ? '<span class=degrid>DE ' + esc(q.my_grid) + '</span>' : '') +
+          (q.comment ? '<span class=comment>' + esc(q.comment) + '</span>' : '') +
+        '</div>' : '');
+    group.appendChild(row);
     logRenderedAny = true;
   });
 }
@@ -913,20 +966,20 @@ async function loadMoreLog() {
       await ensureLogFiles();
       if (logFileIdx >= logFiles.length) { logDone = true; break; }
       var file = logFiles[logFileIdx];
+      var skip = logFileLoadedCount[file] || 0;
       var r = await fetch('/api/log/entries?file=' + encodeURIComponent(file) +
-                          '&skip=' + logEntrySkip + '&take=' + LOG_ENTRY_FETCH, { cache: 'no-store' });
+                          '&skip=' + skip + '&take=' + LOG_ENTRY_FETCH, { cache: 'no-store' });
       var j = await r.json();
       if (!j.ok) throw new Error(j.why || 'entries failed');
       var rows = j.entries || [];
       if (rows.length) {
         appendLogRows(file, rows);
         appended += rows.length;
-        logEntrySkip += rows.length;
+        logFileLoadedCount[file] = skip + rows.length;
       }
       if (rows.length < LOG_ENTRY_FETCH) {
-        // This file is exhausted -- move on to the next one.
+        // This file is exhausted for now -- move on to the next one.
         logFileIdx++;
-        logEntrySkip = 0;
       }
     }
   } catch (e) {
@@ -945,6 +998,36 @@ async function loadMoreLog() {
   }
 }
 document.getElementById('logMoreBtn').onclick = function () { loadMoreLog(); };
+
+// Today's file (logFiles[0]) is the only one still growing -- a QSO logged
+// while the tab is open lands at its end. Re-checks it on a timer, only
+// while the Log tab is actually visible, and only picks up rows beyond
+// what's already loaded (so this also backfills today's file if the
+// operator never paged all the way through it via "Load older QSOs").
+// Deliberately does not detect a new day file appearing (midnight
+// rollover mid-session) -- a real gap, not worth this pass's scope.
+async function refreshLogHead() {
+  if (!logLoadedOnce || logLoading || logRefreshing) return;
+  if (currentView !== 'log') return;
+  if (!logFiles.length) return; // first loadMoreLog() hasn't run yet
+  logRefreshing = true;
+  try {
+    var file = logFiles[0];
+    var skip = logFileLoadedCount[file] || 0;
+    var r = await fetch('/api/log/entries?file=' + encodeURIComponent(file) +
+                        '&skip=' + skip + '&take=' + LOG_ENTRY_FETCH, { cache: 'no-store' });
+    var j = await r.json();
+    if (!j.ok) return;
+    var rows = j.entries || [];
+    if (rows.length) {
+      appendLogRows(file, rows);
+      logFileLoadedCount[file] = skip + rows.length;
+    }
+  } catch (e) { /* next tick */ } finally {
+    logRefreshing = false;
+  }
+}
+setInterval(refreshLogHead, LOG_REFRESH_MS);
 
 // ===================== boot =====================
 

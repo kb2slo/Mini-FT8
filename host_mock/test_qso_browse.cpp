@@ -61,9 +61,9 @@ int main()
 
     const QsoBrowseBand bands[] = {{"20m", 14074.0f}, {"40m", 7074.0f}};
     const std::string rec =
-        "<call:5>K1ABC <gridsquare:4>FN42 <mode:3>FT8<qso_date:8>20260819 "
+        "<call:5>K1ABC <gridsquare:4>FN42 <my_gridsquare:4>FN30 <mode:3>FT8<qso_date:8>20260819 "
         "<time_on:6>153000 <freq:6>14.074 <station_callsign:6>KB2SLO "
-        "<rst_sent:3>-10 <rst_rcvd:2>-8 <eor>";
+        "<rst_sent:3>-10 <rst_rcvd:2>-8 <comment:8>nice sig<eor>";
 
     QsoBrowsePager pager;
     qso_browse_pager_reset(&pager, 0, 6);
@@ -77,6 +77,8 @@ int main()
     expect_true(pager.entries[0].has_rst_rcvd && pager.entries[0].rst_rcvd == -8, "rst rcvd");
     expect_str(pager.entries[0].grid, "FN42", "grid parsed");
     expect_str(pager.entries[0].freq, "14.074", "raw freq kept");
+    expect_str(pager.entries[0].my_grid, "FN30", "my_grid parsed");
+    expect_str(pager.entries[0].comment, "nice sig", "comment parsed (declared-length, survives the internal space)");
     expect_true(!pager.has_next, "no next on one qso");
 
     const std::string rec_no_grid =
@@ -86,6 +88,8 @@ int main()
     qso_browse_pager_reset(&pager2, 0, 6);
     qso_browse_pager_feed(&pager2, rec_no_grid, bands, 2);
     expect_str(pager2.entries[0].grid, "", "grid empty when absent");
+    expect_str(pager2.entries[0].my_grid, "", "my_grid empty when absent");
+    expect_str(pager2.entries[0].comment, "", "comment empty when absent");
 
     qso_browse_format_entry_lines(pager.entries, QsoBrowsePageView::Default, &lines);
     expect_true(lines[0].find("15:30") != std::string::npos, "default has time");

@@ -415,6 +415,7 @@ typedef enum {
 #define PORTA_BAND_MAX 8u
 #define PORTA_GRID_MAX 8u
 #define PORTA_FREQ_MAX 12u
+#define PORTA_COMMENT_MAX 48u
 
 size_t porta_proto_encode_file_list_req(uint8_t kind, uint16_t skip, uint8_t take,
                                         uint8_t *out, size_t out_cap);
@@ -440,8 +441,10 @@ typedef struct {
     char    call[PORTA_CALLSIGN_MAX + 1];
     int8_t  rst_sent;
     int8_t  rst_rcvd;
-    char    grid[PORTA_GRID_MAX + 1];  // empty if absent
-    char    freq[PORTA_FREQ_MAX + 1];  // raw ADIF MHz string, empty if absent
+    char    grid[PORTA_GRID_MAX + 1];        // their grid (<gridsquare>), empty if absent
+    char    freq[PORTA_FREQ_MAX + 1];        // raw ADIF MHz string, empty if absent
+    char    my_grid[PORTA_GRID_MAX + 1];     // own grid at the time (<my_gridsquare>), empty if absent
+    char    comment[PORTA_COMMENT_MAX + 1];  // <comment>, empty if absent
 } porta_qso_entry_row_t;
 
 size_t porta_proto_encode_file_entry_row(const porta_qso_entry_row_t *e,
